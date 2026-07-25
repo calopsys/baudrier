@@ -109,10 +109,19 @@ Check in `next.config.js` or the middleware whether the following headers are co
 Use `npm audit` with a temporary lockfile rather than `pnpm audit` (pnpm 10 always hits the old deprecated endpoint `/audits/quick` → HTTP 410):
 
 ```bash
-npm install --package-lock-only --silent 2>&1
-npm audit --omit=dev --json 2>&1
-rm -f package-lock.json
+HAD_LOCK=$([ -f package-lock.json ] && echo 1 || echo 0)
+npm install --package-lock-only --silent 2>&1 && npm audit --omit=dev --json 2>&1
+[ "$HAD_LOCK" = "0" ] && rm -f package-lock.json
 ```
+
+Three things this sequence gets right, keep them:
+- **`&&`**: if the lockfile cannot be generated (offline, private registry, peer-dep conflict), `npm audit` does not run on a stale or missing lockfile and pretend to be an audit.
+- **`HAD_LOCK` guard**: in a project that genuinely uses npm, `package-lock.json` already exists and is a real source file. Only the lockfile *we* created gets deleted.
+- **The cleanup line is separate** (not chained behind `&&`), so a failed audit still leaves no orphan `package-lock.json` behind in a pnpm repo.
+
+**Reading the result:**
+- `npm audit` **exits non-zero when it finds vulnerabilities**. That is a successful audit, not an error. Judge success on the output being JSON with a `metadata.vulnerabilities` object.
+- **If no valid JSON comes back, the audit failed.** Report it as an explicit line in the final report (`Dependencies: not audited - <reason>`) and move on. Do **not** improvise a fallback: the ad-hoc retries invented here have written to `/tmp`, which does not exist on Windows. If you really need a scratch file, use the session scratchpad directory, never `/tmp`.
 
 - Parse the returned JSON, flag the critical and high vulnerabilities in prod (devDeps already excluded by `--omit=dev`).
 - Propose `pnpm update <pkg>@<safe-version>` for each vulnerable package (read `fixAvailable.version` in the JSON output).

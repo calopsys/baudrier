@@ -1,5 +1,19 @@
 # Changelog
 
+## v2.6.0 (25 juillet 2026)
+
+### Nouveautés
+- **Vérification de déploiement** : Claude peut désormais attendre proprement qu'une mise en ligne Vercel se termine, et te dire si elle est prête, en échec ou trop longue. Avant, l'attente mourait au bout de deux minutes et il fallait aller vérifier à la main.
+
+### Améliorations
+- **`/start` ne gèle plus** : le diagnostic d'installation teste chaque outil avec son propre délai maximum. Un service injoignable ne bloque plus tout le rapport, il apparaît simplement en « pas vérifié ».
+- **`/security` plus honnête** : l'audit des dépendances ne supprime plus le fichier de verrouillage d'un projet qui en a légitimement un, et il ne présente plus comme réussi un audit qui n'a pas pu tourner.
+- **Base de données** : plusieurs commandes SQL envoyées d'un coup fonctionnent enfin, et de façon atomique : soit tout s'applique, soit rien. Une modification de base ne peut plus rester à moitié faite.
+
+### Coulisses
+- Connexion Vercel mutualisée entre les outils internes, avec repli automatique quand le jeton d'accès a expiré.
+- Dépendances du modèle d'agent mises à jour.
+
 ## v2.5.5 (23 juillet 2026)
 
 ### Nouveautés

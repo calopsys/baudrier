@@ -41,19 +41,17 @@ uname -s 2>/dev/null || echo "Windows"
 
 ## Step 2 - Silent audit
 
-Run **all** these checks in parallel, silently:
+Run the audit helper, silently. It checks every CLI (installed + logged in) with a
+per-command timeout, so a CLI that hangs on a network call degrades to a `timeout`
+row instead of freezing the whole audit and returning nothing:
 
 ```bash
-node --version 2>/dev/null
-pnpm --version 2>/dev/null
-git --version 2>/dev/null
-gh --version 2>/dev/null
-gh auth status 2>/dev/null
-vercel --version 2>/dev/null
-vercel whoami 2>/dev/null
-wrangler --version 2>/dev/null
-wrangler whoami 2>/dev/null
+node "${CLAUDE_SKILL_DIR}/../../scripts/audit-clis.mjs" --json
 ```
+
+Each entry has a `status`: `ready` (installed + connected), `logged-out` (installed,
+login missing), `missing` (not installed), `timeout` (no answer in time - treat it as
+**not** verified, never as ready).
 
 > **Note**: no more Resend CLI or MCP connector (Hostinger, GSC, Neon) to audit. These services now go through their REST API with a key stored in the **vault** (Bitwarden). The vault is set up in Step 3, and the cross-cutting keys (Cloudflare, Neon, email) are collected in Steps 4 and 7.
 
@@ -397,18 +395,14 @@ Run **all** these commands and read the output of **each one** carefully:
 
 ```bash
 export PATH="$PATH:/c/Program Files/GitHub CLI:/c/Program Files/nodejs:/c/Users/$USERNAME/AppData/Roaming/npm"
-node --version 2>/dev/null
-pnpm --version 2>/dev/null
-git --version 2>/dev/null
-gh --version 2>/dev/null
-gh auth status 2>/dev/null
-vercel --version 2>/dev/null
-vercel whoami 2>/dev/null
-wrangler --version 2>/dev/null
-wrangler whoami 2>/dev/null
+node "${CLAUDE_SKILL_DIR}/../../scripts/audit-clis.mjs" --json
 node "${CLAUDE_SKILL_DIR}/../../scripts/vault/vault.mjs" status 2>/dev/null
-CFTOK=$(node "${CLAUDE_SKILL_DIR}/../../scripts/vault/vault.mjs" get CLOUDFLARE api_token 2>/dev/null) && curl -s -H "Authorization: Bearer $CFTOK" https://api.cloudflare.com/client/v4/user/tokens/verify | grep -o '"success":[a-z]*'
+CFTOK=$(node "${CLAUDE_SKILL_DIR}/../../scripts/vault/vault.mjs" get CLOUDFLARE api_token 2>/dev/null) && curl -s --max-time 15 -H "Authorization: Bearer $CFTOK" https://api.cloudflare.com/client/v4/user/tokens/verify | grep -o '"success":[a-z]*'
 ```
+
+The helper caps every CLI check with its own timeout: one unreachable service can no
+longer consume the whole 2-minute Bash budget and leave you with an empty audit. The
+Cloudflare curl is capped with `--max-time` for the same reason.
 
 For **Neon**: no more MCP detection. Verify that the key is in the vault: `node "${CLAUDE_SKILL_DIR}/../../scripts/vault/vault.mjs" get NEON api_key >/dev/null 2>&1 && echo neon-ok || echo neon-missing` (collected in Step 7 if missing).
 
@@ -420,10 +414,11 @@ For Wrangler: `wrangler whoami` must display the Cloudflare account email. If it
 
 ### Strict classification of each tool
 
-For each tool, determine the real state from the command output:
-- ✅ **installed + connected** (the `whoami` or `auth status` command returns a user/email)
-- ⚠️ **installed but not connected** (`--version` OK but `whoami` fails or says "not logged in")
-- ❌ **not installed** (`--version` fails with "command not found" or equivalent)
+Map each `status` from the audit helper directly - do not re-interpret raw output:
+- `ready` → ✅ **installed + connected**
+- `logged-out` → ⚠️ **installed but not connected** (`--version` OK, login missing)
+- `missing` → ❌ **not installed**
+- `timeout` → ⚠️ **not verified** (the check never answered; say so plainly and offer to retry)
 
 **Never tick ✅ a tool that responded with an error, a timeout, or "not logged in".** A displayed version is not enough: you also need the login for the CLIs that require it (gh, vercel) OR the Cloudflare token (from the vault) for wrangler.
 

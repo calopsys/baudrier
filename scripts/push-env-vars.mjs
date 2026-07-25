@@ -28,8 +28,8 @@
 
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { spawn } from "node:child_process";
-import { homedir, platform } from "node:os";
-import { join } from "node:path";
+import { platform } from "node:os";
+import { loadAuthToken } from "./_vercel-auth.mjs";
 
 // ─── Parse args ────────────────────────────────────────────────────────
 const rawArgs = process.argv.slice(2);
@@ -120,54 +120,8 @@ const projectId = project.projectId;
 const orgId = project.orgId; // team ID (null for personal accounts)
 
 // ─── Step 3 - Try to load CLI auth token (for REST API) ────────────────
-//
-// Vercel CLI auth file location varies by OS AND by CLI version. Older versions
-// nested it under `Data/auth.json` (Cocoa app convention); newer versions
-// (~v40+) put it directly in the app-support folder. We try both per platform
-// and use whichever exists.
-function getAuthFilePathCandidates() {
-  const os = platform();
-  if (os === "win32") {
-    const appData = process.env.APPDATA || join(homedir(), "AppData", "Roaming");
-    return [
-      join(appData, "com.vercel.cli", "Data", "auth.json"),
-      join(appData, "com.vercel.cli", "auth.json"),
-    ];
-  }
-  if (os === "darwin") {
-    const base = join(homedir(), "Library", "Application Support", "com.vercel.cli");
-    return [
-      join(base, "Data", "auth.json"),
-      join(base, "auth.json"),
-    ];
-  }
-  // Linux / other POSIX
-  const xdg = process.env.XDG_DATA_HOME || join(homedir(), ".local", "share");
-  return [
-    join(xdg, "com.vercel.cli", "Data", "auth.json"),
-    join(xdg, "com.vercel.cli", "auth.json"),
-  ];
-}
-
-function loadAuthToken() {
-  for (const p of getAuthFilePathCandidates()) {
-    try {
-      if (!existsSync(p)) continue;
-      const data = JSON.parse(readFileSync(p, "utf8"));
-      if (data.token) {
-        // Don't pre-check expiry - let the API return 401 if the token is truly dead.
-        // Pre-checks are unreliable: clocks drift, Vercel uses grace periods, and
-        // the refreshToken can silently extend the session.
-        return data.token;
-      }
-    } catch (err) {
-      console.log(`[vercel] Could not read ${p} (${err.message}) - trying next candidate.`);
-    }
-  }
-  return null;
-}
-
-const token = loadAuthToken();
+// Resolution lives in _vercel-auth.mjs, shared with scripts/vercel/check-deploy.mjs.
+const token = loadAuthToken({ onWarn: (m) => console.log(`[vercel] ${m}`) });
 
 // Vercel rejects "development" as a target for sensitive vars (local dev reads
 // .env instead). So sensitive vars go to production + preview only by default;
