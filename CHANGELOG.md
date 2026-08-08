@@ -1,5 +1,47 @@
 # Changelog
 
+## v1.0.1 (2026-08-09)
+
+Removes the local review from `/deploy`. The harness runs on Claude Code web,
+where `http://localhost:3000` is the ephemeral VM's own loopback address: the
+user's browser can never reach it, and the platform offers no port forwarding
+and no preview URL. The old menu therefore offered an option that could not
+work, and three skills called preview tools that do not exist in a web session.
+
+### Changed
+
+- **`/deploy` asks a question the published state picks, and the answer also
+  decides the branch.** The skill reads `ACCESS_RESTRICTED` before it asks
+  anything. An unpublished site gets one confirmation, because its production
+  site is already private and is therefore its own review. A published site
+  gets a menu: a private preview first, or production. Choosing production
+  merges the working branch into `main` and stops on a conflict; choosing the
+  private preview leaves the branch alone. The harness never opens the pull
+  request, because the session's GitHub token is read-only on pull requests.
+- **The per-branch preview is proposed again, from one reused branch.** A
+  preview needs a branch of its own, and `deploy.mjs` refuses `--target
+  preview` on `main`, so a preview asked for from `main` moves the work onto
+  a single stable branch named `revue`. One reused branch means one Serverless
+  SQL database: the harness never deletes a database, so a new branch per
+  review would leave one behind every time.
+- **`pnpm dev` keeps exactly one job: the assistant's own check.** It is never
+  offered to the user. `skills/bootstrap`, `skills/add-map` and the generated
+  project's own `CLAUDE.md` all say which of the two it is.
+
+### Fixed
+
+- **`skills/add-map` no longer calls `preview_start`, `preview_eval` and
+  `preview_resize`.** Those tools do not exist in a web session. The visual
+  smoke test now fetches the server-rendered page from inside the VM, and the
+  file records which three checks it dropped, because no browser can run them
+  there.
+- **The deploy and `/prof` documentation no longer credits GitHub Actions with
+  the container build.** The machine that runs the harness builds the image
+  itself and pushes it to the Scaleway Container Registry (CONTRACT.md §5).
+- **`/prof` no longer teaches that the code lives on the user's computer.**
+  Baudrier is web-only, which its own `DOC.fr.md` already stated one line
+  further down.
+
 ## v1.0.0 (2026-08-08)
 
 First stable release. Baudrier is a French-sovereign fork of

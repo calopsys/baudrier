@@ -39,7 +39,7 @@ Start by displaying this message:
 > 3. **Le bootstrap** - Ce qui se passe quand vous lancez `/bootstrap`
 > 4. **Les outils du quotidien** - Les commandes que vous utiliserez régulièrement
 > 5. **Les compléments (add-ons)** - Les fonctionnalités qu'on ajoute selon vos besoins
-> 6. **Le déploiement** - Comment votre app passe de votre ordinateur à internet
+> 6. **Le déploiement** - Comment votre app passe de notre conversation à internet
 > 7. **Le cahier des charges** - Comment bien décrire ce que vous voulez construire
 > 8. **Le vibe coding** - Comment faire évoluer votre app après le bootstrap
 >
@@ -131,7 +131,7 @@ Wait for the user's reply, then explain the requested topic using the content be
 > Ce sont les commandes que vous utilisez **sur un projet déjà existant** - pour auditer, corriger, déployer, ou simplement comprendre.
 >
 > **Pour démarrer et apprendre**
-> - **/start** - La toute première commande à lancer après avoir installé le plugin. Elle vérifie que tout est bien installé sur votre ordinateur et vous présente les commandes disponibles.
+> - **/start** - La toute première commande à lancer après avoir installé le plugin. Elle vérifie que tout est prêt et vous présente les commandes disponibles.
 > - **/prof** - C'est moi ! Pour comprendre comment le plugin fonctionne, la stack, ou n'importe quel concept qui vous semble obscur.
 > - **/spec** - Pour construire un cahier des charges guidé, question par question. Utile avant `/bootstrap`, ou à tout moment pour clarifier un nouveau projet.
 > - **/bootstrap** - Pour créer un nouveau projet à partir d'une description.
@@ -205,7 +205,16 @@ Wait for the user's reply, then explain the requested topic using the content be
 >
 > **Le chemin que suit votre code**
 >
-> Vous travaillez sur votre ordinateur → vous me dites "déploie" → votre code part sur **GitHub** → GitHub construit une image de votre app → **Scaleway** met à jour votre app en ligne avec cette nouvelle image. Tout ça se fait via la commande `/deploy`, qui vérifie chaque étape et vous prévient si quelque chose ne va pas. Ça prend en général quelques minutes.
+> Vous me dites "déploie" → je sauvegarde votre code sur **GitHub** (le coffre-fort du sujet 2) → je construis moi-même un paquet prêt à l’emploi de votre app → j’envoie ce paquet à **Scaleway**, qui met à jour votre app en ligne. GitHub garde votre code en sécurité, il ne construit rien : c’est moi qui prépare le paquet, à chaque déploiement. Tout ça se fait via la commande `/deploy`, qui vérifie chaque étape et vous prévient si quelque chose ne va pas. Ça prend en général quelques minutes.
+>
+> **Avant de déployer, je regarde d’abord si votre site est déjà public**
+>
+> - Si votre site n’est pas encore public, il est déjà privé : personne d’autre que vous ne peut le voir. Le mettre en ligne est donc déjà votre revue privée. Je vous demande une seule confirmation, puis je le mets en ligne.
+> - Si votre site est déjà public, je vous propose un choix : un aperçu privé d’abord, sur une adresse séparée aussi réservée à votre entreprise, ou la mise en ligne directe pour tout le monde.
+>
+> Mettre en ligne pour tout le monde fait aussi rejoindre votre travail à la version officielle de votre projet. Choisir l’aperçu privé laisse votre travail de côté, pour que vous puissiez le relire avant de décider.
+>
+> Un aperçu privé crée sa propre petite installation en ligne. La première fois que vous en demandez un pour un nouveau travail, je vous préviens que ça a un coût ; je ne le répète pas aux fois suivantes.
 >
 > **Votre app dort quand personne ne la visite - et c'est voulu**
 >

@@ -18,7 +18,7 @@ Baudrier offers you a **table of contents with 8 topics**:
 3. **The bootstrap**: What happens when you run `/bootstrap`
 4. **Everyday tools**: The commands you'll use regularly
 5. **Add-ons**: The features we add depending on your needs
-6. **Deployment**: How your app goes from your computer to the internet, and what "sleeping" and "private by default" mean for you
+6. **Deployment**: How your app goes from our conversation to the internet, and what "sleeping" and "private by default" mean for you
 7. **The specification**: How to properly describe what you want to build
 8. **Vibe coding**: How to evolve your app after the bootstrap
 

@@ -439,48 +439,34 @@ If there is a TypeScript error -> typically a wrong import path. Fix it. If ther
 
 ⚠️ **DO NOT** run `pnpm build` (slow, can conflict with a dev server, outside the flow's usage). `tsc --noEmit` + `lint` is enough to validate.
 
-### 7b. Responsive smoke test (mandatory for `layout = mapfirst`)
+### 7b. Server-rendered smoke test (mandatory for `layout = mapfirst`)
 
-`tsc --noEmit` catches none of the classic visual bugs of a map (stretched canvas, failed fitBounds, stuck sidebar). To avoid them, run a minimal smoke test via `preview_start` + `preview_eval`:
+`tsc --noEmit` catches none of the classic wiring mistakes of a map page (missing `noscript` fallback, sidebar never passed, wrong class on the mobile trigger). This VM has no browser, so run the check with the tools that do exist here: a background dev server, and a fetch from inside the same machine.
 
-```bash
-# 1. Start the preview (see the project's .claude/launch.json)
-#    Then wait for the page to be compiled (>= 1 GET / 200 in the logs).
-# 2. Check the DESKTOP render (1280×800)
-```
+1. From `<WEB_DIR>`, start the dev server in the background (`run_in_background: true`). A dev server never exits, so a synchronous call would hang the skill.
+2. Wait for the first successful compile (a `GET / 200` line in the server log).
+3. Fetch the page from inside this VM, for example `curl -s http://localhost:<port>/<page-path>`.
 
-Eval to run on the home (`preview_resize` desktop then hard reload):
+Check the fetched HTML for:
+- The request returns `200`.
+- The `<noscript>` fallback is present, with the marker list text and a `google.com/maps/search` link (the SEO/a11y requirement above).
+- The `<aside` sidebar element is present, if `sidebar` was passed to `MapShell` - `MapShell` is a client component, but Next.js still server-renders it, so the `aside` markup is present in the fetched HTML even though it only becomes interactive after hydration.
+- The mobile sidebar trigger text (`sidebarTriggerLabel`) is present in the HTML.
+- The `MapLoader` loading placeholder text (`Chargement de la carte…`) is present - this confirms the dynamic import is wired. The real map canvas never appears in server-rendered HTML: MapLibre GL touches `window` at import time, so `map.tsx` only renders after client hydration, never during SSR.
 
-```js
-(() => {
-  const canvas = document.querySelector('.maplibregl-canvas');
-  const mapWrap = document.querySelector('.maplibregl-map');
-  const aside = document.querySelector('aside');
-  return {
-    vp: { w: innerWidth, h: innerHeight },
-    canvasW: canvas?.width, canvasH: canvas?.height,
-    mapWrapW: mapWrap?.offsetWidth, mapWrapH: mapWrap?.offsetHeight,
-    canvasMatchesContainer: canvas?.width === mapWrap?.offsetWidth && canvas?.height === mapWrap?.offsetHeight,
-    asideVisible: aside ? getComputedStyle(aside).display !== 'none' : false,
-    pinCount: document.querySelectorAll('.maplibregl-marker').length,
-  };
-})()
-```
+This test reads server-rendered markup only, so it cannot measure a canvas pixel size, a computed `display` value, or a marker pin count - those need a real browser, and none runs in this VM. The original version of this test called `preview_start` / `preview_eval` / `preview_resize`, three tools that do not exist in a Claude Code web session; the checks below replace it with what a fetch can honestly confirm, and drop the rest rather than fake them:
+- Dropped: `canvasMatchesContainer` (canvas width/height vs. container `offsetWidth`/`offsetHeight`) - needs a rendered canvas.
+- Dropped: `asideVisible` via `getComputedStyle` at two viewport sizes - needs a browser layout engine.
+- Dropped: `pinCount` via `document.querySelectorAll('.maplibregl-marker')` - the markers render client-side only.
 
-Desktop success criteria:
-- `canvasMatchesContainer === true` (otherwise: ResizeObserver not applied)
-- `asideVisible === true` (if `sidebar` was passed)
-- `pinCount >= 1`
+Trust the `ResizeObserver` + `fitBounds` logic baked into `map.tsx` (see Step 3) for the visual behaviour these dropped checks used to cover, and ask the user to confirm the rendered map once the project is live.
 
-Then repeat in `preview_resize` mobile (375×812) + hard reload:
-- `canvasW === 375` and `canvasH ≈ innerHeight - headerOffset` (full-bleed)
-- `asideVisible === false` (sidebar hidden on mobile)
-- Presence of the floating CTA: `Array.from(document.querySelectorAll('button')).find(b => b.textContent?.trim().startsWith(sidebarTriggerLabel))` -> truthy
-
-If a check fails, it is almost always:
+If the fetched HTML is missing one of the checks above, it is almost always:
 - You wrapped `MapShell` inside a container that has its own height lock -> remove the intermediate wrappers, `MapShell` must be a direct child of the page after the header.
 - You forgot to pass `height="100%"` to the inner `MapLoader` -> it defaults to `420px`.
-- The `MapShell` `headerOffset` does not match the actual height of the project's header -> adjust the prop.
+- You forgot the `sidebar` prop on `MapShell`, or the `<noscript>` block in the page -> add it.
+
+The `MapShell` `headerOffset` prop and the actual rendered layout (does the sidebar truly hide on mobile, does the canvas truly fill its container) stay unverified until the user, or the assistant reading a screenshot, looks at the live site.
 
 ---
 

@@ -164,6 +164,10 @@ no persistent home directory, the repo already cloned from GitHub.
 the single place that checks this (`BAUDRIER_FORCE_REMOTE=1` overrides it
 for tests).
 
+- **No port forwarding and no preview URL.** `http://localhost:3000` is
+  that VM's own loopback address; the user's own browser has no route to
+  it. This is why the review path runs through a deploy, never through the
+  local dev server (§5).
 - **The proxy network allowlist is Custom-level, not additive.** A Custom
   domain list **replaces** the Trusted defaults outright, unless the
   environment dialog's "Also include default list of common package
@@ -959,38 +963,81 @@ get it from `scripts/add-cleanup-workflow.mjs` (the `/deploy` skill runs it
 when the file is missing). Check 60 pins its shape; checks 31, 38, 44 and
 56 keep the build pipeline free of Actions.
 
-**Development loop, and when a deploy happens at all.** The harness's default
-is **local**: `pnpm dev` on `http://localhost:3000`, validated with
-`pnpm tsc --noEmit`/`pnpm lint` plus actually running the app - typecheck and
-lint alone catch types and style, never a runtime or logic bug. A deploy is
-never the silent automatic next step after a change; it is for **review** or
-an **explicit user request**, and it costs a full image build, so
+**Development loop, and when a deploy happens at all.** `pnpm dev` on
+`http://localhost:3000` keeps exactly one job: the assistant's own in-VM
+checks, on top of `pnpm tsc --noEmit`/`pnpm lint` - typecheck and lint alone
+catch types and style, never a runtime or logic bug, so the assistant fetches
+the running app itself before calling a change done. It is never offered to
+the user as a way to see the app: a Claude Code web session gives the user's
+own browser no route to that address at all (§1). A deploy is never the
+silent automatic next step after a change; it is for **review** or an
+**explicit user request**, and it costs a full image build, so
 `skills/deploy/SKILL.md` confirms one is wanted at all before proceeding,
-unless the user's own message already asked for it. `/deploy` always asks
-what the user wants, never inferred, and offers exactly two choices:
-**`Revue locale`** (the local loop above - no commit, no build, no Scaleway
-call) and **`Production`**. When production is chosen on an app that is
-already **published** (`ACCESS_RESTRICTED = "false"` in Secret Manager -
-real users, not just the operator's VPN), it steers to the **local review**
-first and requires an explicit, risk-named confirmation before deploying
-straight to a live production site.
+unless the user's own message already asked for it.
 
-**`--target preview` is deliberately not proposed.** The per-branch
-environment still exists and still works (one container plus one Serverless
-SQL database per branch, everything below), but this harness does not
-productise it: `/deploy` uses it only when the user names it. A per-branch
-environment is a fine thing to build on top of this harness; it is not a
-thing this harness offers by itself. `/bootstrap`'s own
-closing deploy (its Step 8b) is the one documented exception to all of the
-above - the user's initial request to build the whole app already is that
-consent.
+**`/deploy` reads `ACCESS_RESTRICTED` first, then branches on state and
+branch.** Before it asks anything, `/deploy` reads the canonical
+`ACCESS_RESTRICTED` value from Secret Manager (`getSecret`; a failed read
+falls closed and counts as `"true"`, restricted). That value plus the
+current branch decide the menu:
+
+| Branch | `ACCESS_RESTRICTED` | What the skill offers |
+|---|---|---|
+| `main` | `"true"` (not published) | One confirmation, target `production` |
+| `main` | `"false"` (published) | A menu: private preview, or production |
+| any other | any | The same menu; production merges the branch into `main` first, preview leaves the branch alone |
+
+Row 1's reason: an unpublished production site is already private - only the
+addresses in `ACCESS_ALLOWED_IPS` reach it, so a separate review environment
+adds cost and gives the user nothing. Row 3's production choice merges the
+current branch into `main`, then deploys `main`; a merge conflict stops the
+deploy, and nothing is pushed or built. `scripts/deploy.mjs` still refuses
+`--target production` on any branch except `main` (the reason row 3 needs a
+merge at all) - the merge, not a relaxed target check, is what lets a
+feature branch reach production.
+
+Row 2's private-preview choice needs one more step: `scripts/deploy.mjs`
+refuses `--target preview` on the `main` branch itself, so that option
+would otherwise be unreachable from a published `main`. When the user
+picks private preview while standing on `main`, `/deploy` moves the work
+onto one stable, reused branch named `revue` and deploys the preview from
+there - it never generates a per-review branch name. The skill announces
+this branch switch to the user before it happens, since the user is
+non-technical and did not ask for a branch. The name stays fixed for a
+cost reason, not a style preference: every preview branch creates its own
+Serverless SQL database, and `_destructive-guard.mjs` never deletes one -
+one reused branch name means one database, not one per review.
+
+The private-preview environment IS now proposed, in the two cases above
+where the menu appears. Its cost: one Serverless Container and one
+Serverless SQL database per branch, and `_destructive-guard.mjs` never
+deletes either - state that cost once, before the first preview deploy of a
+branch, never again on a later deploy of the same branch. A preview
+container inherits `ACCESS_ALLOWED_IPS` from the project's whole Secret
+Manager set (`buildContainerSecretMap` projects it into every container),
+so the user's own address already reaches a preview - **no preview flow,
+and no per-branch environment built on top of this harness, writes
+`ACCESS_ALLOWED_IPS`** (§6 has the full rule).
+
+After a preview deploy the skill pushes the branch and stops there - it
+never opens a pull request itself. The session's GitHub token is read-only
+on Issues and PRs (§1's scope table); the user opens the pull request from
+the Claude Code web interface. No branch is ever deleted as part of this -
+the web git credential 403s on ref delete regardless (§7).
+
+`/bootstrap`'s own closing deploy (its Step 8b) is the one documented
+exception to all of the above - the user's initial request to build the
+whole app already is that consent.
 
 **`/deploy`**:
 0. Confirm a deploy is actually wanted (see above), unless the user's own
    message this turn already asked for one.
-1. Ask the target: **production or preview** — always ask, never infer. If
-   production and the app is already published, steer to preview first.
-2. Commit and push the branch.
+1. Read `ACCESS_RESTRICTED` (see above), then ask the target with the menu
+   or confirmation the table selects - always ask, never infer.
+2. If production was chosen from a branch other than `main`, merge that
+   branch into `main` first and stop on conflict. Commit and push the
+   branch that will be built (`main` after a merge, or the current branch
+   for a preview).
 3. Build the image (`docker build --platform linux/amd64`) and push it to
    `rg.fr-par.scw.cloud` tagged with the commit SHA; skip the build when
    that tag already exists in the registry.
@@ -1006,8 +1053,10 @@ consent.
    predates the bypass check - warn with the migration path, do not block
    the deploy of a pre-token app.
 
-`main` → production. Any other branch → its own preview container **and its own
-preview Serverless SQL database**, named from a sanitised branch slug.
+`main` → production. Any other branch, when preview is chosen → its own
+preview container **and its own preview Serverless SQL database**, named
+from a sanitised branch slug. When production is chosen on any other
+branch → merged into `main` first, then the `main` row above applies.
 
 ---
 

@@ -1807,9 +1807,9 @@ define("32", "Local-first loop: dev bypass, tryDb, deploy policy", () => {
   }
 
   // (d) /deploy must read the canonical ACCESS_RESTRICTED value before
-  // steering, and must recommend a preview first when the app is already
-  // public - going straight to production on a published app is the
-  // scenario this steer exists to interrupt.
+  // steering, and a published app must never walk straight into a
+  // production deploy without an explicit, risk-named confirmation - the
+  // private-preview-or-production menu below is that confirmation.
   const deploySkill = "skills/deploy/SKILL.md";
   if (!exists(deploySkill)) {
     fails.push({ file: deploySkill, detail: "missing" });
@@ -1818,18 +1818,17 @@ define("32", "Local-first loop: dev bypass, tryDb, deploy policy", () => {
     if (!/getSecret/.test(src) || !/ACCESS_RESTRICTED/.test(src)) {
       fails.push({ file: deploySkill, detail: "does not read ACCESS_RESTRICTED via getSecret - the published-app steer cannot tell whether the app is already public" });
     }
-    if (!src.includes("Revue locale d’abord")) {
-      fails.push({ file: deploySkill, detail: "missing the local-review-first French wording (\"Revue locale d’abord\")" });
+    if (!src.includes("aperçu privé")) {
+      fails.push({ file: deploySkill, detail: 'missing the private-preview wording ("aperçu privé") - a published app must be offered a private preview, not walked straight into production' });
     }
-    // The two-option menu is the product decision: per-branch environments
-    // are not proposed, so the steer target is the LOCAL loop, not a preview.
-    // Anchored on the option labels the user actually sees.
-    // Anchored on the option-LIST lines, not on a bare substring: the branch
-    // headings below Step 1 quote the same labels, so a looser match stays
-    // green even when the question itself has lost an option.
-    for (const label of ["Non, revue locale d’abord", "Oui, déploie en production"]) {
+    // The menu is the product decision: a published app (or a non-main
+    // branch) is offered private preview alongside production, never
+    // production alone. Anchored on the option-LIST lines, not on a bare
+    // substring: other headings below quote the same labels, so a looser
+    // match stays green even when the question itself has lost an option.
+    for (const label of ["Non, un aperçu privé d’abord", "Oui, déploie en production"]) {
       if (!new RegExp(`^\\s*-\\s*\`${label}\``, "m").test(src)) {
-        fails.push({ file: deploySkill, detail: `Step 1 no longer offers "${label}" as an option` });
+        fails.push({ file: deploySkill, detail: `no longer offers "${label}" as an option` });
       }
     }
   }

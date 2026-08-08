@@ -5,23 +5,28 @@ Deploys your project to Scaleway. This is the **only** way the harness ships cod
 ## When to use it
 
 - Whenever you want your latest changes live on the public site.
-- After merging changes into `main`. Production only deploys from that branch.
+- Whenever you want a private preview of a branch before it joins `main`.
 
 ## How it works
 
-1. **You choose what you want.** The assistant always asks - a local review, or production - it never guesses, because an accidental production deploy would be costly. A local review deploys nothing: the app opens on your own machine.
+1. **The assistant checks first whether your site is already published.** If it is not, one confirmation is enough before it goes live, because an unpublished site is already visible to you alone. If it is already published, the assistant offers a private preview first, or a direct production deploy - because an accidental production deploy would be costly. You get the same choice on any branch, and your answer also decides whether that branch joins `main`.
 2. **Your code is committed and pushed** if you had unsaved changes.
-3. **GitHub Actions builds the container image** from your pushed commit. The assistant waits for it, showing progress (a cold build can take a few minutes).
+3. **The assistant builds the container image itself**, on this machine, from your commit, then pushes it to the Scaleway Container Registry. GitHub takes no part in this build. The assistant waits and shows progress (a cold build can take a few minutes).
 4. **Database migrations run first, on their own**, as a one-shot task against the new image - never inside the running app. If a migration fails, nothing else happens: your current live site keeps running untouched.
 5. **The live container is updated** to the new image and the assistant waits until it reports healthy.
 6. **If your project has an AI agent** (scaffolded earlier with `/add-agent`), its scheduled task on Scaleway is created or updated too, on the same freshly-built image.
 7. **A real request is sent to the live URL** to confirm it actually works (HTTP 200 and the page's styling loads) - not just that the deploy "succeeded" on paper.
 8. **Old container images are cleaned up** so storage cost doesn't creep up over time.
 
-## Local review vs. production
+## Private preview vs. production
 
-- **Local review** runs the app on your own machine. You see your changes at once, nobody else can reach them, and it costs nothing. Nothing is built and nothing is sent to Scaleway.
-- **Production** only deploys from the `main` branch. It's the live site your users see.
+This choice also decides one more thing: what joins the project's main line.
+
+- **An unpublished site is already private.** Only your own address can reach it. Deploying it to production changes nothing here: that deploy is already your private review.
+- **A published site** is live for real users. Before you touch it, the assistant offers a private preview at a separate address, visible to you alone, so you can check your changes first.
+- **Production also merges your branch into `main`** when you work on another branch. The assistant merges it before it puts the site online. If the merge conflicts, nothing goes online, and the assistant explains the conflict.
+- **A private preview leaves your work on its own branch.** Nothing merges into `main`. The assistant pushes the branch to GitHub. Open the pull request yourself from the Claude Code web interface.
+- **Production always runs from `main`.** That is why choosing it merges your branch first. It's the live site your users see.
 
 ## What you get at the end
 
@@ -32,7 +37,7 @@ Deploys your project to Scaleway. This is the **only** way the harness ships cod
 ## Tips
 
 {{callout:tip|Per-branch environments}}
-The assistant can also deploy any other branch to its own container with its own database, fully isolated from production. It never proposes this by itself, because most projects do not need it. Ask for a preview by name if you want one.
+Every branch you preview gets its own address and its own database, fully isolated from production. That isolation has a price: each branch previewed this way keeps its own Serverless SQL database, and the harness never deletes a database. Removing one is a manual job in the Scaleway console. Prefer one review branch over many short-lived ones.
 {{/callout}}
 
 {{callout:info|Why migrations run separately}}
@@ -40,5 +45,5 @@ Running database migrations as part of starting the app is unsafe here: several 
 {{/callout}}
 
 {{callout:warning|Uncommitted changes}}
-If you have unsaved local changes when you run `/deploy`, they get committed automatically as part of the process. Make sure you're happy with what's in your working directory before deploying.
+If you have unsaved local changes when you run `/deploy`, they get committed automatically as part of the process. Make sure you're happy with what's in your working directory before deploying. If you choose production from another branch, the assistant also merges that branch into `main` before it goes live.
 {{/callout}}

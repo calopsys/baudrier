@@ -18,7 +18,7 @@ Baudrier vous propose une **table des matières en 8 sujets** :
 3. **Le bootstrap** : Ce qui se passe quand vous lancez `/bootstrap`
 4. **Les outils du quotidien** : Les commandes que vous utiliserez régulièrement
 5. **Les compléments (add-ons)** : Les fonctionnalités qu'on ajoute selon vos besoins
-6. **Le déploiement** : Comment votre app passe de votre ordinateur à internet, ce que veut dire "elle dort" et "privée par défaut"
+6. **Le déploiement** : Comment votre app passe de notre conversation à internet, ce que veut dire "elle dort" et "privée par défaut"
 7. **Le cahier des charges** : Comment bien décrire ce qu'on veut construire
 8. **Le vibe coding** : Comment faire évoluer votre app après le bootstrap
 

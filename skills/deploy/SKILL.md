@@ -1,6 +1,6 @@
 ---
 name: deploy
-description: Deploy the current project to Scaleway - production (branch main) or a preview environment (any other branch). Pushes the branch, builds and pushes the container image directly (docker build --platform linux/amd64, no GitHub Actions), runs database migrations as a one-shot Serverless Job, updates the Serverless Container, prunes old registry images, and smoke-tests the health probe (`/api/healthz`) on the live URL. This is the ONLY deploy path. Use when the user says "deploy", "ship this", "push to production", "deploy a preview", "/deploy".
+description: Deploy the current project to Scaleway - production (branch main) or a preview environment (any other branch). The published state of the app picks the question asked; choosing production from a non-main branch merges that branch into main first. Pushes the branch, builds and pushes the container image directly (docker build --platform linux/amd64, no GitHub Actions), runs database migrations as a one-shot Serverless Job, updates the Serverless Container, prunes old registry images, and smoke-tests the health probe (`/api/healthz`) on the live URL. This is the ONLY deploy path. Use when the user says "deploy", "ship this", "push to production", "deploy a preview", "/deploy".
 argument-hint: "[production|preview]"
 allowed-tools: Bash AskUserQuestion
 compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js and Docker."
@@ -20,55 +20,24 @@ You deploy the current project to Scaleway. The machine running Claude Code buil
 
 ## Step 0 - Confirm a deploy is actually wanted [only when reached automatically]
 
-The harness's default loop is local: code, then validate with `pnpm dev` on `http://localhost:3000`. A deploy is for review or an explicit user request, never the silent default next step - it also costs a full image build (several minutes, built and pushed directly by this machine), so proposing one without being asked wastes the user's time.
+A deploy is for review or an explicit user request, never the silent default next step - it also costs a full image build (several minutes, built and pushed directly by this machine), so proposing one without being asked wastes the user's time.
 
 - If the user's own message this turn already asked for a deploy, in any form ("déploie", "mets en ligne", "ship this", "/deploy", "push to preview"...), that request **is** the confirmation - go straight to Step 1.
 - If instead this skill was reached as an automatic next step of another flow (an addon's summary, an audit's suggestion, anything that did not come from the user asking to deploy right now), stop and ask first with `AskUserQuestion`:
   - Question: "Veux-tu que je déploie maintenant ? Un déploiement relance une construction complète de l’image (plusieurs minutes)."
   - Options: `Oui, déployer maintenant` / `Non, pas pour l’instant`
-  - If "Non" → stop here. Tell the user their work is saved and ready, that they can see it at once with the local review (Step 1), and that they can ask for a deploy whenever they want the public site updated.
+  - If "Non" → stop here. Tell the user their work is saved, and that they can ask for a deploy whenever they want the site updated.
   - If "Oui" → continue to Step 1.
 
 This step does not apply to `/bootstrap`'s own closing deploy (its Step 8b) - the user's initial request to build the whole app already is that explicit consent, as documented there.
 
 ---
 
-## Step 1 - Ask what the user wants: local review or production [MANDATORY, NEVER SKIP]
+## Step 1 - Ask what the user wants: production or preview [MANDATORY, NEVER SKIP]
 
-🚨 **Always ask. Never infer this from the current branch, from context, or from what the user seems to want.** An accidental production deploy is costly and cannot be silently undone - this is a deliberate product decision, not a formality.
+🚨 **Always ask one of the two questions below - never infer the answer from context or from what the user seems to want.** An accidental production deploy is costly and cannot be silently undone - this is a deliberate product decision, not a formality.
 
-Use `AskUserQuestion`:
-- Question: "Mise en production"
-- Options:
-  - `Non, revue locale d’abord` - l’application s’ouvre sur votre ordinateur, tout de suite. Personne d’autre ne la voit, et ça ne coûte rien.
-  - `Oui, déploie en production` - le site public, visible par vos utilisateurs réels.
-
-If the user already stated it unambiguously in their message (e.g. "deploy to production"), you may skip asking again **only within the same turn** - but if there is any doubt at all, ask.
-
-### If `Non, revue locale d’abord` was chosen
-
-**This skill stops here.** Nothing is committed, nothing is pushed, no image is built, and no Scaleway resource is touched. Never describe this option as a deploy.
-
-1. Invoke `_detect-project-root` to get `WEB_DIR`.
-2. From `WEB_DIR`, start the dev server with `pnpm dev` in the **background** (`run_in_background: true`). A dev server never exits on its own, so a synchronous call would hang this skill.
-3. Read the first lines of its output to get the real address. Next picks another port when 3000 is taken.
-4. Give the user that address, then stop:
-
-> Votre application tourne sur http://localhost:3000. Ouvrez cette adresse pour voir vos changements.
-
-### If `Oui, déploie en production` was chosen
-
-Map to `--target production` and continue to Step 2.
-
-### The preview target is no longer proposed
-
-`--target preview` still exists and still works: one Serverless Container and one Serverless SQL database per branch. The menu above does not offer it, because this harness does not productise per-branch environments. Use it **only** when the user asks for it by name ("un aperçu", "une preview", "/deploy preview"). Then skip the menu and map to `--target preview`.
-
-**A preview deploy must never write `ACCESS_ALLOWED_IPS`.** That secret is production's own access list (CONTRACT.md §6). Adding an address to it while production is restricted grants that address production access. No preview flow may touch it, whatever the user asks for.
-
-### If production was chosen - check whether the app is already published
-
-Before continuing, read the canonical `ACCESS_RESTRICTED` value from Secret Manager - it is not sensitive (`"true"` \| `"false"`), so reading it here is safe, and it is the only readable source of truth for it (CONTRACT.md §1: a container's own secrets can only be written, never read back):
+The published state of the app, not the current branch, picks which question to ask. Before asking anything, read the canonical `ACCESS_RESTRICTED` value from Secret Manager - it is not sensitive (`"true"` \| `"false"`), so reading it here is safe, and it is the only readable source of truth for it (CONTRACT.md §1: a container's own secrets can only be written, never read back):
 
 ```bash
 SECRETS_MJS="${CLAUDE_SKILL_DIR}/../../scripts/scaleway/secrets.mjs" \
@@ -86,12 +55,55 @@ try {
 '
 ```
 
-- `accessRestricted === "false"` → **the app is published: real users can already reach it.** Do not walk straight into a production deploy. Recommend the local review first, then ask an explicit confirmation naming the risk, via `AskUserQuestion`:
-  - Question: "Ce site est déjà publié avec de vrais utilisateurs. Je recommande de vérifier vos changements en revue locale avant de toucher au site public. Veux-tu vraiment déployer directement en production sur un site publié ?"
-  - Options:
-    - `Revue locale d’abord (recommandé)` - run the local-review branch of Step 1 and stop; no deploy happens
-    - `Déployer directement en production sur un site publié` - the user confirms the risk by name; continue with `--target production`
-- `accessRestricted === "true"`, or the read failed and fell back to restricted → no public users yet, the Step 1 confirmation above already suffices; continue normally.
+Also note the current branch (`git rev-parse --abbrev-ref HEAD`) - it does not pick the question, but Step 2 needs it to know whether a merge into `main` is required afterward.
+
+### Which question to ask
+
+| `ACCESS_RESTRICTED` | Question |
+|---|---|
+| `"true"`, or the read failed | One confirmation, offering production only |
+| `"false"` | A menu: private preview, or production |
+
+Reason: an unpublished production site is already private - only the addresses in `ACCESS_ALLOWED_IPS` reach it. A separate preview adds cost and gives the user nothing, whatever branch the work sits on.
+
+**`accessRestricted === "true"`, or the read failed** - ask with `AskUserQuestion`:
+- Question: "Mise en ligne"
+- Options:
+  - `Oui, mets en ligne maintenant` - le site part en production, à l’adresse publique du projet.
+  - `Non, pas maintenant`
+
+If "Non, pas maintenant" → stop here, no deploy.
+If "Oui, mets en ligne maintenant" → the target is production; go to "What happens next" below.
+
+**`accessRestricted === "false"`** - **the app is published: real users can already reach it.** Ask with `AskUserQuestion`:
+- Question: "Mise en production"
+- Options:
+  - `Non, un aperçu privé d’abord` - une adresse séparée, réservée à vous, pour vérifier vos changements avant de toucher au site public.
+  - `Oui, déploie en production` - le site public, visible par vos utilisateurs réels.
+
+If "Non, un aperçu privé d’abord" → the target is preview; go to "What happens next" below.
+If "Oui, déploie en production" → the target is production; go to "What happens next" below.
+
+If the user already stated it unambiguously in their message (e.g. "deploy to production"), you may skip asking again **only within the same turn** - but if there is any doubt at all, ask.
+
+### What happens next: the branch decides, not another question
+
+The choice above is now one decision about **where the work ends up**, not only a deploy target:
+
+- **Production chosen, current branch already `main`** → nothing to merge; continue to Step 2 with `--target production`.
+- **Production chosen, current branch anything else** → the work must reach `main` first. Continue to Step 2, which merges the branch into `main` before running `--target production`.
+- **Preview chosen, current branch anything other than `main`** → continue to Step 2 with `--target preview`; the branch is left exactly as it is, nothing merges.
+- **Preview chosen, current branch already `main`** → the work needs its own branch first. Continue to Step 2, which switches it onto the stable `revue` review branch (reusing it if it exists, creating it from `main` otherwise) before running `--target preview`.
+
+Reason: `scripts/deploy.mjs` refuses `--target production` on any branch except `main`, and refuses `--target preview` on `main` itself - Step 2 is what resolves both cases: merging into `main` for production, or switching onto `revue` for preview.
+
+This repository's GitHub token cannot open or merge pull requests from this environment (CONTRACT.md §1: PRs are read-only, and `gh` is not part of the web toolchain). The merge in Step 2 is a direct `git merge`, never a pull-request merge, and this skill never opens a pull request itself.
+
+### Preview: cost, and what stays untouched
+
+The first time in this conversation a branch's preview is deployed, tell the user, in plain French, before continuing: a preview creates one Serverless Container and one Serverless SQL database, and this harness never deletes a database (`_destructive-guard.mjs` refuses it), so removing that database later is a manual job in the Scaleway console. Do not repeat this note on a later `/deploy` of the same branch in the same conversation.
+
+**A preview deploy must never write `ACCESS_ALLOWED_IPS`.** That secret is production's own access list (CONTRACT.md §6). Adding an address to it while production is restricted grants that address production access. No preview flow may touch it, whatever the user asks for.
 
 ---
 
@@ -105,6 +117,45 @@ Tell the user briefly what's about to happen:
 > Je vais committer et pousser vos changements, construire et publier l’image, migrer la base de données, puis mettre à jour le site. Ça prend en général quelques minutes.
 
 Mention explicitly that any uncommitted local change will be committed as part of this (so nothing is a surprise): *"Si vous avez des modifications non enregistrées, je vais les committer avant de déployer."*
+
+### If Step 1 found that production needs a merge into `main`
+
+Only applies when the target is production and the current branch is not `main`. Warn the user first, next to the sentence above, before touching git: *"Comme vous déployez en production, je vais d’abord fusionner votre branche dans main."* Then run:
+
+```bash
+BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+git add -A
+git diff --cached --quiet || git commit -m "chore: prepare branch for merge into main"
+git push -u origin "$BRANCH"
+git checkout main
+git pull origin main
+git merge --no-edit "$BRANCH" || { git merge --abort; echo "MERGE_CONFLICT"; }
+```
+
+- If the output shows `MERGE_CONFLICT`, the abort already restored `main` to its pre-merge state - **stop here, deploy nothing.** Report the conflict to the user in plain French, name the branch, and tell them to resolve it themselves before asking for a deploy again.
+- Otherwise, finish with `git push origin main`, then continue - the current branch is now `main`.
+- **Never force-push, and never discard the branch.** A failed merge must always leave the repository in a state the user can recover from.
+
+### If Step 1 found that preview needs the `revue` branch
+
+Only applies when the target is preview and the current branch is already `main`. The user asked for a private preview, not a branch - a preview still needs one, so make it for them instead of stopping. Warn the user first, before switching anything: *"Je mets ce changement sur une branche de révision appelée revue, pour que le site public reste inchangé."*
+
+Then switch onto it:
+
+```bash
+git fetch origin
+if git rev-parse --verify revue >/dev/null 2>&1; then
+  git checkout revue
+elif git rev-parse --verify origin/revue >/dev/null 2>&1; then
+  git checkout -b revue origin/revue
+else
+  git checkout -b revue
+fi
+```
+
+- Check out `revue` **before** committing anything: any uncommitted change follows the user onto the branch, and `deploy.mjs`'s own `commitPush` step (Step 3) commits and pushes it from there - never commit on `main` first.
+- If the checkout itself fails (an uncommitted change conflicts with `revue`'s own history), **stop here - never discard the change.** Tell the user in French, and ask them to commit or stash it before trying again.
+- `revue` is one stable, reused branch per project - never generate a new name per review, never add a date or a slug. Reusing it is what keeps this to exactly one preview Serverless SQL database, since this harness never deletes one (see the cost note above).
 
 Check whether `.github/workflows/clean-merged-branches.yml` exists in the project. If it does not, run `node "${CLAUDE_SKILL_DIR}/../../scripts/add-cleanup-workflow.mjs"` now - the deploy's own `commitPush` step then ships it. This dispatch-only maintenance workflow lets the repository owner delete merged branches from the GitHub Actions tab; a session itself can never delete a remote ref (CONTRACT.md §5/§7).
 
@@ -207,7 +258,7 @@ Then one line about the homepage, from the log's homepage probe: if it answered 
 
 If `warnings` is non-empty, mention each one in plain language (e.g. a missing stylesheet detection isn't fatal, but worth a manual look).
 
-For a preview, remind the user preview environments scale to zero and cost close to nothing while idle, and that this environment has its own database, isolated from production.
+For a preview, remind the user preview environments scale to zero and cost close to nothing while idle, and that this environment has its own database, isolated from production. Also tell the user their branch stays open for review - they can open the pull request from the Claude Code web interface whenever they are ready; this skill never opens one itself.
 
 ### Failure (`"success":false`)
 Read the handoff banner printed just above the JSON line - it names the exact step that failed (`failedStep`) and lists what already completed. Translate the underlying error for the user in plain language, then:
