@@ -35,10 +35,6 @@ import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { ensureToolsInPath } from "./_ensure-tools-path.mjs";
-import { isI18nSetUp } from "./_i18n-detect.mjs";
-
-ensureToolsInPath();
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -100,11 +96,7 @@ mkdirSync(componentsDir, { recursive: true });
 
 const templatesDir = resolve(__dirname, "..", "templates", "map");
 const srcMap = join(templatesDir, "map.tsx");
-const i18nActive = isI18nSetUp(webDir);
-const srcLoader = join(
-  templatesDir,
-  i18nActive ? "map-loader.i18n.tsx" : "map-loader.tsx",
-);
+const srcLoader = join(templatesDir, "map-loader.tsx");
 const srcShell = join(templatesDir, "map-shell.tsx");
 
 if (!existsSync(srcMap) || !existsSync(srcLoader)) {
@@ -117,32 +109,7 @@ if (!existsSync(srcMap) || !existsSync(srcLoader)) {
 copyFileSync(srcMap, mapFile);
 copyFileSync(srcLoader, loaderFile);
 actions.push(`✓ ${mapFile.replace(webDir, "").replace(/^[\\/]+/, "")}`);
-actions.push(
-  `✓ ${loaderFile.replace(webDir, "").replace(/^[\\/]+/, "")}${i18nActive ? " (i18n variant)" : ""}`,
-);
-
-// If i18n is active, merge the map feature's messages into each locale.
-if (i18nActive) {
-  const mergeScript = join(__dirname, "_i18n-merge-messages.mjs");
-  if (existsSync(mergeScript)) {
-    const res = spawnSync(
-      "node",
-      [mergeScript, "--web-dir", webDir, "--feature", "map"],
-      { stdio: "pipe", encoding: "utf8" },
-    );
-    if (res.status === 0) {
-      actions.push("✓ messages merged for feature 'map'");
-    } else {
-      warnings.push(
-        `MESSAGES_MERGE_FAILED: ${(res.stderr || res.stdout || "").trim()}`,
-      );
-    }
-  } else {
-    warnings.push(
-      "MERGE_SCRIPT_MISSING: _i18n-merge-messages.mjs not found - map keys not merged into messages/*.json",
-    );
-  }
-}
+actions.push(`✓ ${loaderFile.replace(webDir, "").replace(/^[\\/]+/, "")}`);
 
 if (layout === "mapfirst") {
   if (!existsSync(srcShell)) {

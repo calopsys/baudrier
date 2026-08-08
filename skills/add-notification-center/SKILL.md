@@ -2,7 +2,7 @@
 name: add-notification-center
 description: "Adds an in-app notification center to a Next.js app: a bell in the navigation bar, with a badge showing the number of unread notifications, a dropdown panel that lists the notifications, and read/unread state. Creates the `notification` table, the `notifyUser` server helper, the tRPC router, and the bell component. Independent of /add-push-notification (no required order): if push is present, the `notifyUser` helper also sends a system notification. Depends on /add-db and /add-auth (users mode)."
 argument-hint: ""
-compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (vercel, gh)."
+compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (scw, gh)."
 ---
 
 # Add Notification Center: in-app bell (badge + list)
@@ -19,10 +19,10 @@ You add an **in-app notification center**: a bell with a badge showing the numbe
 
 ## Step 0: Re-run? (idempotence)
 
-Marker `hypervibe:notification-center` at the top of `<WEB_DIR>/src/server/notify.ts`.
+Marker `baudrier:notification-center` at the top of `<WEB_DIR>/src/server/notify.ts`.
 
 ```bash
-test -f "<WEB_DIR>/src/server/notify.ts" && grep -q "hypervibe:notification-center" "<WEB_DIR>/src/server/notify.ts" && echo present || echo absent
+test -f "<WEB_DIR>/src/server/notify.ts" && grep -q "baudrier:notification-center" "<WEB_DIR>/src/server/notify.ts" && echo present || echo absent
 ```
 
 - **present** → menu: (1) reinstall the bell, (2) regenerate the router, (3) re-wire the push if `/add-push-notification` has been added since. Handle it, then jump to the summary.
@@ -36,7 +36,7 @@ Templates/scripts path: `${CLAUDE_SKILL_DIR}/../../templates/notif-center/`.
 
 1. **Detect project root**: invoke `_detect-project-root` → `WEB_DIR`, `IS_MONOREPO`, `IS_NEXTJS`. Abort if not Next.js.
 2. **Database**: invoke `_check-deps db`. If `db_ok = false`, suggest `/add-db`, then re-check.
-3. **Auth in users mode**: read `<WEB_DIR>/src/server/auth.ts`, look for the `// hypervibe:auth-modes` marker. If it does not contain `users`, suggest `/add-auth` (users mode): notifications are attached to a logged-in user.
+3. **Auth in users mode**: read `<WEB_DIR>/src/server/auth.ts`, look for the `// baudrier:auth-modes` marker. If it does not contain `users`, suggest `/add-auth` (users mode): notifications are attached to a logged-in user.
 
 (No dependency on `/add-pwa` or `/add-push-notification`: the in-app center is self-contained.)
 
@@ -51,12 +51,12 @@ Templates/scripts path: `${CLAUDE_SKILL_DIR}/../../templates/notif-center/`.
 
 ## Step 3: `notifyUser` server helper (+ push wiring if present)
 
-1. Copy `templates/notif-center/notify.ts` to `<WEB_DIR>/src/server/notify.ts` (keep the `// hypervibe:notification-center` marker at the top and `// hypervibe:notify-push` inside the function).
+1. Copy `templates/notif-center/notify.ts` to `<WEB_DIR>/src/server/notify.ts` (keep the `// baudrier:notification-center` marker at the top and `// baudrier:notify-push` inside the function).
 2. **Push wiring (any order)**: check whether push is already installed:
    ```bash
-   test -f "<WEB_DIR>/src/server/push.ts" && grep -q "hypervibe:push" "<WEB_DIR>/src/server/push.ts" && echo push-present || echo push-absent
+   test -f "<WEB_DIR>/src/server/push.ts" && grep -q "baudrier:push" "<WEB_DIR>/src/server/push.ts" && echo push-present || echo push-absent
    ```
-   - **push-present** → follow `templates/notif-center/notify-push-block.ts`: add the `sendPushToUser` import at the top of `notify.ts` and replace the marker line `// hypervibe:notify-push` with `await sendPushToUser(db, userId, payload);`. (Idempotent: do not re-inject if it is already there.) That way a notification rings the bell **and** pushes to the phone.
+   - **push-present** → follow `templates/notif-center/notify-push-block.ts`: add the `sendPushToUser` import at the top of `notify.ts` and replace the marker line `// baudrier:notify-push` with `await sendPushToUser(db, userId, payload);`. (Idempotent: do not re-inject if it is already there.) That way a notification rings the bell **and** pushes to the phone.
    - **push-absent** → inject nothing (the marker stays, ready for when `/add-push-notification` is run: that skill is the one that will do the injection).
 
 ---

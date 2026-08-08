@@ -1,9 +1,9 @@
 ---
 name: _check-deps
-description: Internal helper to check project dependencies (DB, email, etc.) with robust heuristics that don't fall for T3 bootstrap placeholders or localhost defaults. Delegates to bundled scripts/check-deps.mjs. Returns JSON. Triggered by add-auth, add-backup-db, and any skill that needs to verify a real cloud dependency is wired up. Not meant to be invoked directly by users.
+description: Internal helper to check project dependencies (DB, email, etc.) with robust heuristics that don't fall for T3 bootstrap placeholders or localhost defaults. Delegates to bundled scripts/check-deps.mjs. Returns JSON. Triggered by add-auth and any skill that needs to verify a real cloud dependency is wired up. Not meant to be invoked directly by users.
 user-invocable: false
 allowed-tools: Bash
-compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (vercel, gh)."
+compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (gh, scw)."
 ---
 
 # Check Deps - Internal helper
@@ -27,31 +27,21 @@ The script merges all Next.js-style env files found at the cwd, with Next.js pre
 
 So a var set in **any** of these is detected - critical since some projects put `DATABASE_URL` in `.env.local` only.
 
+The `scaleway` check is the one exception : `SCW_ACCESS_KEY`/`SCW_SECRET_KEY` are **operator machine** credentials (CONTRACT.md §2), never read from these app-level `.env` files - resolution goes through the same `scripts/scaleway/_scw-auth.mjs#loadCredentials()` every `scripts/scaleway/*.mjs` module uses (process env, then the `scw` CLI config file).
+
 ## Invocation
 
 From the project root :
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/check-deps.mjs" <check1> [<check2> ...] [--include-vercel]
+node "${CLAUDE_SKILL_DIR}/../../scripts/check-deps.mjs" <check1> [<check2> ...]
 ```
 
 Output : JSON on stdout. Exit code is always 0 - parse the JSON to get per-check `ok` + `reason`.
 
-### Flag `--include-vercel`
-
-Opt-in : runs a `vercel env pull` on the `production` environment and **merges the Vercel vars on top of the local vars** (Vercel wins on conflict). Useful for checks like "is production correctly configured?" (e.g., `/security`, `/clean`).
-
-Prerequisites : project linked to Vercel (`.vercel/project.json` present) and Vercel CLI installed.
-
-Cost : ~2 seconds of network call. Only use it when the Vercel source matters.
-
-If `--include-vercel` is passed, the JSON output includes a `_meta` key with :
-- `sources: ["local", "vercel-production"]` if the pull succeeded, otherwise `["local"]` only
-- `vercelPull.keys` : list of the **names** of the vars retrieved from Vercel (never the values - no secret leak in the output)
-
 ## Supported checks
 
-### `db` - real cloud DB wired up
+### `db` - real Scaleway Serverless SQL Database wired up
 
 `ok: true` if and only if :
 1. `DATABASE_URL` is present in `.env`
@@ -62,31 +52,44 @@ If `--include-vercel` is passed, the JSON output includes a `_meta` key with :
    - `//postgres:postgres@` (typical T3/Docker default pair)
    - `YOUR_DB` (marker from `.env.example`)
    - `^file:` (local SQLite, not a cloud DB)
-3. A `drizzle.config.ts` or `.js` exists at the root, in `apps/web/`, or in `packages/db/`
+3. The host (the part between `@` and the next `/` or `:`) matches the Scaleway Serverless SQL Database shape : `*.pg.sdb.<region>.scw.cloud` (CONTRACT.md §4)
+4. A `drizzle.config.ts` or `.js` exists at the root, in `apps/web/`, or in `packages/db/`
 
 Fields returned : `{ ok, reason, host?, drizzleConfig? }`.
 
-### `email` - Resend or Brevo configured
+### `email` - Scaleway TEM configured
 
-`ok: true` if `RESEND_API_KEY` OR `BREVO_API_KEY` is present in `.env` AND does not match a placeholder pattern (empty, `placeholder`, `your_api_key`, `xxx...`, `re_your...`, `xkeysib-your...`).
+`ok: true` if `TEM_SENDER_EMAIL` is present in `.env`, is not a placeholder, and looks like a valid email address.
 
-Fields returned : `{ ok, provider: "resend"|"brevo"|null, reason }`.
+Fields returned : `{ ok, reason, provider?: "tem", sender?, senderName?: string|null }`.
 
 ### `auth` - NextAuth / auth lib installed & configured
 
 `ok: true` if :
 1. An auth file exists at one of these locations (at the root level OR prefixed by `apps/web/`) : `src/server/auth.ts`, `src/server/auth/index.ts`, `src/server/auth.config.ts`, `src/lib/auth.ts`, `src/lib/auth/index.ts`, `src/auth.ts`, `src/auth/index.ts`, `src/app/auth.ts`, `auth.ts`, `auth.config.ts`
-2. A secret is present in the env : `AUTH_SECRET` OR `NEXTAUTH_SECRET` OR `BETTER_AUTH_SECRET`, and non-placeholder
+2. A secret is present in the env : `AUTH_SECRET` OR `NEXTAUTH_SECRET`, and non-placeholder
 
 The check also tries to **infer the mode** from the env : presence of `ADMIN_PASSWORD_HASH_DEV` or `_PROD` → `admin-credentials`, otherwise `user-credentials`.
 
 Fields returned : `{ ok, reason, authFile?, secretVar?, mode?: "admin-credentials"|"user-credentials" }`.
 
-### `vercel` - project linked to Vercel
+### `scaleway` - operator Scaleway credentials configured AND valid
 
-`ok: true` if `.vercel/project.json` exists at the root and contains valid `projectId` + `orgId`.
+`ok: true` if and only if :
+1. `SCW_ACCESS_KEY` and `SCW_SECRET_KEY` resolve via `loadCredentials()` (env var or `scw` CLI config file)
+2. A real, live API call (a project-scoped Secret Manager list) succeeds with those credentials
 
-Fields returned : `{ ok, reason, projectId?, orgId? }`.
+This is the harness's documented gate before any Scaleway provider operation. Use it before any `scripts/scaleway/*.mjs` call whose failure would be confusing without this check first.
+
+Fields returned : `{ ok, reason, source?, secretCount? }`.
+
+### `container` - project linked to a Scaleway Serverless Container
+
+`ok: true` if a Serverless Container named after this app exists in this app's Scaleway Project. There is no linkage file to read : the harness resolves the Project by name (app name = repo name; `SCW_DEFAULT_PROJECT_ID` overrides), then finds the namespace and the container inside it, also by name.
+
+`push-env-vars.mjs` resolves the container the same way, by name, to know which container to push `secret_environment_variables` to.
+
+Fields returned : `{ ok, reason, namespaceId?, productionContainerId?, previewBranches?: string[] }`.
 
 ### `github-repo` - project pushed to a GitHub remote
 
@@ -94,49 +97,25 @@ Fields returned : `{ ok, reason, projectId?, orgId? }`.
 
 Fields returned : `{ ok, reason, owner?, repo?, nameWithOwner? }`.
 
-### `i18n` - next-intl installed
+### `storage` - Scaleway Object Storage configured
 
-`ok: true` if `next-intl` is listed in the dependencies of `package.json` (root) or `apps/web/package.json`. Also tries to locate the `messages/` folder for the translations.
+`ok: true` if `STORAGE_BUCKET`, `STORAGE_ACCESS_KEY`, and `STORAGE_SECRET_KEY` are all present and non-placeholders (CONTRACT.md §2 var names).
 
-Fields returned : `{ ok, reason, packageJson?, messagesDir?: string|null }`.
+Also checks `STORAGE_REGION` : this harness only ever targets `fr-par`, so anything else (or an absent value) surfaces a `regionWarning` (string). `ok` stays `true` so as not to break existing setups - it is up to the consuming skill to surface the warning if relevant.
 
-### `stripe` - Stripe configured
+Fields returned : `{ ok, reason, bucket?, endpoint?: string|null, region?: string|null, publicUrl?: string|null, regionWarning?: string|null }`.
 
-`ok: true` if `STRIPE_SECRET_KEY` is present, non-placeholder, and starts with `sk_`. Automatically detects the mode (`test` or `live`).
+### `analytics` - Matomo configured
 
-Fields returned : `{ ok, reason, mode?: "test"|"live"|"unknown" }`.
+`ok: true` if `NEXT_PUBLIC_MATOMO_URL` is a valid URL and `NEXT_PUBLIC_MATOMO_SITE_ID` is a non-placeholder numeric id.
 
-### `storage` - Cloudflare R2 configured
+Fields returned : `{ ok, reason, matomoUrl?, siteId? }`.
 
-`ok: true` if `R2_ACCOUNT_ID` (or `CLOUDFLARE_ACCOUNT_ID`), `R2_ACCESS_KEY_ID`, and `R2_SECRET_ACCESS_KEY` are all present and non-placeholders.
+### `dark-mode` - next-themes installed AND wired up
 
-Also detects the **R2 jurisdiction** from the format of `R2_ENDPOINT` :
-- `https://<acc>.eu.r2.cloudflarestorage.com` → `jurisdiction: "eu"` (strict GDPR ✅)
-- `https://<acc>.r2.cloudflarestorage.com` → `jurisdiction: "default"` (global jurisdiction, data potentially outside the EU)
-- absent → `jurisdiction: "unknown"`
+`ok: true` if `next-themes` is a dependency AND a `ThemeProvider` is mounted in a root layout (`src/app/layout.tsx`, `app/layout.tsx`, or the `apps/web/` equivalents). Also best-effort detects the Tailwind v4 `@custom-variant dark` in `globals.css`.
 
-If the jurisdiction is not EU, also returns a `jurisdictionWarning` field (string) with a migration recommendation. `ok` stays `true` so as not to break existing setups - it is up to the consuming skill to surface the warning if relevant (e.g., in the Step 0 menu of `add-storage`).
-
-Fields returned : `{ ok, reason, bucket?: string|null, publicUrl?: string|null, jurisdiction?: "eu"|"default"|"unknown", jurisdictionWarning?: string|null }`.
-
-### `analytics` - Google Analytics (GA4) configured
-
-`ok: true` if `NEXT_PUBLIC_GA_ID` is present, non-placeholder, and starts with `G-` (GA4 format).
-
-Fields returned : `{ ok, reason, gaId? }`.
-
-### `cloudflare` - Cloudflare API token configured AND valid
-
-Checks that a Cloudflare API token is in place in the **system** env (not in `.env`, because it is a machine config shared across projects) AND that it is actually valid by querying `https://api.cloudflare.com/client/v4/user/tokens/verify`.
-
-`ok: true` if and only if :
-1. `CLOUDFLARE_API_TOKEN` OR `CF_API_TOKEN` is present (hypervibe convention = both point to the same token - `wrangler` reads `CLOUDFLARE_API_TOKEN`, the `curl` REST API calls can use either name)
-2. The value is not a placeholder
-3. The Cloudflare API returns `{ success: true, result: { status: "active" } }` for this token
-
-If the check fails, the `reason` includes a suggestion : `- run /start to configure`. To be used before any Cloudflare operation (DNS via curl API, Workers via wrangler, Email Routing via curl, R2 via wrangler or curl...).
-
-Fields returned : `{ ok, reason, varName? }`.
+Fields returned : `{ ok, reason, packageJson?, layoutFile?, cssFile?, darkVariantConfigured? }`.
 
 ## Typical usage
 
@@ -145,15 +124,14 @@ result=$(node "${CLAUDE_SKILL_DIR}/../../scripts/check-deps.mjs" db email)
 # Parse with node -e (jq is not installed on the target machine)
 db_ok=$(echo "$result" | node -e "console.log(JSON.parse(require('fs').readFileSync(0,'utf8')).db.ok)")
 email_ok=$(echo "$result" | node -e "console.log(JSON.parse(require('fs').readFileSync(0,'utf8')).email.ok)")
-email_provider=$(echo "$result" | node -e "console.log(JSON.parse(require('fs').readFileSync(0,'utf8')).email.provider || 'none')")
 ```
 
 ## Rules
 
 - **Always** use this helper when a skill's next step depends on a dependency being real (never `grep DATABASE_URL .env` inline - T3 placeholders systematically cause false positives).
 - If a check returns `ok: false`, relay the `reason` to the user in plain language (translate from technical to non-tech - ex: *"DATABASE_URL points to localhost"* → *"your database points to your own computer, you need one reachable from the internet"*). Then offer to invoke the corresponding `add-*` skill via a natural-language prompt.
-- Exit code is always 0 - the script never fails just because a check is negative. Only a truly malformed invocation (unknown flag) exits non-zero.
+- Exit code is always 0 - the script never fails just because a check is negative. Only a truly malformed invocation (unknown flag, no checks given) exits non-zero.
 
 ## Extending
 
-To add a new check (e.g., `auth`, `vercel-linked`, `github-repo`), add a function in `scripts/check-deps.mjs` and wire it into the dispatch switch. Document the new check here in the "Supported checks" section. Keep heuristics encapsulated - never require callers to reimplement them.
+To add a new check, add a function in `scripts/check-deps.mjs` and wire it into the `dispatchers` table. Document the new check here in the "Supported checks" section. Keep heuristics encapsulated - never require callers to reimplement them.

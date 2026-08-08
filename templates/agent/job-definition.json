@@ -1,0 +1,63 @@
+{
+  "_comment": [
+    "Declarative spec for this agent's Scaleway Serverless Job definition.",
+    "Replaces the old PaaS Blueprint file that needed a manual dashboard",
+    "step to apply (no reliable API/CLI for that on the old host). Serverless",
+    "Jobs ARE fully API-driven via scripts/scaleway/jobs.mjs",
+    "(ensureJobDefinition/setSchedule), so /deploy can create and update this",
+    "Job automatically on every deploy, exactly like it already does for the",
+    "migration Job - no manual dashboard step.",
+    "",
+    "/deploy should, for each apps/*/job-definition.json found in the repo:",
+    "  1. Read this file.",
+    "  2. Call ensureJobDefinition({ ...this file, imageUri: <the just-built",
+    "     and pushed image tag for this app's registry image> }).",
+    "  3. If triggerMode === 'cron', call setSchedule(definition.id,",
+    "     { cron: cronSchedule, timezone: cronTimezone }).",
+    "  4. If triggerMode === 'manual', call setSchedule(definition.id,",
+    "     { cron: manualPollCron, timezone: 'Europe/Paris' }) - the short",
+    "     interval queue-check tick documented in entry.ts.",
+    "  5. If triggerMode === 'continuous', call setSchedule(definition.id,",
+    "     { cron: continuousRestartCron, timezone: 'Europe/Paris' }) - the",
+    "     once-a-day restart safety net documented in entry.ts.",
+    "",
+    "{{AGENT_NAME}} / {{AGENT_TRIGGER_MODE}} / {{AGENT_CRON_SCHEDULE}} are",
+    "substituted by setup-agent.mjs at scaffold time."
+  ],
+
+  "name": "{{AGENT_NAME}}",
+  "command": "node dist/entry.js",
+  "cpuLimit": 250,
+  "memoryLimit": 512,
+  "timeout": "{{AGENT_JOB_TIMEOUT}}",
+
+  "triggerMode": "{{AGENT_TRIGGER_MODE}}",
+  "cronSchedule": "{{AGENT_CRON_SCHEDULE}}",
+  "cronTimezone": "Europe/Paris",
+  "manualPollCron": "*/5 * * * *",
+  "continuousRestartCron": "0 4 * * *",
+
+  "env": {
+    "NODE_ENV": "production",
+    "SCW_GENERATIVE_BASE_URL": "https://api.scaleway.ai/v1",
+    "SCW_GENERATIVE_MODEL": "{{AGENT_MODEL}}",
+    "SCW_DEFAULT_PROJECT_ID": "{{SCW_DEFAULT_PROJECT_ID}}",
+    "SCW_DEFAULT_REGION": "fr-par",
+    "AGENT_TRIGGER_MODE": "{{AGENT_TRIGGER_MODE}}",
+    "AGENT_CRON_PROMPT": "{{AGENT_CRON_PROMPT}}",
+    "AGENT_DAILY_BUDGET_EUR": "{{AGENT_DAILY_BUDGET_EUR}}",
+    "AGENT_MONTHLY_BUDGET_EUR": "{{AGENT_MONTHLY_BUDGET_EUR}}",
+    "AGENT_EMAIL_ALLOWED_RECIPIENTS": "{{AGENT_EMAIL_ALLOWED_RECIPIENTS}}",
+    "APP_URL": "{{APP_URL}}"
+  },
+
+  "secretRefs": [
+    { "secretManagerId": "DATABASE_URL", "envVarName": "DATABASE_URL" },
+    { "secretManagerId": "SCW_GENERATIVE_API_KEY", "envVarName": "SCW_GENERATIVE_API_KEY" },
+    { "secretManagerId": "TEM_API_ACCESS_KEY", "envVarName": "TEM_API_ACCESS_KEY" },
+    { "secretManagerId": "TEM_API_SECRET_KEY", "envVarName": "TEM_API_SECRET_KEY" },
+    { "secretManagerId": "TEM_SENDER_EMAIL", "envVarName": "TEM_SENDER_EMAIL" },
+    { "secretManagerId": "TEM_SENDER_NAME", "envVarName": "TEM_SENDER_NAME" },
+    { "secretManagerId": "ADMIN_EMAIL", "envVarName": "ADMIN_EMAIL" }
+  ]
+}

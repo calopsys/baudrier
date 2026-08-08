@@ -1,8 +1,8 @@
-// hypervibe:notification-center
-// Point d'entrée unique "notifier un utilisateur" : persiste la notification (pour
+// baudrier:notification-center
+// Point d’entrée unique "notifier un utilisateur" : persiste la notification (pour
 // le centre in-app / la cloche) et, si /add-push-notification est installé, envoie
 // aussi une notification système (push). Utilise ceci partout côté serveur pour
-// notifier quelqu'un :  await notifyUser(db, userId, { title, body, url })
+// notifier quelqu’un :  await notifyUser(db, userId, { title, body, url })
 import type { db as dbClient } from "~/server/db";
 import { notifications } from "~/server/db/schema";
 
@@ -26,5 +26,5 @@ export async function notifyUser(
   });
 
   // 2) Push système (branché ici par /add-push-notification au marker ci-dessous).
-  // hypervibe:notify-push
+  // baudrier:notify-push
 }

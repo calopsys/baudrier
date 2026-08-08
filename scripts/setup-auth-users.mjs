@@ -17,7 +17,7 @@
 //   - Live logs: ▸ <step>, ✅ <result>, ⚠️ <warning>
 //   - Handoff banner at the end
 //   - Last line on success: JSON Claude can parse:
-//       {"success":true,"authMode":"users","emailReset":bool,"emailProvider":"resend|brevo|none","envVars":["AUTH_SECRET"]}
+//       {"success":true,"authMode":"users","emailReset":bool,"emailProvider":"tem|none","envVars":["AUTH_SECRET"]}
 
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
@@ -25,14 +25,6 @@ import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 import { render } from "./_render.mjs";
-import { isI18nSetUp } from "./_i18n-detect.mjs";
-
-import { ensureToolsInPath } from "./_ensure-tools-path.mjs";
-
-// Prepend common CLI install dirs to process.env.PATH so subprocess invocations
-// (pnpm, gh, vercel, git, node) find their binaries even if Claude Code
-// inherited a stale PATH (typical when tools were just installed via /start).
-ensureToolsInPath();
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -79,7 +71,7 @@ let current = null;
 const state = {
   authSecret: null,
   emailOk: false,
-  emailProvider: "none", // "resend" | "brevo" | "none"
+  emailProvider: "none", // "tem" | "none" - Scaleway Transactional Email is the only provider
 };
 
 async function step(stepName, fn) {
@@ -240,9 +232,11 @@ async function detectEmail() {
   try {
     const data = JSON.parse(res.stdout);
     state.emailOk = !!data.email?.ok;
-    state.emailProvider = data.email?.provider ?? "none";
+    // Scaleway Transactional Email (TEM) is the only email provider in this
+    // harness - no per-provider branching needed once email is configured.
+    state.emailProvider = state.emailOk ? "tem" : "none";
     if (state.emailOk) {
-      ok(`Email configured (${state.emailProvider}) - forgot-password flow enabled`);
+      ok("Email configured (Scaleway TEM) - forgot-password flow enabled");
     } else {
       ok("Email not configured - forgot-password flow disabled (run /add-email to enable)");
     }
@@ -291,26 +285,35 @@ async function patchSchema() {
 
   // 2. Idempotency: skip if `users` table already declared
   if (/export const users\s*=\s*createTable\("user"/.test(schema)) {
-    warn("`users` table already declared in schema.ts - skipping schema patch.");
-    writeFileSync(schemaPath, schema);
-    return;
+    warn("`users` table already declared in schema.ts - skipping NextAuth table patch.");
+  } else {
+    // 3. Append NextAuth tables (template body, no imports)
+    const authTables = render("auth/users/schema-additions.ts", {});
+    schema = schema.trimEnd() + "\n\n" + authTables;
+
+    // 4. Conditionally append password_reset_tokens
+    if (state.emailOk) {
+      const resetTokens = render("auth/users/schema-additions-reset-tokens.ts", {});
+      schema = schema.trimEnd() + "\n\n" + resetTokens;
+    }
   }
 
-  // 3. Append NextAuth tables (template body, no imports)
-  const authTables = render("auth/users/schema-additions.ts", {});
-  schema = schema.trimEnd() + "\n\n" + authTables;
-
-  // 4. Conditionally append password_reset_tokens
-  if (state.emailOk) {
-    const resetTokens = render("auth/users/schema-additions-reset-tokens.ts", {});
-    schema = schema.trimEnd() + "\n\n" + resetTokens;
+  // 5. Append the shared rate-limit table (backs ensureRateLimitInfra's
+  // DB-backed src/lib/rate-limit.ts). Checked independently of the `users`
+  // idempotency above - a re-run that already has `users` may still be
+  // missing this table (e.g. it was added by a harness version predating M2).
+  if (/export const loginAttempts\s*=\s*createTable\("login_attempt"/.test(schema)) {
+    warn("`loginAttempts` already declared in schema.ts - skipping rate-limit table patch.");
+  } else {
+    const rateLimitTable = render("auth/schema-additions-login-attempts.ts", {});
+    schema = schema.trimEnd() + "\n\n" + rateLimitTable;
   }
 
-  writeFileSync(schemaPath, schema + "\n");
+  writeFileSync(schemaPath, schema.trimEnd() + "\n");
   ok(
     state.emailOk
-      ? "Schema patched: imports + 4 NextAuth tables + password_reset_tokens"
-      : "Schema patched: imports + 4 NextAuth tables (no reset tokens - email not configured)",
+      ? "Schema patched: imports + 4 NextAuth tables + password_reset_tokens + login_attempt"
+      : "Schema patched: imports + 4 NextAuth tables + login_attempt (no reset tokens - email not configured)",
   );
 }
 
@@ -387,50 +390,36 @@ async function writeAuthTs() {
 // (without bootstrap), they may be missing. The auth-router templates use
 // rateLimitedProcedure for signup/forgot/reset routes, so we ensure both pieces
 // exist before writing the router. Idempotent - no-op if already present.
+// Recognized src/lib/rate-limit.ts variants (see templates/2fa/rate-limit.ts
+// for the DB-backed one and scripts/setup-security.mjs for the memory-only
+// one it upgrades from). A file with neither marker is either hand-written
+// or already customized - never overwritten.
+const RATE_LIMIT_MARKER_MEMORY = "baudrier:rate-limit memory-only";
+const RATE_LIMIT_MARKER_DB = "baudrier:rate-limit db-backed";
+
 async function ensureRateLimitInfra() {
   log("Ensuring rate-limit infrastructure (rate-limit.ts + rateLimitedProcedure)");
 
+  // Users mode always has a database (preflight requires drizzle-orm), so
+  // any rate-limit.ts this step creates or upgrades goes straight to the
+  // DB-backed variant - a login-attempt counter that resets every cold
+  // start or gets N-way inflated by concurrent instances is the exact gap
+  // this upgrade closes.
   const rateLimitPath = join(WEB_DIR, "src/lib/rate-limit.ts");
   if (!existsSync(rateLimitPath)) {
     mkdirSync(dirname(rateLimitPath), { recursive: true });
-    writeFileSync(
-      rateLimitPath,
-      `const WINDOW_MS = 15 * 60 * 1000; // 15 minutes
-const MAX_ATTEMPTS = 5;
-
-const attempts = new Map<string, { count: number; firstAttempt: number }>();
-
-// Auto-cleanup expired entries every 5 minutes
-const cleanup = setInterval(() => {
-  const now = Date.now();
-  for (const [key, value] of attempts) {
-    if (now - value.firstAttempt > WINDOW_MS) attempts.delete(key);
-  }
-}, 5 * 60 * 1000);
-cleanup.unref(); // Don't prevent serverless process from exiting
-
-export function checkRateLimit(ip: string): { allowed: boolean; retryAfterMs?: number } {
-  const now = Date.now();
-  const entry = attempts.get(ip);
-
-  if (!entry || now - entry.firstAttempt > WINDOW_MS) {
-    attempts.set(ip, { count: 1, firstAttempt: now });
-    return { allowed: true };
-  }
-
-  if (entry.count >= MAX_ATTEMPTS) {
-    const retryAfterMs = WINDOW_MS - (now - entry.firstAttempt);
-    return { allowed: false, retryAfterMs };
-  }
-
-  entry.count++;
-  return { allowed: true };
-}
-`,
-    );
-    ok("Created src/lib/rate-limit.ts");
+    writeFileSync(rateLimitPath, render("2fa/rate-limit.ts", {}));
+    ok("Created src/lib/rate-limit.ts (DB-backed)");
   } else {
-    ok("rate-limit.ts already present");
+    const current = readFileSync(rateLimitPath, "utf8");
+    if (current.includes(RATE_LIMIT_MARKER_DB)) {
+      ok("rate-limit.ts already DB-backed");
+    } else if (current.includes(RATE_LIMIT_MARKER_MEMORY)) {
+      writeFileSync(rateLimitPath, render("2fa/rate-limit.ts", {}));
+      ok("Upgraded rate-limit.ts to the DB-backed variant");
+    } else {
+      warn("rate-limit.ts exists but isn't a recognized baudrier variant - left untouched.");
+    }
   }
 
   // Patch trpc.ts - add rateLimitedProcedure if missing.
@@ -459,18 +448,18 @@ export function checkRateLimit(ip: string): { allowed: boolean; retryAfterMs?: n
     }
   }
 
-  // Ensure checkRateLimit import
+  // Ensure checkRateLimit + resolveClientIp imports
   if (!trpc.includes(`from "~/lib/rate-limit"`)) {
     const lastImport = trpc.match(/^((?:import[^;]+;[\r\n]+)+)/);
-    const insertion = `import { checkRateLimit } from "~/lib/rate-limit";\n`;
+    const insertion = `import { checkRateLimit } from "~/lib/rate-limit";\nimport { resolveClientIp } from "~/proxy";\n`;
     trpc = lastImport ? trpc.replace(lastImport[0], lastImport[0] + insertion) : insertion + trpc;
   }
 
   // Append rateLimitedProcedure at end of file
   const block = `
 export const rateLimitedProcedure = publicProcedure.use(async ({ ctx, next }) => {
-  const ip = ctx.headers?.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
-  const { allowed, retryAfterMs } = checkRateLimit(ip);
+  const ip = ctx.headers ? (resolveClientIp(ctx.headers) ?? "unknown") : "unknown";
+  const { allowed, retryAfterMs } = await checkRateLimit(ip);
   if (!allowed) {
     throw new TRPCError({
       code: "TOO_MANY_REQUESTS",
@@ -548,19 +537,12 @@ async function writeAuthRouter() {
   const dest = join(WEB_DIR, "src/server/api/routers/auth.ts");
   mkdirSync(dirname(dest), { recursive: true });
 
-  let templatePath;
-  if (state.emailOk && state.emailProvider === "resend") {
-    templatePath = "auth/users/auth-router-with-reset-resend.ts";
-  } else if (state.emailOk && state.emailProvider === "brevo") {
-    templatePath = "auth/users/auth-router-with-reset-brevo.ts";
-  } else {
-    templatePath = "auth/users/auth-router.ts";
-  }
+  const templatePath = state.emailOk
+    ? "auth/users/auth-router-with-reset.ts"
+    : "auth/users/auth-router.ts";
 
   writeFileSync(dest, render(templatePath, {}));
-  ok(
-    `auth router written (${state.emailOk ? `with reset, ${state.emailProvider}` : "no reset"})`,
-  );
+  ok(`auth router written (${state.emailOk ? "with password reset, via Scaleway TEM" : "no reset"})`);
 }
 
 // ─── Step 10: register authRouter in root.ts ──────────────────────────
@@ -612,22 +594,17 @@ async function writeApiRoute() {
 async function writeAuthPages() {
   log("Writing auth pages");
 
-  // Detect i18n state once. If true, we use the i18n.tsx templates AND merge
-  // each feature's messages into messages/<locale>.json afterwards.
-  const i18nActive = isI18nSetUp(WEB_DIR);
-  const variant = i18nActive ? "i18n" : "plain";
+  // No i18n in this harness - the product is French-only, always the plain
+  // (hardcoded French) template variant.
+  const variant = "plain";
 
   // signin: the "Forgot password?" link in the form footer is conditional on
-  // whether email is configured. The plain and i18n templates expect different
-  // substituted values for the {{FORGOT_PASSWORD_LINK}} placeholder.
+  // whether email is configured.
   const forgotLink = state.emailOk
-    ? i18nActive
-      ? '<Link href="/forgot-password" className="text-muted-foreground hover:text-foreground hover:underline">{t("forgotPasswordLink")}</Link>'
-      : '<Link href="/forgot-password" className="text-muted-foreground hover:text-foreground hover:underline">Mot de passe oublié ?</Link>'
+    ? '<Link href="/forgot-password" className="text-muted-foreground hover:text-foreground hover:underline">Mot de passe oublié ?</Link>'
     : "<span></span>";
 
   // Feature manifest: each entry maps a feature folder to its destination path.
-  // The variant (plain or i18n) is the same for all features in a single run.
   const features = [
     { id: "auth-signin", dest: "src/app/signin/page.tsx", vars: { FORGOT_PASSWORD_LINK: forgotLink } },
     { id: "auth-signup", dest: "src/app/signup/page.tsx", vars: {} },
@@ -647,30 +624,6 @@ async function writeAuthPages() {
     `Pages written (${variant} variant): ${features.map((f) => "/" + f.dest.replace(/^src\/app\//, "").replace(/\/page\.tsx$/, "")).join(", ")}`,
   );
 
-  // If i18n is active, merge each feature's messages into the project's
-  // per-locale messages files. _i18n-merge-messages.mjs handles fallback to
-  // English for locales we don't ship a translation for.
-  if (i18nActive) {
-    const mergeScript = join(__dirname, "_i18n-merge-messages.mjs");
-    if (!existsSync(mergeScript)) {
-      warn("_i18n-merge-messages.mjs missing - auth message keys not merged into messages/*.json");
-    } else {
-      for (const f of features) {
-        const res = spawnSync(
-          "node",
-          [mergeScript, "--web-dir", WEB_DIR, "--feature", f.id],
-          { stdio: "pipe", encoding: "utf8" },
-        );
-        if (res.status !== 0) {
-          warn(
-            `i18n message merge failed for ${f.id}: ${(res.stderr || res.stdout || "").trim()}`,
-          );
-        }
-      }
-      ok(`i18n messages merged for ${features.length} feature(s)`);
-    }
-  }
-
   function writeFile(rel, content) {
     const dest = join(WEB_DIR, rel);
     mkdirSync(dirname(dest), { recursive: true });
@@ -684,11 +637,14 @@ async function pushEnvVars() {
   const helper = join(__dirname, "push-env-vars.mjs");
   if (!existsSync(helper)) fail(`Sibling script missing: ${helper}`);
 
-  const res = spawnSync(
-    "node",
-    [helper, "--target=all", `AUTH_SECRET=${state.authSecret}`],
-    { cwd: WEB_DIR, stdio: "inherit", shell: false },
-  );
+  // AUTH_SECRET travels over stdin, not argv, so it never shows up in the
+  // process list for another process on the machine to read via ps/proc.
+  const res = spawnSync("node", [helper, "--env", "production", "--stdin"], {
+    cwd: WEB_DIR,
+    input: `AUTH_SECRET=${state.authSecret}\n`,
+    stdio: ["pipe", "inherit", "inherit"],
+    shell: false,
+  });
   if (res.status !== 0) {
     fail(
       "push-env-vars.mjs failed. Code is in place but AUTH_SECRET didn't land. " +
@@ -726,7 +682,7 @@ console.log(`
 
    Mode:           users (real accounts in DB, signup/signin/account flows)
    Email reset:    ${state.emailOk ? `enabled (${state.emailProvider})` : "disabled (run /add-email then /add-auth re-config to enable)"}
-   auth.ts:        src/server/auth.ts (with marker // hypervibe:auth-modes users)
+   auth.ts:        src/server/auth.ts (with marker // baudrier:auth-modes users)
    password.ts:    src/lib/password.ts
    tRPC router:    src/server/api/routers/auth.ts (registered as 'auth' in root.ts)
    API route:      src/app/api/auth/[...nextauth]/route.ts (with rate limiting)

@@ -1,15 +1,15 @@
 ---
 name: _update-privacy-policy
-description: Internal helper to add or remove subprocessors in the project's RGPD privacy policy registry idempotently. Delegates to the bundled scripts/update-privacy-policy.mjs. Triggered by every add-* skill that introduces a third-party data processor (add-db, add-auth, add-google-auth, add-github-auth, add-stripe, add-email, add-storage, add-analytics, add-agent, add-automation). Not meant to be invoked directly by users.
+description: Internal helper to add or remove subprocessors in the project's RGPD privacy policy registry idempotently. Delegates to the bundled scripts/update-privacy-policy.mjs. Triggered by every add-* skill that introduces a third-party data processor (add-db, add-storage, add-email, add-analytics, add-agent, add-automation). Not meant to be invoked directly by users.
 user-invocable: false
 allowed-tools: Bash
-compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (vercel, gh)."
+compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, gh, and scw."
 ---
 
 # Update Privacy Policy - Internal helper
 
 ## Communication
-- Detect the user's language from their messages and ALWAYS reply in that language (default: English). This applies to every user-facing message: questions, progress, confirmations, summaries, errors.
+- Detect the user's language from their messages and ALWAYS reply in that language (default: French for this product's user base). This applies to every user-facing message: questions, progress, confirmations, summaries, errors.
 - Use plain, non-technical business language. Never expose internal script names (*.mjs) or jargon; describe actions in human terms.
 - When generating user-facing content for the scaffolded project (UI labels, emails, copy), write it in the user's language too.
 - Show progress as a short natural-language checklist (in-progress and done states).
@@ -35,25 +35,22 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/update-privacy-policy.mjs" --add <key>
 Multiple keys can be added in one call:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/update-privacy-policy.mjs" --add neon --add resend
+node "${CLAUDE_SKILL_DIR}/../../scripts/update-privacy-policy.mjs" --add scaleway-sdb --add scaleway-tem
 ```
 
 ## Known keys (catalog)
 
 | Key | Trigger skill | Notes |
 |---|---|---|
-| `vercel` | `/bootstrap` | Always present - added by bootstrap, never by add-* |
-| `neon` | `/add-db` | |
-| `stripe` | `/add-stripe` | |
-| `google-oauth` | `/add-google-auth` | |
-| `github-oauth` | `/add-github-auth` | |
-| `resend` | `/add-email` (Resend variant) | |
-| `brevo` | `/add-email` (Brevo variant) | EU-resident, lighter compliance |
-| `cloudflare-r2` | `/add-storage` | |
-| `vercel-analytics` | `/add-analytics` (no-cookie variant) | |
-| `google-analytics` | `/add-analytics` (cookie variant) | Marks `requiresConsent: true` |
-| `anthropic` | `/add-agent` | |
-| `render` | `/add-automation` (Render variant) | Only when long-running workers handle user data |
+| `scaleway` | `/bootstrap` | Always present - hosting (Serverless Containers + Container Registry), added by bootstrap, never by add-* |
+| `scaleway-sdb` | `/add-db` | Serverless SQL Database |
+| `scaleway-object-storage` | `/add-storage` | Object Storage |
+| `scaleway-tem` | `/add-email` | Transactional Email |
+| `matomo` | `/add-analytics` | Cookieless by default (CNIL audience-measurement exemption, no consent banner) - see note below |
+
+All four `scaleway-*` entries share the same legal entity (Scaleway SAS, French company, région fr-par = Paris) but are declared separately because each covers a distinct processing purpose (hosting, database, storage, email) - standard practice for a GDPR registry, and what the calling skills expect (four distinct hardcoded keys).
+
+The `matomo` entry covers both Matomo Cloud (processor: InnoCraft Limited, New Zealand, adequacy decision, data stored in the EU) and self-hosting (no additional subprocessor - covered by the `scaleway` entry). The catalog text explains both cases; the calling skill does not need to pick a variant.
 
 To list the full catalog with all the legal data:
 
@@ -76,7 +73,7 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/update-privacy-policy.mjs" --catalog
 node "${CLAUDE_SKILL_DIR}/../../scripts/update-privacy-policy.mjs" --list
 
 # Remove a subprocessor (e.g., when a service is retired from the project)
-node "${CLAUDE_SKILL_DIR}/../../scripts/update-privacy-policy.mjs" --remove brevo
+node "${CLAUDE_SKILL_DIR}/../../scripts/update-privacy-policy.mjs" --remove matomo
 ```
 
 Removals are typically triggered by `/clean` or by manual cleanup, not by add-* skills.

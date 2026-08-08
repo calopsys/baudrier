@@ -1,0 +1,19 @@
+# Force LF everywhere. The harness generates shell scripts, Dockerfiles and
+# entrypoints that run inside Linux containers: a CRLF shebang makes the kernel
+# look for a binary literally named "/bin/sh\r" and fails with
+#   exec /entrypoint.sh: no such file or directory
+# while the file is plainly there. Checking out CRLF on a Windows clone would
+# reintroduce that, so normalise on the way in and out.
+* text=auto eol=lf
+
+# Never let these be converted, under any core.autocrlf setting.
+*.sh      text eol=lf
+*.mjs     text eol=lf
+*.js      text eol=lf
+*.ts      text eol=lf
+*.tsx     text eol=lf
+*.json    text eol=lf
+*.yml     text eol=lf
+*.yaml    text eol=lf
+*.md      text eol=lf
+Dockerfile text eol=lf

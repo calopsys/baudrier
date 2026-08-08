@@ -1,11 +1,14 @@
-// agent/loop.ts - Generic Anthropic-powered agent loop.
+// agent/loop.ts - Generic agent loop on Scaleway Generative APIs.
 //
 // Drop-in pattern for an agent that:
-//   - Uses Anthropic Claude (Sonnet 4.6 by default) with prompt caching
-//   - Loops on tool use until end_turn or max_iterations
-//   - Tracks cost per turn (input + output + cache hits)
+//   - Uses Scaleway Generative APIs (OpenAI-compatible Chat Completions) -
+//     see https://www.scaleway.com/en/docs/generative-apis/api-cli/using-chat-api/
+//   - Loops on tool use (OpenAI-style function calling) until finish_reason
+//     is "stop" or max_iterations is reached
+//   - Tracks cost per turn (Scaleway bills EUR per token; there is no
+//     prompt-caching discount tier or cache_control mechanism on this API)
 //   - Persists every turn (decisions, tool calls, results) to Postgres
-//   - Honors a daily/monthly cost circuit breaker (kills runs over budget)
+//   - Honors a daily/monthly EUR cost circuit breaker (kills runs over budget)
 //   - Sends an email on failure or budget breach
 //
 // Each agent has its own SYSTEM_PROMPT, TOOLS array, and config (model,
@@ -14,15 +17,12 @@
 // Replace the TEMPLATE_AGENT_NAME below with your agent's slug (used as the
 // `agentName` column key in `agent_invocations` table). Keep it kebab-case.
 
-import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
 import type {
-  Message,
-  MessageParam,
-  TextBlock,
-  ToolUseBlock,
-  Tool,
-  ToolResultBlockParam,
-} from "@anthropic-ai/sdk/resources/messages";
+  ChatCompletionMessageParam,
+  ChatCompletionTool,
+  ChatCompletionMessageToolCall,
+} from "openai/resources/chat/completions";
 import { db } from "./db.js";
 import {
   agentInvocations,
@@ -31,22 +31,26 @@ import {
 import { eq } from "drizzle-orm";
 import { trackCost, checkCircuitBreaker, type CostBreakdown } from "./cost-tracker.js";
 import { sendAgentFailureEmail } from "./mail.js";
+import { resetSendCount } from "./tools/send-email.js";
 
 // ─── Per-agent config (override per agent) ────────────────────────────
 const TEMPLATE_AGENT_NAME = "my-agent";              // slug, replace
-const TEMPLATE_MODEL = "claude-sonnet-4-6";          // Sonnet 4.6 default
+// SCW_GENERATIVE_MODEL is set per-app at scaffold time (CONTRACT.md §2). The
+// literal below is only the scaffold-time fallback if the env var is unset.
+const TEMPLATE_MODEL = process.env.SCW_GENERATIVE_MODEL ?? "mistral-small-3.2-24b-instruct-2506";
 const TEMPLATE_MAX_ITERATIONS = 10;
 const TEMPLATE_MAX_TOKENS_PER_CALL = 4096;
 
-// System prompt - kept in a top-level const so prompt caching kicks in.
+// System prompt - kept in a top-level const, not fetched per turn.
 const TEMPLATE_SYSTEM_PROMPT = `You are an autonomous agent. Your goal is X.
 You have access to tools. Use them to accomplish the goal. When done, respond
 with a clear final answer. If you encounter an unrecoverable error, explain it
 in plain text and stop.`;
 
 // ─── Tool registry (replace with your real tools) ─────────────────────
-// Each tool has: definition (schema sent to Claude) + handler (JS impl).
-// See ./tools/*.ts for ready-to-use tools (http-fetch, send-email, db-query).
+// Each tool has: definition (OpenAI-style function schema) + handler (JS
+// impl). See ./tools/*.ts for ready-to-use tools (http-fetch, send-email,
+// db-query).
 import { tools as TEMPLATE_TOOLS } from "./tools/index.js";
 type ToolName = keyof typeof TEMPLATE_TOOLS;
 
@@ -75,129 +79,134 @@ export interface AgentResult {
 
 // ─── Main entry point ─────────────────────────────────────────────────
 export async function runAgent(input: AgentInput): Promise<AgentResult> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  // The send-email cap is per-run, but its counter is module-level (cron
+  // ticks and continuous-mode runs share the process) - reset it here.
+  resetSendCount();
+
+  const apiKey = process.env.SCW_GENERATIVE_API_KEY;
   if (!apiKey) {
     throw new Error(
-      "ANTHROPIC_API_KEY is not set. The agent cannot run without it.",
+      "SCW_GENERATIVE_API_KEY is not set. The agent cannot run without it.",
     );
   }
-  const client = new Anthropic({ apiKey });
+  const client = new OpenAI({
+    apiKey,
+    baseURL: process.env.SCW_GENERATIVE_BASE_URL ?? "https://api.scaleway.ai/v1",
+  });
 
-  // Step 1 - Circuit breaker check BEFORE any API call.
-  const breakerStatus = await checkCircuitBreaker(TEMPLATE_AGENT_NAME);
-  if (breakerStatus.tripped) {
-    const invocationId = await createInvocation(
-      input,
-      "budget_killed",
-      `Circuit breaker tripped: ${breakerStatus.reason}`,
-    );
-    await sendAgentFailureEmail({
-      agentName: TEMPLATE_AGENT_NAME,
-      invocationId,
-      reason: `Plafond budgétaire atteint (${breakerStatus.reason}). L'agent a été mis en pause auto.`,
-    });
-    return {
-      invocationId,
-      status: "budget_killed",
-      finalText: null,
-      iterations: 0,
-      totalCost: { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, usd: 0 },
-      errorMessage: breakerStatus.reason,
-    };
-  }
-
-  // Step 2 - Create invocation row (status="running" → updated at end).
-  const invocationId = await createInvocation(input, "running");
-
-  // Step 3 - Build initial messages.
-  const initialUserContent = input.context
-    ? `${input.prompt}\n\n<context>${JSON.stringify(input.context, null, 2)}</context>`
-    : input.prompt;
-  const messages: MessageParam[] = [
-    { role: "user", content: initialUserContent },
-  ];
-
-  // Step 4 - Build tool defs WITH cache_control on the LAST tool (caches
-  // the entire tools block - Anthropic's caching is "prefix-based": adding
-  // cache_control on the last item caches everything before it too).
-  const toolDefs: Tool[] = Object.values(TEMPLATE_TOOLS).map((t) => t.definition);
-  if (toolDefs.length > 0) {
-    // cache_control is accepted by the API; cast so this type-checks whether or
-    // not the installed SDK version already surfaces it on the Tool union
-    // (avoids a stale @ts-expect-error breaking the build on newer SDKs).
-    (toolDefs[toolDefs.length - 1] as Tool & { cache_control?: unknown }).cache_control = {
-      type: "ephemeral",
-      ttl: "5m",
-    };
-  }
-
-  // Step 5 - Loop.
   const totalCost: CostBreakdown = {
     inputTokens: 0,
     outputTokens: 0,
-    cacheCreationTokens: 0,
-    cacheReadTokens: 0,
-    usd: 0,
+    eur: 0,
   };
-
   let iterations = 0;
   let finalText: string | null = null;
   let lastError: string | undefined;
+  // Stays undefined if the circuit-breaker check or createInvocation itself
+  // throws (e.g. DB unreachable), so the catch below knows there is no row
+  // to finalize yet.
+  let invocationId: string | undefined;
 
   try {
+    // Step 1 - Circuit breaker check BEFORE any API call.
+    const breakerStatus = await checkCircuitBreaker(TEMPLATE_AGENT_NAME);
+    if (breakerStatus.tripped) {
+      invocationId = await createInvocation(
+        input,
+        "budget_killed",
+        `Circuit breaker tripped: ${breakerStatus.reason}`,
+      );
+      await sendAgentFailureEmail({
+        agentName: TEMPLATE_AGENT_NAME,
+        invocationId,
+        reason: `Plafond budgétaire atteint (${breakerStatus.reason}). L'agent a été mis en pause auto.`,
+      });
+      return {
+        invocationId,
+        status: "budget_killed",
+        finalText: null,
+        iterations: 0,
+        totalCost,
+        errorMessage: breakerStatus.reason,
+      };
+    }
+
+    // Step 2 - Create invocation row (status="running" → updated at end).
+    invocationId = await createInvocation(input, "running");
+
+    // Step 3 - Build initial messages.
+    const initialUserContent = input.context
+      ? `${input.prompt}\n\n<context>${JSON.stringify(input.context, null, 2)}</context>`
+      : input.prompt;
+    const messages: ChatCompletionMessageParam[] = [
+      { role: "system", content: TEMPLATE_SYSTEM_PROMPT },
+      { role: "user", content: initialUserContent },
+    ];
+
+    // Step 4 - Build tool defs (OpenAI "function" tool shape).
+    const toolDefs: ChatCompletionTool[] = Object.values(TEMPLATE_TOOLS).map((t) => ({
+      type: "function",
+      function: t.definition,
+    }));
+
+    // Step 5 - Loop.
     while (iterations < TEMPLATE_MAX_ITERATIONS) {
       iterations++;
 
-      const response: Message = await client.messages.create({
+      const response = await client.chat.completions.create({
         model: TEMPLATE_MODEL,
         max_tokens: TEMPLATE_MAX_TOKENS_PER_CALL,
-        system: [
-          {
-            type: "text",
-            text: TEMPLATE_SYSTEM_PROMPT,
-            cache_control: { type: "ephemeral", ttl: "5m" },
-          },
-        ],
-        tools: toolDefs,
         messages,
+        tools: toolDefs.length > 0 ? toolDefs : undefined,
+        tool_choice: toolDefs.length > 0 ? "auto" : undefined,
       });
 
-      // Track usage for this turn
-      const turnCost = computeTurnCost(response, TEMPLATE_MODEL);
+      const choice = response.choices[0];
+      if (!choice) {
+        lastError = "Empty response (no choices) from Generative APIs";
+        break;
+      }
+      const message = choice.message;
+
+      // Track usage for this turn (Scaleway's usage block is OpenAI-shaped:
+      // prompt_tokens / completion_tokens - no cache tiers to account for).
+      const turnCost = computeTurnCost(response.usage, TEMPLATE_MODEL);
       totalCost.inputTokens += turnCost.inputTokens;
       totalCost.outputTokens += turnCost.outputTokens;
-      totalCost.cacheCreationTokens += turnCost.cacheCreationTokens;
-      totalCost.cacheReadTokens += turnCost.cacheReadTokens;
-      totalCost.usd += turnCost.usd;
+      totalCost.eur += turnCost.eur;
 
       // Persist this turn (decisions + cost + content)
-      await persistTurn(invocationId, iterations, response, turnCost);
+      await persistTurn(invocationId, iterations, message, choice.finish_reason, turnCost);
 
       // End conditions
-      if (response.stop_reason === "end_turn") {
-        finalText = extractText(response);
+      if (choice.finish_reason === "stop") {
+        finalText = message.content ?? "";
         await finalizeInvocation(invocationId, "success", finalText, iterations, totalCost);
-        if (input.trackCosts !== false) await trackCost(TEMPLATE_AGENT_NAME, totalCost.usd);
+        if (input.trackCosts !== false) await trackCost(TEMPLATE_AGENT_NAME, totalCost.eur);
         return { invocationId, status: "success", finalText, iterations, totalCost };
       }
 
-      if (response.stop_reason === "tool_use") {
-        // Append assistant message + execute tools + append tool_result message
-        messages.push({ role: "assistant", content: response.content });
-        const toolResults = await executeToolCalls(response);
-        messages.push({ role: "user", content: toolResults });
+      if (choice.finish_reason === "tool_calls" && message.tool_calls?.length) {
+        // Append assistant message + execute tools + append one "tool" message per call
+        messages.push({
+          role: "assistant",
+          content: message.content,
+          tool_calls: message.tool_calls,
+        });
+        const toolResults = await executeToolCalls(message.tool_calls);
+        messages.push(...toolResults);
         continue;
       }
 
-      // Unexpected stop reason (max_tokens, refusal, etc.)
-      lastError = `Unexpected stop_reason: ${response.stop_reason}`;
+      // Unexpected finish reason (length, content_filter, or tool_calls with no calls)
+      lastError = `Unexpected finish_reason: ${choice.finish_reason}`;
       break;
     }
 
     // Either max iterations reached or unexpected stop
     if (lastError) {
       await finalizeInvocation(invocationId, "error", null, iterations, totalCost, lastError);
-      if (input.trackCosts !== false) await trackCost(TEMPLATE_AGENT_NAME, totalCost.usd);
+      if (input.trackCosts !== false) await trackCost(TEMPLATE_AGENT_NAME, totalCost.eur);
       await sendAgentFailureEmail({
         agentName: TEMPLATE_AGENT_NAME,
         invocationId,
@@ -207,88 +216,96 @@ export async function runAgent(input: AgentInput): Promise<AgentResult> {
     }
 
     await finalizeInvocation(invocationId, "max_iterations_reached", null, iterations, totalCost);
-    if (input.trackCosts !== false) await trackCost(TEMPLATE_AGENT_NAME, totalCost.usd);
+    if (input.trackCosts !== false) await trackCost(TEMPLATE_AGENT_NAME, totalCost.eur);
     return { invocationId, status: "max_iterations_reached", finalText: null, iterations, totalCost };
 
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    await finalizeInvocation(invocationId, "error", null, iterations, totalCost, message);
-    if (input.trackCosts !== false) await trackCost(TEMPLATE_AGENT_NAME, totalCost.usd);
-    await sendAgentFailureEmail({
-      agentName: TEMPLATE_AGENT_NAME,
-      invocationId,
-      reason: message,
-    });
-    return { invocationId, status: "error", finalText: null, iterations, totalCost, errorMessage: message };
+    if (invocationId) {
+      try {
+        await finalizeInvocation(invocationId, "error", null, iterations, totalCost, message);
+      } catch (finalizeErr) {
+        // Log only: the original error is what the caller and the failure
+        // email must report, not a secondary DB failure here.
+        console.error(`[agent] finalizeInvocation failed for invocation ${invocationId}:`, finalizeErr);
+      }
+    }
+    // Same rule as finalize above: a secondary failure while reporting must
+    // not replace the original error in the returned result.
+    if (input.trackCosts !== false) {
+      try {
+        await trackCost(TEMPLATE_AGENT_NAME, totalCost.eur);
+      } catch (trackErr) {
+        console.error(`[agent] trackCost failed for invocation ${invocationId ?? "unknown"}:`, trackErr);
+      }
+    }
+    try {
+      await sendAgentFailureEmail({
+        agentName: TEMPLATE_AGENT_NAME,
+        invocationId: invocationId ?? "unknown",
+        reason: message,
+      });
+    } catch (mailErr) {
+      console.error(`[agent] failure email failed for invocation ${invocationId ?? "unknown"}:`, mailErr);
+    }
+    return { invocationId: invocationId ?? "unknown", status: "error", finalText: null, iterations, totalCost, errorMessage: message };
   }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────
-async function executeToolCalls(response: Message): Promise<ToolResultBlockParam[]> {
-  const toolUses = response.content.filter(
-    (block): block is ToolUseBlock => block.type === "tool_use",
-  );
-  const results: ToolResultBlockParam[] = [];
-  for (const tu of toolUses) {
-    const tool = TEMPLATE_TOOLS[tu.name as ToolName];
+async function executeToolCalls(
+  toolCalls: ChatCompletionMessageToolCall[],
+): Promise<ChatCompletionMessageParam[]> {
+  const results: ChatCompletionMessageParam[] = [];
+  for (const tc of toolCalls) {
+    if (tc.type !== "function") continue;
+    const tool = TEMPLATE_TOOLS[tc.function.name as ToolName];
     if (!tool) {
       results.push({
-        type: "tool_result",
-        tool_use_id: tu.id,
-        content: `Error: unknown tool "${tu.name}"`,
-        is_error: true,
+        role: "tool",
+        tool_call_id: tc.id,
+        content: `Error: unknown tool "${tc.function.name}"`,
       });
       continue;
     }
     try {
-      const out = await tool.handler(tu.input as Record<string, unknown>);
+      const args = tc.function.arguments ? (JSON.parse(tc.function.arguments) as Record<string, unknown>) : {};
+      const out = await tool.handler(args);
       results.push({
-        type: "tool_result",
-        tool_use_id: tu.id,
+        role: "tool",
+        tool_call_id: tc.id,
         content: typeof out === "string" ? out : JSON.stringify(out),
       });
     } catch (e) {
       results.push({
-        type: "tool_result",
-        tool_use_id: tu.id,
-        content: e instanceof Error ? e.message : String(e),
-        is_error: true,
+        role: "tool",
+        tool_call_id: tc.id,
+        content: `Error: ${e instanceof Error ? e.message : String(e)}`,
       });
     }
   }
   return results;
 }
 
-function extractText(response: Message): string {
-  return response.content
-    .filter((b): b is TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("\n");
-}
-
-// Pricing (USD per 1M tokens). Update when Anthropic changes pricing.
-// cacheWrite = 1.25x input (5-min TTL); cacheRead = 0.1x input. Keys are the
-// model aliases passed as the model string.
-const PRICING_PER_MTOK: Record<string, { input: number; output: number; cacheWrite: number; cacheRead: number }> = {
-  "claude-sonnet-4-6": { input: 3, output: 15, cacheWrite: 3.75, cacheRead: 0.30 },
-  "claude-opus-4-7": { input: 5, output: 25, cacheWrite: 6.25, cacheRead: 0.50 },
-  "claude-haiku-4-5": { input: 1, output: 5, cacheWrite: 1.25, cacheRead: 0.10 },
+// Pricing (EUR per 1M tokens) for the models offered at scaffold time. Update
+// when Scaleway changes pricing - see https://www.scaleway.com/en/generative-apis/
+// (source used at rewrite time: mistral-small-3.2-24b-instruct-2506 and
+// llama-3.3-70b-instruct, fetched July 2026). No cache tiers on this API.
+const PRICING_PER_MTOK_EUR: Record<string, { input: number; output: number }> = {
+  "mistral-small-3.2-24b-instruct-2506": { input: 0.15, output: 0.35 },
+  "llama-3.3-70b-instruct": { input: 0.9, output: 0.9 },
 };
+const DEFAULT_PRICING = { input: 0.9, output: 0.9 }; // assume the pricier tier for unknown/custom models
 
-function computeTurnCost(response: Message, model: string): CostBreakdown {
-  const u = response.usage;
-  const p = PRICING_PER_MTOK[model] ?? PRICING_PER_MTOK["claude-sonnet-4-6"]!;
-  const inputTokens = u.input_tokens || 0;
-  const outputTokens = u.output_tokens || 0;
-  const cacheCreationTokens = u.cache_creation_input_tokens || 0;
-  const cacheReadTokens = u.cache_read_input_tokens || 0;
-  const usd =
-    (inputTokens * p.input +
-      outputTokens * p.output +
-      cacheCreationTokens * p.cacheWrite +
-      cacheReadTokens * p.cacheRead) /
-    1_000_000;
-  return { inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens, usd };
+function computeTurnCost(
+  usage: { prompt_tokens?: number; completion_tokens?: number } | undefined,
+  model: string,
+): CostBreakdown {
+  const p = PRICING_PER_MTOK_EUR[model] ?? DEFAULT_PRICING;
+  const inputTokens = usage?.prompt_tokens ?? 0;
+  const outputTokens = usage?.completion_tokens ?? 0;
+  const eur = (inputTokens * p.input + outputTokens * p.output) / 1_000_000;
+  return { inputTokens, outputTokens, eur };
 }
 
 // ─── DB persistence ───────────────────────────────────────────────────
@@ -313,19 +330,18 @@ async function createInvocation(
 async function persistTurn(
   invocationId: string,
   turnNumber: number,
-  response: Message,
+  message: { content?: string | null; tool_calls?: ChatCompletionMessageToolCall[] },
+  finishReason: string,
   cost: CostBreakdown,
 ) {
   await db.insert(agentTurns).values({
     invocationId,
     turnNumber,
-    stopReason: response.stop_reason ?? "unknown",
-    content: response.content,
+    stopReason: finishReason,
+    content: { text: message.content ?? null, toolCalls: message.tool_calls ?? [] },
     inputTokens: cost.inputTokens,
     outputTokens: cost.outputTokens,
-    cacheCreationTokens: cost.cacheCreationTokens,
-    cacheReadTokens: cost.cacheReadTokens,
-    costUsd: cost.usd.toFixed(6),
+    costEur: cost.eur.toFixed(6),
   });
 }
 
@@ -343,7 +359,7 @@ async function finalizeInvocation(
       status,
       finalText,
       iterations,
-      totalCostUsd: totalCost.usd.toFixed(6),
+      totalCostEur: totalCost.eur.toFixed(6),
       finishedAt: new Date(),
       errorMessage: errorMessage ?? null,
     })

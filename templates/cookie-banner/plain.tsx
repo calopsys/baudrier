@@ -3,41 +3,40 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 
-// Public helper - call this from any button (footer, settings page, etc.)
-// to re-open the cookie consent banner so the user can change their choice.
-// CNIL requires that withdrawing consent is as easy as giving it.
-export function openCookiePreferences() {
+// Public helper - call this from any button (footer, settings page, etc.) to
+// open the analytics preferences panel. Matomo runs cookieless by default in
+// this harness (see MatomoAnalytics.tsx), so there is no mandatory pre-consent
+// banner - but RGPD/CNIL still requires an easy, always-available way to
+// opt out of even anonymous, cookieless audience measurement. This is it.
+export function openAnalyticsPreferences() {
   if (typeof window !== "undefined") {
-    window.dispatchEvent(new Event("cookie-preferences-open"));
+    window.dispatchEvent(new Event("analytics-preferences-open"));
   }
 }
 
-export function CookieConsent() {
+function isOptedOut() {
+  return typeof window !== "undefined" && localStorage.getItem("matomo-optout") === "true";
+}
+
+export function AnalyticsOptOut() {
   const [visible, setVisible] = useState(false);
+  const [optedOut, setOptedOut] = useState(false);
 
   useEffect(() => {
-    // Show banner on first visit (no choice yet).
-    if (!localStorage.getItem("cookie-consent")) {
-      setVisible(true);
-    }
-    // Listen for re-open requests (from footer link, etc.).
+    setOptedOut(isOptedOut());
     const open = () => setVisible(true);
-    window.addEventListener("cookie-preferences-open", open);
-    return () => window.removeEventListener("cookie-preferences-open", open);
+    window.addEventListener("analytics-preferences-open", open);
+    return () => window.removeEventListener("analytics-preferences-open", open);
   }, []);
 
-  function accept() {
-    localStorage.setItem("cookie-consent", "accepted");
-    setVisible(false);
-    window.dispatchEvent(new Event("cookie-consent-change"));
-  }
-
-  function refuse() {
-    localStorage.setItem("cookie-consent", "refused");
-    setVisible(false);
-    // Dispatch on refuse too - so any tracker that was loaded after a previous
-    // "accept" can react (clean up dataLayer, stop sending events, etc.).
-    window.dispatchEvent(new Event("cookie-consent-change"));
+  function toggle() {
+    const next = !optedOut;
+    localStorage.setItem("matomo-optout", next ? "true" : "false");
+    setOptedOut(next);
+    // Lets MatomoAnalytics react without a full reload for anything tracked
+    // after this point (the tracker script itself, once loaded, is not
+    // torn down - only future pageviews are skipped).
+    window.dispatchEvent(new Event("analytics-optout-change"));
   }
 
   if (!visible) return null;
@@ -45,23 +44,24 @@ export function CookieConsent() {
   return (
     <div className="fixed bottom-4 left-4 z-50 max-w-sm rounded-xl border border-white/10 bg-black/90 px-4 py-3 shadow-lg backdrop-blur-sm">
       <p className="text-xs text-white/60">
-        Ce site utilise des cookies à des fins de mesure d&apos;audience.{" "}
+        Ce site utilise une mesure d&apos;audience anonyme et sans cookies. Aucune donnée
+        personnelle n&apos;est collectée ni partagée.{" "}
         <Link href="/politique-de-confidentialite" className="underline hover:text-white">
-          Politique de confidentialité
+          En savoir plus
         </Link>
       </p>
-      <div className="mt-2 flex gap-2">
+      <div className="mt-2 flex items-center justify-between gap-2">
         <button
-          onClick={refuse}
+          onClick={toggle}
           className="cursor-pointer rounded-md border border-white/20 px-3 py-1 text-xs text-white/60 transition hover:bg-white/10"
         >
-          Refuser
+          {optedOut ? "Réactiver le suivi anonyme" : "Désactiver le suivi anonyme"}
         </button>
         <button
-          onClick={accept}
+          onClick={() => setVisible(false)}
           className="cursor-pointer rounded-md bg-white px-3 py-1 text-xs font-medium text-black transition hover:bg-white/90"
         >
-          Accepter
+          Fermer
         </button>
       </div>
     </div>

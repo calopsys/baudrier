@@ -1,9 +1,9 @@
 ---
 name: _generate-secret
-description: Internal helper to generate a cryptographically secure random secret (API key, JWT secret, webhook secret, CRON_SECRET, etc.). Delegates to the bundled scripts/generate-secret.mjs. Shell-safe by default. Invoked by skills that need a fresh secret (add-auth AUTH_SECRET, add-cron CRON_SECRET, webhook secrets). Not meant to be invoked directly by users.
+description: Internal helper to generate a cryptographically secure random secret (API key, JWT secret, webhook secret, CRON_SECRET, etc.). Delegates to the bundled scripts/generate-secret.mjs. Shell-safe by default. Invoked by skills that need a fresh secret (add-cron CRON_SECRET, webhook secrets). Not meant to be invoked directly by users.
 user-invocable: false
 allowed-tools: Bash
-compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (vercel, gh)."
+compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (gh, scw)."
 ---
 
 # Generate Secret - Internal helper
@@ -38,7 +38,7 @@ Output: the secret on stdout, no trailing newline. Capture it with `SECRET=$(nod
 
 - `CRON_SECRET` → `node ...generate-secret.mjs` (hex, 32 bytes = 64 hex chars)
 - `AUTH_SECRET` (NextAuth) → `node ...generate-secret.mjs --format base64url`
-- Random admin password → prefer `_hash-password --generate` which does both generation + hashing in one go
+- Random admin password → prefer `node "${CLAUDE_SKILL_DIR}/../../scripts/hash-password.mjs" --generate` which does both generation + hashing in one go
 
 ## Rules
 

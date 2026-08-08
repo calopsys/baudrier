@@ -3,7 +3,7 @@ name: _detect-project-root
 description: Internal helper to detect the basic structure of the current project (project name, monorepo vs single app, web directory path, Next.js detection). Returns a minimal set of 4 variables that most add-* skills need at the very beginning of their execution. Idempotent and fast. Not meant to be invoked directly by users.
 user-invocable: false
 allowed-tools: Bash
-compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (vercel, gh)."
+compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (gh, scw)."
 ---
 
 # Detect Project Root - Internal helper
@@ -24,12 +24,12 @@ A 4-variable snapshot:
 
 | Variable | Possible values | Used by |
 |---|---|---|
-| `PROJECT_NAME` | `my-app`, `hypervibe`, etc. | Everything: R2 bucket names, workers, monorepo packages, `render.yaml`, etc. |
-| `WEB_DIR` | `.` (single app) or `apps/web` (monorepo) | add-db, add-cron, add-auth, _create-*-worker |
-| `IS_MONOREPO` | `yes` / `no` | add-automation, add-db, _create-cloudflare-worker, _create-render-worker |
+| `PROJECT_NAME` | `my-app`, `mon-app`, etc. | Everything: Scaleway resource naming (Serverless Container/namespace, Object Storage bucket, Serverless Job, IAM application - all go through `slugify(PROJECT_NAME)`, see `scripts/scaleway/_scw-auth.mjs#slugify`), monorepo packages, etc. |
+| `WEB_DIR` | `.` (single app) or `apps/web` (monorepo) | Most `add-*` skills (any skill that edits files inside the Next.js app) - e.g. add-db, add-cron, add-auth |
+| `IS_MONOREPO` | `yes` / `no` | add-automation, add-db, and any skill that branches on monorepo layout |
 | `IS_NEXTJS` | `yes` / `no` | All add-* skills (to refuse if the project is not Next.js) |
 
-**This is intentionally minimal.** Specific checks like `HAS_DB`, `HAS_AUTH`, `HAS_RESEND` remain inline in the skills that need them - they are contextual and shouldn't pollute every skill's context.
+**This is intentionally minimal.** Specific checks like `HAS_DB`, `HAS_AUTH`, `HAS_TEM` remain inline in the skills that need them - they are contextual and shouldn't pollute every skill's context.
 
 ---
 
@@ -55,7 +55,7 @@ For **monorepo** (`WEB_DIR=apps/web`):
   ```bash
   node -e "process.stdout.write(require('./package.json').name)"
   ```
-- If the root name contains `-monorepo` suffix (e.g. `hypervibe-monorepo`), strip it to get the logical project name.
+- If the root name contains `-monorepo` suffix (e.g. `mon-app-monorepo`), strip it to get the logical project name.
 - Fallback: read `apps/web/package.json` if root is missing.
 
 Set `PROJECT_NAME`.
@@ -94,7 +94,7 @@ IS_NEXTJS=<yes|no>
 
 Example success output:
 ```
-PROJECT_NAME=hypervibe
+PROJECT_NAME=mon-app
 WEB_DIR=apps/web
 IS_MONOREPO=yes
 IS_NEXTJS=yes
@@ -116,9 +116,9 @@ The helper is **idempotent** - calling it multiple times in the same session is 
 
 These checks remain inline in the skills that need them, because they are contextual and used by only 1-2 skills each:
 
-- `HAS_REAL_DB` - **mandatory robust check** (used by `add-auth`, `add-backup-db`, and any skill that needs a real cloud DB): (1) `DATABASE_URL` present in `.env`, AND (2) its value does not point to local and is not a placeholder - reject if the value matches `@localhost:` / `@127\.0\.0\.1:` / `placeholder` / `//postgres:postgres@` / `YOUR_DB` (bootstrapped T3 projects ship a default like `postgresql://postgres:password@localhost:5432/test` that passes Zod validation but is not wired up), AND (3) a `drizzle.config.ts`/`.js` exists (root, `apps/web/`, or `packages/db/`). NEVER rely on `grep DATABASE_URL .env` alone - guaranteed false positives.
-- `HAS_AUTH` - check `src/server/auth.ts` → only used by `add-google-auth`, `add-github-auth`
-- `HAS_RESEND` / `HAS_BREVO` - check API key presence → only used by `add-domain`
-- `VERCEL_LINKED` - check `.vercel/project.json` → only used by `_setup-github-deploy`, `add-domain`, `_push-env-vars`
+- `HAS_REAL_DB` - **mandatory robust check** (used by `add-auth` and any skill that needs a real cloud DB): (1) `DATABASE_URL` present in `.env`, AND (2) its value does not point to local and is not a placeholder - reject if the value matches `@localhost:` / `@127\.0\.0\.1:` / `placeholder` / `//postgres:postgres@` / `YOUR_DB` (bootstrapped T3 projects ship a default like `postgresql://postgres:password@localhost:5432/test` that passes Zod validation but is not wired up), AND its host matches the Scaleway Serverless SQL Database shape `*.pg.sdb.<region>.scw.cloud` (CONTRACT.md §4), AND (3) a `drizzle.config.ts`/`.js` exists (root, `apps/web/`, or `packages/db/`). NEVER rely on `grep DATABASE_URL .env` alone - guaranteed false positives. This exact heuristic lives in `scripts/check-deps.mjs`'s `db` check - prefer calling `_check-deps` over reimplementing it.
+- `HAS_AUTH` - check `src/server/auth.ts` → used by several skills that need to know if auth is already installed (e.g. `add-2fa`, `add-role`, `add-agent-dashboard`)
+- `HAS_TEM` - check `TEM_SENDER_EMAIL` presence (Scaleway TEM, see `_check-deps`'s `email` check) → used by `add-email` and `_create-contact-page`
+- `CONTAINER_LINKED` - check whether a Serverless Container named after this app already exists → only used by `deploy`, `add-domain`, `_push-env-vars`. There is no linkage file: the harness resolves this app's Scaleway Project by name (app name = repo name; `SCW_DEFAULT_PROJECT_ID` overrides), then the namespace and the container inside it, also by name. `scripts/check-deps.mjs`'s `container` check and `scripts/push-env-vars.mjs` (to resolve which container's `secret_environment_variables` to update) both do this same by-name lookup.
 
 Do not try to add these to `_detect-project-root`. The helper stays minimal.

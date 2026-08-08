@@ -1,4 +1,5 @@
-// agent/memory-pgvector.ts - Semantic memory backed by pgvector + Cloudflare Workers AI.
+// agent/memory-pgvector.ts - Semantic memory backed by pgvector + Scaleway
+// Generative APIs embeddings.
 //
 // When to use this instead of memory-kv.ts:
 //   - The agent needs to "remember" facts/conversations/documents
@@ -8,15 +9,26 @@
 //   - RAG pattern: "search my knowledge base for relevant chunks"
 //
 // Stack:
-//   - pgvector extension in Neon (free, included)
-//   - Cloudflare Workers AI embeddings - model @cf/baai/bge-large-en-v1.5
-//     (1024 dims). Reuses the project's CLOUDFLARE_API_TOKEN - no new vendor.
-//     Free tier: 10 000 Neurons/day on Cloudflare's free plan, which is
-//     ~5 000 embeddings/day for bge-large.
+//   - pgvector extension on Scaleway Serverless SQL Database (PostgreSQL 16;
+//     `CREATE EXTENSION vector;` - see schema-snippet.ts for the migration)
+//   - Scaleway Generative APIs embeddings - model qwen3-embedding-8b, native
+//     up to 4096 dims, Matryoshka (truncatable & re-usable as a shorter
+//     vector - see https://www.scaleway.com/en/docs/generative-apis/reference-content/supported-models/#qwen3-embedding-8b).
+//     Reuses the project's SCW_GENERATIVE_API_KEY - no new vendor.
+//
+// IMPORTANT - why we truncate client-side: Scaleway's Embeddings API is
+// OpenAI-compatible but explicitly does NOT support the `dimensions` request
+// parameter (see using-embeddings-api.mdx "Unsupported parameters"). So to
+// get a 2000-dim vector we request the model's native embedding and truncate
+// it to the first 2000 floats ourselves, then re-normalize (L2) - this is
+// exactly what a Matryoshka-trained embedding model is designed to tolerate:
+// "a 4096-dimension vector can be truncated to its 768 first dimensions and
+// used directly" (Scaleway docs). 2000 was chosen because it comfortably fits
+// pgvector's hnsw/ivfflat index dimension limits while keeping most of the
+// model's representational power (dimensions are sorted most-meaningful-first).
 //
 // Required env vars (set by /add-agent at scaffold time):
-//   - CLOUDFLARE_API_TOKEN  - must include scope "Workers AI:Read"
-//   - CLOUDFLARE_ACCOUNT_ID - auto-detected at scaffold time, passed to Render
+//   - SCW_GENERATIVE_API_KEY, SCW_GENERATIVE_BASE_URL (CONTRACT.md §2)
 //
 // Usage:
 //   import { vmem } from "./memory-pgvector.js";
@@ -24,6 +36,7 @@
 //   const hits = await vmem.search("does this user have allergies?", 5);
 //   // hits = [{ id, content, score, metadata }, ...]
 
+import OpenAI from "openai";
 import { db } from "./db.js";
 import { sql } from "drizzle-orm";
 
@@ -32,13 +45,12 @@ import { sql } from "drizzle-orm";
 // cross-agent contamination of search results.
 const AGENT_NAME = "my-agent";
 
-// Embedding model. bge-large-en-v1.5 is 1024 dims (matches our pgvector
-// schema). Switch to "@cf/baai/bge-base-en-v1.5" for 768 dims if you want
-// to save storage. NOTE: changing this REQUIRES re-creating the
-// agent_memory_vector table with a different vector(N) dim - old embeddings
-// become incompatible.
-const EMBEDDING_MODEL = "@cf/baai/bge-large-en-v1.5";
-const EMBEDDING_DIMS = 1024;
+// qwen3-embedding-8b's native output is up to 4096 dims (Matryoshka). We
+// truncate + re-normalize to this many dims before storing/querying.
+// Changing this REQUIRES re-creating the agent_memory_vector table with a
+// different vector(N) dim - old embeddings become incompatible.
+const EMBEDDING_MODEL = "qwen3-embedding-8b";
+const EMBEDDING_DIMS = 2000;
 
 // ─── Types ────────────────────────────────────────────────────────────
 export interface MemoryEntry {
@@ -49,57 +61,50 @@ export interface MemoryEntry {
   score: number;
 }
 
-// ─── Embedding helper (Cloudflare Workers AI) ─────────────────────────
-async function embed(text: string): Promise<number[]> {
-  const token = process.env.CLOUDFLARE_API_TOKEN;
-  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
-  if (!token || !accountId) {
+// ─── Embedding helper (Scaleway Generative APIs) ──────────────────────
+let client: OpenAI | null = null;
+function getClient(): OpenAI {
+  if (client) return client;
+  const apiKey = process.env.SCW_GENERATIVE_API_KEY;
+  if (!apiKey) {
     throw new Error(
-      "CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID must be set. They're configured automatically by /add-agent - if missing, your token may not have the 'Workers AI:Read' scope. Regenerate at https://dash.cloudflare.com/profile/api-tokens.",
+      "SCW_GENERATIVE_API_KEY must be set. Semantic memory uses Scaleway Generative APIs for embeddings - configured automatically by /add-agent.",
     );
   }
-  const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/${EMBEDDING_MODEL}`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ text }),
+  client = new OpenAI({
+    apiKey,
+    baseURL: process.env.SCW_GENERATIVE_BASE_URL ?? "https://api.scaleway.ai/v1",
   });
-  if (!res.ok) {
-    const t = await res.text();
-    if (res.status === 403 || /scope|permission/i.test(t)) {
-      throw new Error(
-        `Cloudflare Workers AI: 403 (probably missing "Workers AI:Read" scope on the token). Regenerate at https://dash.cloudflare.com/profile/api-tokens with the scope added. Raw: ${t.slice(0, 200)}`,
-      );
-    }
-    throw new Error(`Cloudflare Workers AI error (HTTP ${res.status}): ${t.slice(0, 200)}`);
-  }
-  const json = (await res.json()) as {
-    result?: { data?: number[][]; shape?: [number, number] };
-    success?: boolean;
-    errors?: Array<{ message?: string }>;
-  };
-  if (!json.success || !json.result?.data) {
-    const errMsg = json.errors?.[0]?.message ?? "unknown error";
-    throw new Error(`Cloudflare Workers AI returned no embedding: ${errMsg}`);
-  }
-  const vec = json.result.data[0];
-  if (!vec || vec.length !== EMBEDDING_DIMS) {
+  return client;
+}
+
+/** Truncate a Matryoshka embedding to `dims` and re-normalize (L2). */
+function truncateAndNormalize(vec: number[], dims: number): number[] {
+  const truncated = vec.slice(0, dims);
+  const norm = Math.sqrt(truncated.reduce((s, x) => s + x * x, 0));
+  return norm > 0 ? truncated.map((x) => x / norm) : truncated;
+}
+
+async function embed(text: string): Promise<number[]> {
+  const res = await getClient().embeddings.create({
+    model: EMBEDDING_MODEL,
+    input: text,
+  });
+  const vec = res.data[0]?.embedding;
+  if (!vec || vec.length < EMBEDDING_DIMS) {
     throw new Error(
-      `Cloudflare Workers AI returned an unexpected embedding (got ${vec?.length ?? 0} dims, expected ${EMBEDDING_DIMS}).`,
+      `Scaleway Generative APIs returned an unexpected embedding (got ${vec?.length ?? 0} dims, expected at least ${EMBEDDING_DIMS}).`,
     );
   }
-  return vec;
+  return truncateAndNormalize(vec, EMBEDDING_DIMS);
 }
 
 // ─── Public API ───────────────────────────────────────────────────────
 export const vmem = {
   /**
-   * Store a piece of content. Computes its embedding via Cloudflare Workers
-   * AI and inserts a row in `agent_memory_vector` (raw SQL - table isn't in
-   * Drizzle schema because Drizzle doesn't model `vector(1024)` natively).
+   * Store a piece of content. Computes its embedding via Scaleway Generative
+   * APIs and inserts a row in `agent_memory_vector` (raw SQL - table isn't in
+   * Drizzle schema because Drizzle doesn't model `vector(2000)` natively).
    * Returns the inserted row id.
    */
   async add(content: string, metadata: Record<string, unknown> = {}): Promise<string> {

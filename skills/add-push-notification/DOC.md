@@ -10,11 +10,11 @@ Adds push notifications: your app can alert its users on their phone, even when 
 
 ## How it works
 
-1. **PWA check (essential prerequisite)**: push notifications rely on the PWA's "service worker", the component that receives and displays notifications even with the app closed. **Without a PWA, push is technically impossible.** If your app is not one, Hypervibe explains this and offers to turn it into a PWA right away (`/add-pwa`), then continues.
+1. **PWA check (essential prerequisite)**: push notifications rely on the PWA's "service worker", the component that receives and displays notifications even with the app closed. **Without a PWA, push is technically impossible.** If your app is not one, Baudrier explains this and offers to turn it into a PWA right away (`/add-pwa`), then continues.
 
 2. **Other prerequisites**: a database (`/add-db`) to remember which devices are subscribed, and user accounts (`/add-auth`) to know who each device belongs to.
 
-3. **Signing keys (VAPID)**: Hypervibe generates the key pair that proves your server is the one sending the notifications, and stores it in your environment variables (local + Vercel).
+3. **Signing keys (VAPID)**: Baudrier generates the key pair that proves your server is the one sending the notifications, and stores it securely (local `.env` + Scaleway Secret Manager).
 
 4. **Subscriptions table**: each device that accepts notifications is recorded in the database, tied to its user.
 

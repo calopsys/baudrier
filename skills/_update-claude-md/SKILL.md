@@ -3,7 +3,7 @@ name: _update-claude-md
 description: Internal helper to add or update entries in the project CLAUDE.md file idempotently. Accepts a target section (Stack, Key Commands, Conventions, Environment Variables, or a custom heading) and one or more lines to add. Detects and skips duplicates so re-running a skill doesn't add the same line twice. Creates missing sections when needed. Triggered by every add-* skill. Not meant to be invoked directly by users.
 user-invocable: false
 allowed-tools: Read Edit Write Bash
-compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (vercel, gh)."
+compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (scw, gh)."
 ---
 
 # Update CLAUDE.md - Internal helper
@@ -24,10 +24,10 @@ The CLAUDE.md file follows a conventional structure created by `/bootstrap`. Rec
 
 | Section | Purpose | Example line |
 |---|---|---|
-| `stack` | Technologies used | `- **Database**: Neon PostgreSQL` |
-| `commands` | CLI commands | `- \`pnpm db:push\` - Push schema to Neon` |
+| `stack` | Technologies used | `- **Database**: Scaleway Serverless SQL (PostgreSQL 16)` |
+| `commands` | CLI commands | `- \`pnpm db:push\` - Push schema to the database` |
 | `conventions` | Coding rules / patterns | `- DB: import from \`@<project-name>/db\`, never a cross-app relative path.` |
-| `env-vars` | Environment variables list | `- \`DATABASE_URL\` - Neon connection string` |
+| `env-vars` | Environment variables list | `- \`DATABASE_URL\` - Scaleway Serverless SQL connection string` |
 | `custom` | A free-form section with its own heading | `## Change the admin password in production` |
 
 ---
@@ -37,14 +37,14 @@ The CLAUDE.md file follows a conventional structure created by `/bootstrap`. Rec
 The caller passes something like:
 
 > Add to CLAUDE.md:
-> - section: `stack`, line: `- **Database**: Neon PostgreSQL`
+> - section: `stack`, line: `- **Database**: Scaleway Serverless SQL (PostgreSQL 16)`
 > - section: `commands`, lines: [`\`pnpm db:push\` - Push schema`, `\`pnpm db:studio\` - Open Drizzle Studio`]
 > - section: `conventions`, line: `- DB: import from \`@project/db\`, never a cross-app relative path.`
 
 Or for a custom section:
 
 > Add to CLAUDE.md a custom section:
-> - heading: `## Configure the Stripe webhook in production`
+> - heading: `## Configure the custom domain in production`
 > - body: (multi-line text)
 
 ---
@@ -131,7 +131,7 @@ Read the file back and confirm:
 Report back to the caller:
 
 > ✅ CLAUDE.md updated:
-> - stack: +1 line (Database: Neon PostgreSQL)
+> - stack: +1 line (Database: Scaleway Serverless SQL)
 > - commands: +2 lines
 > - conventions: +1 line, 0 replaced
 

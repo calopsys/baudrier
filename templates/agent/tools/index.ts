@@ -5,8 +5,8 @@
 //   - handler    : an async JS function that runs the tool with the args Claude provides
 //
 // Add or remove tools here. The loop reads `Object.values(tools)` to build
-// the `tools` array sent to the Anthropic API, so anything added here is
-// automatically available to the agent.
+// the `tools` array sent to Scaleway Generative APIs, so anything added here
+// is automatically available to the agent.
 //
 // To remove a tool the agent shouldn't access, just delete its line. To add
 // one, mirror the pattern of the existing ones.

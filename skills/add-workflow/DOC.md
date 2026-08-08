@@ -13,15 +13,15 @@ The common shape: a **finite sequence** (2 to 8 steps known in advance), trigger
 
 ## How it goes
 
-1. **You describe the chain**: the triggering event, the steps in order, the expected result. Hypervibe spots on its own which steps need intelligence.
+1. **You describe the chain**: the triggering event, the steps in order, the expected result. Baudrier spots on its own which steps need intelligence.
 
-2. **The duration gate**: Hypervibe estimates the total time and compares it with what your hosting allows for a single run. Under a minute is always fine; a few minutes takes configuration; beyond that, it honestly offers the split version (the event records the request, a scheduled tick processes the queue) or reroutes you to `/add-automation`.
+2. **The duration gate**: Baudrier estimates the total time and compares it with what your hosting allows for a single run. Under a minute is always fine; a few minutes takes configuration; beyond that, it honestly offers the split version (the event records the request, a scheduled tick processes the queue) or reroutes you to `/add-automation`.
 
-3. **Setup**: Hypervibe creates the project's workflow engine (once), your workflow with its typed steps, and the chosen trigger: an action in the app, a secured address for an external service (webhook), or a schedule via `/add-cron`.
+3. **Setup**: Baudrier creates the project's workflow engine (once), your workflow with its typed steps, and the chosen trigger: an action in the app, a secured address for an external service (webhook), or a schedule via `/add-cron`.
 
 4. **Every run is traced**: step by step, with timings and errors, in a table of your database. Ask anytime: *"show me the last workflow runs"*.
 
-5. **The real logic, now or later**: as always, you describe and Hypervibe implements, or you keep the example skeleton and come back to it whenever you want.
+5. **The real logic, now or later**: as always, you describe and Baudrier implements, or you keep the example skeleton and come back to it whenever you want.
 
 ## What it creates for you
 
@@ -29,13 +29,13 @@ The common shape: a **finite sequence** (2 to 8 steps known in advance), trigger
 - **Your workflow**, with its steps (automatic retry on failing network calls)
 - The **trigger**: in-app action, secured webhook, or scheduled task
 - The **trace table** `workflow_run` in your database (every run, every step, every timing)
-- The Claude key (`ANTHROPIC_API_KEY`) configured if your intelligent steps need it
+- The Scaleway Generative APIs key (`SCW_GENERATIVE_API_KEY`) configured if your intelligent steps need it - reused automatically if `/add-agent` already set one up
 - `CLAUDE.md` updated with the workflow recap
 
 ## Prerequisites
 
-- A Next.js project deployed on Vercel (typically from `/bootstrap`)
-- For intelligent steps: a Claude API key (Hypervibe guides you through creating it, a 2-minute affair; each run then costs a few cents at most, depending on content size)
+- A Next.js project deployed on Scaleway (typically from `/bootstrap`)
+- For intelligent steps: a Scaleway Generative APIs key (Baudrier creates it automatically, no console step needed; each run then costs a fraction of a cent, depending on content size)
 - A database (`/add-db`) for tracing; without it the workflow still works, traced in the server logs
 
 ## Tips

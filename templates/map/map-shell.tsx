@@ -20,7 +20,7 @@
 //
 // Requires shadcn/ui Sheet (`~/components/ui/sheet`) and `cn` from
 // `~/lib/utils`. Both are present in any T3 project bootstrapped by
-// hypervibe; if you use this template outside that context, run
+// baudrier; if you use this template outside that context, run
 // `npx shadcn@latest add sheet` first.
 
 import { useState, type ReactNode } from "react";
@@ -48,7 +48,7 @@ export interface MapShellProps {
   /** Mobile sheet accessibility description (sr-only). */
   sidebarDescription?: string;
   /** CSS value for the global header height. Used to compute viewport-minus-header.
-   *  Default "4rem" - matches hypervibe's standard `SiteHeader`. */
+   *  Default "4rem" - matches baudrier's standard `SiteHeader`. */
   headerOffset?: string;
   /** Sidebar width on desktop, in pixels. Default 420. */
   sidebarWidth?: number;

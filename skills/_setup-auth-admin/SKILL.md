@@ -3,7 +3,7 @@ name: _setup-auth-admin
 description: Internal helper - sets up NextAuth in admin-credentials mode (fixed login via env vars, no DB, no OAuth). Invoked by add-auth when the user chose the "admin-only interface" option. Installs NextAuth core, configures the CredentialsProvider with a single hardcoded admin, generates dev + prod password hashes, adds rate limiting on login, and pushes env vars. Not meant to be invoked directly by users.
 user-invocable: false
 allowed-tools: Bash, Read, Write, Edit, Glob, Grep
-compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (vercel, gh)."
+compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (scw, gh)."
 ---
 
 # Setup Auth - Admin-credentials mode
@@ -32,7 +32,7 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/setup-auth-admin.mjs" \
   --web-dir "<WEB_DIR>"
 ```
 
-The script chains 9 sub-steps: preflight, install next-auth@beta, AUTH_SECRET generation, dev hash (`Admin1234!`) + prod generation (24 alphanumeric chars) + hash, write `src/lib/password.ts`, write `src/server/auth.ts` (marker `// hypervibe:auth-modes admin`), write API route with rate limiting, write admin pages (`src/app/admin/signin/page.tsx` + `src/app/admin/(protected)/{layout,page}.tsx` - route group that isolates the gate from the signin to avoid the redirect loop), push env vars (AUTH_SECRET, ADMIN_USERNAME, ADMIN_PASSWORD_HASH_DEV, ADMIN_PASSWORD_HASH_PROD, target=all).
+The script chains 9 sub-steps: preflight, install next-auth@beta, AUTH_SECRET generation, dev hash (`Admin1234!`) + prod generation (24 alphanumeric chars) + hash, write `src/lib/password.ts`, write `src/server/auth.ts` (marker `// baudrier:auth-modes admin`), write API route with rate limiting, write admin pages (`src/app/admin/signin/page.tsx` + `src/app/admin/(protected)/{layout,page}.tsx` - route group that isolates the gate from the signin to avoid the redirect loop), push env vars (AUTH_SECRET, ADMIN_USERNAME, ADMIN_PASSWORD_HASH_DEV, ADMIN_PASSWORD_HASH_PROD, env production).
 
 ### During execution
 

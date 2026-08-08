@@ -1,62 +1,55 @@
 # /add-analytics
 
-Enables **Google Analytics** on your site, with an **RGPD-compliant cookie banner** (consent required before any tracking).
+Enables **Matomo** audience measurement on your site. Runs **cookieless by default**: no cookies, no personal data, and no consent banner blocking your visitors - just a discreet way for them to opt out if they want.
 
 ## When to use it
 
 - You want to **measure your site's audience** (number of visitors, most viewed pages, traffic sources, visit duration)
-- You want to **comply with the RGPD** without having to configure everything by hand
-- You want to receive a **regular email report** (weekly or monthly) with your statistics
+- You want analytics **without the RGPD/cookie-banner hassle** for your visitors
+- You already have (or are willing to create) a Matomo account - Matomo Cloud or self-hosted
 
 ## How it goes
 
-1. **Check**: if GA4 is already in place, Hypervibe offers you a menu (switch GA property, reinstall the cookie banner, set up an email report, etc.).
+1. **Check**: if Matomo is already in place, Baudrier offers you a menu (switch instance/site, reinstall the opt-out control, exclude admin routes, etc.).
 
-2. **Domain advice**: if you are still on a Vercel URL, Hypervibe recommends connecting your real domain first (`/add-domain`). You can still continue with the Vercel URL and update the web data stream on the GA4 side later.
+2. **Your Matomo instance**: unlike most Baudrier features, Matomo isn't hosted for you. You give Baudrier your **Matomo URL** and **site ID** - either from Matomo Cloud (matomo.cloud) or a self-hosted instance you already have. If you have neither yet, Baudrier points you to matomo.org to get started.
 
-3. **Getting the measurement ID (G-XXXXXXXXXX)**:
-  - If you have never used GA, Hypervibe guides you through creating an account on analytics.google.com
-  - If you already have one, it shows you how to **add a new property** to your existing account
-  - You copy-paste the `G-XXXXXXXXXX` into the chat
+3. **Pushing the variables**: `NEXT_PUBLIC_MATOMO_URL` and `NEXT_PUBLIC_MATOMO_SITE_ID` are pushed to your local `.env` and to your hosted app's secrets.
 
-4. **Pushing the variable**: `NEXT_PUBLIC_GA_MEASUREMENT_ID` is pushed to `.env` + Vercel.
+4. **A one-time check on your side**: Baudrier asks you to confirm "Anonymize visitor's IP addresses" is enabled in your Matomo admin (usually the default already). This can't be done remotely, but it's what keeps the setup exempt from a consent banner.
 
-5. **Creating the GoogleAnalytics component**: a React component that loads GA4 **only after the cookies are accepted** (never before). If the visitor accepts later, GA loads instantly without reloading the page. The component **automatically excludes the admin routes** (`/admin`) from tracking, and Hypervibe offers to also exclude your authenticated areas (dashboard, members area, account) - so that your own visits and those of your logged-in clients do not pollute your acquisition statistics.
+5. **Creating the MatomoAnalytics component**: a React component that loads Matomo **cookieless** (`disableCookies`) from the very first visit - no waiting for a click. It **automatically excludes the admin routes** (`/admin`) from tracking, and Baudrier offers to also exclude your authenticated areas (dashboard, members area, account).
 
-6. **Creating the consent banner**: a small discreet popup in the bottom left (small max-width, semi-transparent dark background, your site's accent color on the "Accept" button). The wording is deliberately generic (*"This site uses cookies for audience measurement purposes."*). It stays valid even if you add other trackers later.
+6. **Creating the opt-out control**: a small, hidden-by-default panel reachable from a "Manage anonymous tracking" link in your footer. Visitors can turn tracking off for themselves at any time - required even though no prior consent is needed for cookieless measurement.
 
-7. **Updating the legal pages**: Hypervibe automatically updates your privacy policy to mention GA4 and explain the right to withdraw consent.
+7. **Updating the legal pages**: Baudrier updates your privacy policy to mention Matomo and the opt-out.
 
-8. **Email report (optional)**: Hypervibe offers and **guides you click-by-click** to enable a scheduled GA4 report (most viewed pages, Acquisition, Engagement…) sent to your inbox every week or every month. It is 100% GA4 UI, Hypervibe cannot configure it for you, but it gives you the step-by-step.
+## Why no cookie-consent banner?
+
+Cookie-based analytics (like classic Google Analytics) require prior consent because they store an identifier on the visitor's device. Matomo configured **cookieless** doesn't - no identifying cookie is set, no cross-session tracking, no data shared with third parties. Under CNIL's exemption criteria for audience-measurement tools, that combination is exempt from prior consent: a clear notice plus an easy opt-out is enough, which is exactly what this skill installs. If your project later needs cookie-based tracking (cross-device recognition, long funnels), that's a deliberate step up that needs a real consent gate - ask Baudrier explicitly if you get there.
 
 ## What it creates for you
 
-- A **Google Analytics property** in your name (or a new property in your existing account)
-- The `NEXT_PUBLIC_GA_MEASUREMENT_ID` variable in `.env` + Vercel
-- A `GoogleAnalytics` component that loads GA only after the cookies are accepted, and that does not enable tracking on the admin routes (nor on the authenticated areas you choose to exclude)
-- A `CookieConsent` component (banner) with your site's design
-- An update to the **privacy policy** to mention GA
-- If you want it: a **regular GA4 email report** (UI configuration, guided)
+- The `NEXT_PUBLIC_MATOMO_URL` and `NEXT_PUBLIC_MATOMO_SITE_ID` variables in `.env` + your app's secrets
+- A `MatomoAnalytics` component that tracks cookieless from the first visit, excluding the admin routes (and any authenticated area you choose to exclude)
+- An `AnalyticsOptOut` component (hidden by default, opened from the footer link) with your site's design
+- An update to the **privacy policy** to mention Matomo and the opt-out
 
 ## Prerequisites
 
 - The project must be in Next.js (typically initialized by `/bootstrap`)
-- A Google account (free)
+- A Matomo instance (Matomo Cloud account, or a self-hosted install) - Baudrier does not create this for you
 
 ## Tips
 
-{{callout:warning|RGPD: tracking only starts after acceptance}}
-The banner is required for RGPD compliance. GA cookies are **never** dropped before the visitor clicks "Accept". If they click "Refuse" or close the banner, no tracking. All of this is built in by default. You have nothing to code.
+{{callout:info|Why cookieless is the default}}
+Cookieless removes the whole consent-banner burden for your visitors while staying RGPD-compliant, as long as tracking stays strictly anonymous audience measurement. Baudrier sets this up by default and explains the trade-off if you ever want more (e.g. cookie-based cross-device tracking).
 {{/callout}}
 
-{{callout:tip|Email report = valuable so you do not forget}}
-If you do not open Google Analytics every week, the email report is very useful. Hypervibe guides you to enable the **Pages and screens** report (the most viewed pages), a classic. You can add others afterwards: Acquisition (where the visitors come from), Demographics (countries, devices, etc.).
-{{/callout}}
-
-{{callout:info|Why a generic wording}}
-The banner says "audience measurement" without naming GA4 specifically. This is on purpose: the day you add Meta Pixel or Hotjar, the text already covers it. No need to update the banner with each new tracker.
+{{callout:warning|Matomo isn't provisioned by Baudrier}}
+Unlike your database or your storage bucket, Matomo lives outside Scaleway. You need your own Matomo Cloud account or self-hosted instance; Baudrier only wires the tracking code to it.
 {{/callout}}
 
 {{callout:tip|Your admin visits do not skew your stats}}
-Tracking is disabled on the admin routes (`/admin`): when you manage your site, your own sessions are not counted as visitors. You can extend this exclusion to your authenticated areas (dashboard, members area, account) - Hypervibe offers it during the installation. Already installed before this improvement? Re-run `/add-analytics` and choose "Exclude admin routes / authenticated areas from tracking".
+Tracking is disabled on the admin routes (`/admin`): when you manage your site, your own sessions are not counted as visitors. You can extend this exclusion to your authenticated areas (dashboard, members area, account) - Baudrier offers it during the installation.
 {{/callout}}

@@ -7,7 +7,7 @@ import { createTRPCRouter, protectedProcedure } from "~/server/api/trpc";
 import { notifications } from "~/server/db/schema";
 
 export const notificationsRouter = createTRPCRouter({
-  // Les N notifications les plus récentes de l'utilisateur.
+  // Les N notifications les plus récentes de l’utilisateur.
   list: protectedProcedure
     .input(z.object({ limit: z.number().min(1).max(50).default(20) }).optional())
     .query(async ({ ctx, input }) => {

@@ -1,116 +1,100 @@
 #!/usr/bin/env node
-// setup-email.mjs - Deterministic core for /add-email (Resend OR Brevo).
+// setup-email.mjs - Deterministic core for /add-email (Scaleway Transactional
+// Email / TEM - the only email provider in this harness, see CONTRACT.md).
 //
-// Both providers share the same overall flow (install SDK, write mail.ts, write
-// contact tRPC router, register in root.ts, push env vars). Only the SDK names,
-// escape function name, sendMail signature, and env vars differ. We unify them
-// here behind a --provider flag so a single script handles both plugins.
-//
-// MONOREPO is NOT supported in this v1 - Claude is expected to handle that case
-// manually following the SKILL.md.
+// Unlike some other providers' free/test tiers, TEM has no shared "test
+// sender" you can send from immediately: a sending domain must be added to
+// TEM and its SPF/DKIM/DMARC/MX records published before ANY email can be
+// sent. So domain setup is not an optional "later" step here - it's part of
+// the deterministic core, right alongside scaffolding mail.ts.
 //
 // Usage:
-//   Resend:
-//     node setup-email.mjs --provider resend --name <project-name> [--web-dir .]
-//
-//   Brevo:
-//     node setup-email.mjs --provider brevo --name <project-name> \
-//       --brevo-sender <verified-email> [--brevo-sender-name <name>] [--web-dir .]
+//   node setup-email.mjs --name <project-name> --sender-email <email> \
+//     [--sender-name <name>] [--web-dir .]
 //
 // Args:
-//   --provider <resend|brevo>     required
-//   --name <project-name>         required (used as the Brevo sender name default)
-//   --web-dir <path>              default: cwd
-//   --brevo-sender <email>        required if --provider brevo (must be verified in Brevo dashboard)
-//   --brevo-sender-name <name>    optional, default = project-name
+//   --name          required, kebab-case project name (also the default sender name)
+//   --sender-email  required, e.g. contact@mydomain.com - its domain becomes
+//                   the TEM sending domain
+//   --sender-name   optional, default = --name
+//   --web-dir       default: cwd
 //
 // Prerequisites assumed by the script:
-//   - The API key is in the Bitwarden vault (item RESEND / BREVO, field "api_key") and the
-//     vault is unlocked (Claude ensures both in SKILL Step 1 via the _get-secret pattern).
-//     No provider CLI is involved: everything goes through the vault + the REST API / SDK.
-//     A legacy RESEND_API_KEY / BREVO_API_KEY env var is still accepted as a fallback.
-//   - The project has a working T3 scaffold (Next.js + tRPC + setup-security from /bootstrap,
-//     because the contact router uses rateLimitedProcedure).
+//   - Scaleway operator credentials are already available (SCW_ACCESS_KEY /
+//     SCW_SECRET_KEY env vars, or the scw CLI profile) - see
+//     scripts/scaleway/_scw-auth.mjs. No vault, no per-provider API key: TEM
+//     is billed straight to the Scaleway Project, same credentials as every
+//     other scripts/scaleway/*.mjs module.
+//   - The project has a working T3 scaffold (Next.js + tRPC + setup-security
+//     from /bootstrap, because the contact router uses rateLimitedProcedure).
 //
 // stdout layout:
 //   - Live logs: ▸ <step>, ✅ <result>, ⚠️ <warning>
 //   - Handoff banner at the end (success OR failure)
-//   - Last line on success: a single JSON object Claude can parse:
-//       {"success": true, "provider": "resend|brevo", "envVars": [...keys pushed...]}
+//   - Last line on success: a single JSON object Claude can parse
 //
 // Exit codes:
 //   0 = success
-//   1 = preflight failed (bad args, missing env, in monorepo)
+//   1 = preflight failed (bad args, missing deps)
 //   2 = a step failed mid-pipeline; partial state on disk; handoff banner explains
 
-import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { render } from "./_render.mjs";
-import { readUserEnv } from "./_read-user-env.mjs";
-import { getSecret } from "./vault/vault.mjs";
-
-import { ensureToolsInPath } from "./_ensure-tools-path.mjs";
-
-// Prepend common CLI install dirs to process.env.PATH so subprocess invocations
-// (pnpm, gh, vercel, git, node) find their binaries even if Claude Code
-// inherited a stale PATH (typical when tools were just installed via /start).
-ensureToolsInPath();
+import { ensureDomain, getDomainRecords, checkDomain } from "./scaleway/tem.mjs";
+import { zoneExists, isDelegatedToScaleway, upsertRecords } from "./scaleway/dns.mjs";
+import { putSecret } from "./scaleway/secrets.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+// Declared before arg parsing: fail() (usable from the very first line of
+// arg validation) reads `completed`/`current`, so both must exist before any
+// `fail()` call can happen, not just before the pipeline steps run.
+const completed = [];
+const warnings = [];
+let current = null;
+
 // ─── args ─────────────────────────────────────────────────────────────
 const args = process.argv.slice(2);
-let provider = "";
 let name = "";
 let webDir = ".";
-let brevoSender = "";
-let brevoSenderName = "";
+let senderEmail = "";
+let senderName = "";
 
 for (let i = 0; i < args.length; i++) {
   const a = args[i];
-  if (a === "--provider" && args[i + 1]) provider = args[++i];
-  else if (a === "--name" && args[i + 1]) name = args[++i];
+  if (a === "--name" && args[i + 1]) name = args[++i];
   else if (a === "--web-dir" && args[i + 1]) webDir = args[++i];
-  else if (a === "--brevo-sender" && args[i + 1]) brevoSender = args[++i];
-  else if (a === "--brevo-sender-name" && args[i + 1]) brevoSenderName = args[++i];
+  else if (a === "--sender-email" && args[i + 1]) senderEmail = args[++i];
+  else if (a === "--sender-name" && args[i + 1]) senderName = args[++i];
   else fail(`Unknown arg: ${a}`);
 }
 
-if (!provider || !["resend", "brevo"].includes(provider)) {
-  fail("Usage: --provider <resend|brevo> is required");
-}
 if (!name) fail("--name <project-name> is required");
 if (!/^[a-z0-9][a-z0-9-]{0,48}[a-z0-9]$/.test(name)) {
   fail(`--name must be kebab-case (lowercase a-z, 0-9, -), 2-50 chars. Got: ${name}`);
 }
-if (provider === "brevo") {
-  if (!brevoSender) fail("--brevo-sender <email> is required when --provider brevo");
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(brevoSender)) {
-    fail(`--brevo-sender must be a valid email. Got: ${brevoSender}`);
-  }
-  if (!brevoSenderName) brevoSenderName = name;
+if (!senderEmail) fail("--sender-email <email> is required (Scaleway TEM has no shared test sender)");
+if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(senderEmail)) {
+  fail(`--sender-email must be a valid email. Got: ${senderEmail}`);
 }
+if (!senderName) senderName = name;
 
+const domain = senderEmail.split("@")[1].toLowerCase();
 const WEB_DIR = resolve(process.cwd(), webDir);
 
 // ─── helpers ──────────────────────────────────────────────────────────
-const STEPS = [
-  "preflight",
-  "getApiKey",
-  "installSdk",
-  "writeMailTs",
-  "writeContactRouter",
-  "registerRouter",
-  "pushEnvVars",
-];
-const completed = [];
-const warnings = [];
-let current = null;
+const STEPS = ["preflight", "configureDomain", "writeMailTs", "writeContactRouter", "registerRouter", "pushEnvVars"];
 const state = {
-  provider,
-  apiKey: null, // captured in getApiKey, never logged in plain text
+  senderEmail,
+  senderName,
+  domain,
+  temDomainId: null,
+  temDomainStatus: null,
+  dnsAutoPublished: false,
+  dnsRecords: [],
   envVarsPushed: [],
 };
 
@@ -135,7 +119,7 @@ function warn(msg) {
 function dumpHandoff(success) {
   const remaining = STEPS.filter((s) => !completed.includes(s) && s !== current);
   console.log("\n────────────────────────────────────────────────────────");
-  console.log(`setup-email handoff state (provider: ${provider})`);
+  console.log(`setup-email handoff state (Scaleway TEM, domain: ${domain})`);
   console.log("────────────────────────────────────────────────────────");
   console.log(`✅ Completed (${completed.length}/${STEPS.length}): ${completed.join(", ") || "none"}`);
   if (current) console.log(`❌ Failed at: ${current}`);
@@ -143,6 +127,10 @@ function dumpHandoff(success) {
   if (warnings.length) {
     console.log(`\n⚠️  ${warnings.length} warning(s) during the run:`);
     for (const w of warnings) console.log(`   - ${w}`);
+  }
+  if (state.dnsRecords.length) {
+    console.log(`\nTEM DNS records for "${domain}" (${state.dnsAutoPublished ? "published automatically" : "PUBLISH THESE MANUALLY"}):`);
+    for (const r of state.dnsRecords) console.log(`   ${r.type.padEnd(6)} ${r.name || "@"}  ->  ${r.value}`);
   }
   if (!success) {
     console.log(
@@ -244,90 +232,83 @@ async function preflight() {
   if (pnpm.status !== 0) fail("pnpm CLI is missing or broken.");
 
   ok(`Web dir OK: ${WEB_DIR}`);
+  ok(`Sender: ${senderName} <${senderEmail}> (domain: ${domain})`);
 }
 
-// ─── Step 2: get API key ──────────────────────────────────────────────
-async function getApiKey() {
-  // Source of truth = the Bitwarden vault. Item RESEND / BREVO, field "api_key".
-  // The SKILL (add-email) ensures the vault is unlocked AND the key present (via the
-  // _get-secret pattern: auto-unlock + auto-add) BEFORE calling this script - so a
-  // non-interactive read here normally succeeds. Legacy env var kept as a fallback
-  // during the migration period.
-  const item = provider === "resend" ? "RESEND" : "BREVO";
-  const service = provider === "resend" ? "Resend" : "Brevo";
-  const envVar = provider === "resend" ? "RESEND_API_KEY" : "BREVO_API_KEY";
-  const dashboard = provider === "resend"
-    ? "https://resend.com/api-keys"
-    : "https://app.brevo.com/settings/keys/api";
+// ─── Step 2: configure the TEM sending domain ─────────────────────────
+async function configureDomain() {
+  log(`Ensuring TEM domain "${domain}"`);
 
-  // 1. Vault (canonical).
-  log(`Reading ${item}.api_key from the vault`);
-  try {
-    state.apiKey = getSecret(item, "api_key");
-    ok(`${item} API key read from vault`);
-    return;
-  } catch (e) {
-    if (e.code === 2 || e.code === 3) {
-      fail(
-        `Vault locked / session expired. The skill must unlock it first:\n` +
-          `  node scripts/vault/launch.mjs unlock\n` +
-          `then re-run this script.`,
-      );
-    }
-    // code 4 (item not in vault) or other → try the legacy env fallback below.
-  }
-
-  // 2. Legacy env-var fallback (migration period).
-  const envKey = readUserEnv(envVar);
-  if (envKey) {
-    state.apiKey = envKey;
-    warn(`${envVar} found in env (legacy) - consider migrating it to the vault (item ${item}).`);
-    ok(`${envVar} found in env`);
-    return;
-  }
-
-  // 3. Nothing → instruct to add the key to the vault.
-  fail(
-    `No ${service} API key available.\n` +
-      `  1. Create a Full-Access key at ${dashboard}\n` +
-      `  2. Store it in the vault (the value is typed in a separate window, never via Claude):\n` +
-      `     node scripts/vault/launch.mjs add --name ${item} --service ${service} --fields "api_key:secret"\n` +
-      `  3. Re-run this script.`,
+  // TEM caps a fresh (pre-KYC) account at 500 emails/month and 2 domains;
+  // once identity verification is done that rises to 5,000/month and 5
+  // domains. Surfaced here (not just in tem.mjs's JSDoc) so it reaches the
+  // console output the SKILL relays to the user - see CONTRACT.md §3.
+  warn(
+    "Un compte Scaleway récent (avant vérification d'identité) est limité à 500 emails/mois " +
+      "et 2 domaines d'envoi. Après vérification KYC : 5 000 emails/mois et 5 domaines.",
   );
-}
 
-// ─── Step 3: install SDK ──────────────────────────────────────────────
-async function installSdk() {
-  if (provider === "resend") {
-    log("Installing resend");
-    run("pnpm add resend", WEB_DIR);
-    ok("resend installed");
+  const d = await ensureDomain(domain);
+  state.temDomainId = d.id;
+  state.temDomainStatus = d.status;
+  ok(`TEM domain ${d.id} (status: ${d.status})`);
+
+  const records = await getDomainRecords(d.id);
+  state.dnsRecords = records;
+  if (records.length === 0) {
+    warn(`Scaleway TEM returned no DNS records for "${domain}" - check the domain manually in the Scaleway console.`);
+    return;
+  }
+  log(`${records.length} DNS record(s) to publish (SPF/DKIM/DMARC/MX)`);
+
+  const delegated = await isDelegatedToScaleway(domain).catch(() => false);
+  const hasZone = delegated && (await zoneExists(domain).catch(() => false));
+
+  if (hasZone) {
+    await upsertRecords(
+      domain,
+      records.map((r) => ({ name: r.name, type: r.type, data: r.value })),
+    );
+    state.dnsAutoPublished = true;
+    ok(`DNS records published automatically via Scaleway DNS.`);
   } else {
-    log("Installing @getbrevo/brevo");
-    run("pnpm add @getbrevo/brevo", WEB_DIR);
-    ok("@getbrevo/brevo installed");
+    state.dnsAutoPublished = false;
+    warn(
+      `"${domain}" is not delegated to Scaleway DNS (or its zone doesn't exist yet) - the DNS records ` +
+        "below must be added manually at your current DNS provider, or run /add-domain first to delegate " +
+        "this domain to Scaleway DNS, then re-run this step.",
+    );
+  }
+
+  // Best-effort nudge so a Claude session revisiting the domain later sees a
+  // fresher status. Verification is asynchronous regardless and can take up
+  // to 48h after the records above are actually live - never block on it.
+  try {
+    const rechecked = await checkDomain(d.id);
+    state.temDomainStatus = rechecked.status;
+    ok(`Domain check triggered (status: ${rechecked.status}). Full verification can take up to 48h.`);
+  } catch (e) {
+    warn(`Could not trigger an immediate domain re-check: ${e.message}`);
   }
 }
 
-// ─── Step 4: write src/server/mail.ts ─────────────────────────────────
+// ─── Step 3: write src/server/mail.ts ─────────────────────────────────
 async function writeMailTs() {
   log("Writing src/server/mail.ts");
   const dest = join(WEB_DIR, "src/server/mail.ts");
-  // Templates: templates/email/<provider>/mail.ts (no vars to substitute).
-  writeFileSync(dest, render(`email/${provider}/mail.ts`, {}));
+  writeFileSync(dest, render("email/mail.ts", {}));
   ok(`${dest} written`);
 }
 
-// ─── Step 5: write contact tRPC router ────────────────────────────────
+// ─── Step 4: write contact tRPC router ────────────────────────────────
 async function writeContactRouter() {
   log("Writing src/server/api/routers/contact.ts");
   const dest = join(WEB_DIR, "src/server/api/routers/contact.ts");
-  // Templates: templates/email/<provider>/contact-router.ts (no vars).
-  writeFileSync(dest, render(`email/${provider}/contact-router.ts`, {}));
+  writeFileSync(dest, render("email/contact-router.ts", {}));
   ok(`${dest} written`);
 }
 
-// ─── Step 6: register contactRouter in root.ts ────────────────────────
+// ─── Step 5: register contactRouter in root.ts ────────────────────────
 async function registerRouter() {
   log("Registering contactRouter in src/server/api/root.ts");
   const rootPath = join(WEB_DIR, "src/server/api/root.ts");
@@ -350,7 +331,6 @@ async function registerRouter() {
   }
 
   // Inject `contact: contactRouter,` inside createTRPCRouter({ ... }).
-  // We insert right after the opening brace, on a new line, with consistent indentation.
   const replaced = root.replace(
     /createTRPCRouter\(\s*\{/,
     `createTRPCRouter({\n  contact: contactRouter,`,
@@ -365,46 +345,45 @@ async function registerRouter() {
   ok("contactRouter registered");
 }
 
-// ─── Step 7: push env vars ────────────────────────────────────────────
+// ─── Step 6: push env vars (.env + Scaleway Secret Manager) ───────────
 async function pushEnvVars() {
-  log("Pushing env vars to .env and Vercel");
-  const helper = join(__dirname, "push-env-vars.mjs");
-  if (!existsSync(helper)) fail(`Sibling script missing: ${helper}`);
+  log("Writing TEM_SENDER_EMAIL / TEM_SENDER_NAME (.env + Scaleway Secret Manager)");
 
-  const kvs = [];
-  if (provider === "resend") {
-    kvs.push(`RESEND_API_KEY=${state.apiKey}`);
-    // onboarding@resend.dev is Resend's official test sender - works immediately
-    // but only sends to the account owner. SKILL Step 8 lets the user upgrade later.
-    kvs.push(`RESEND_FROM_EMAIL=onboarding@resend.dev`);
-    state.envVarsPushed = ["RESEND_API_KEY", "RESEND_FROM_EMAIL"];
-  } else {
-    kvs.push(`BREVO_API_KEY=${state.apiKey}`);
-    kvs.push(`BREVO_SENDER_EMAIL=${brevoSender}`);
-    kvs.push(`BREVO_SENDER_NAME=${brevoSenderName}`);
-    state.envVarsPushed = ["BREVO_API_KEY", "BREVO_SENDER_EMAIL", "BREVO_SENDER_NAME"];
-  }
+  const pairs = { TEM_SENDER_EMAIL: senderEmail, TEM_SENDER_NAME: senderName };
 
-  const res = spawnSync("node", [helper, ...kvs], {
-    cwd: WEB_DIR,
-    stdio: "inherit",
-    shell: false,
+  // Local .env (dev). Kept in sync with Secret Manager below, which is the
+  // source of truth mirrored into the deployed container's
+  // secret_environment_variables at deploy time (see CONTRACT.md §1).
+  const envPath = join(WEB_DIR, ".env");
+  const existing = existsSync(envPath) ? readFileSync(envPath, "utf8") : "";
+  const kept = existing.split("\n").filter((line) => {
+    const m = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=/);
+    return !m || !(m[1] in pairs);
   });
-  if (res.status !== 0) {
-    fail(
-      "push-env-vars.mjs failed. SDK is installed and code is in place, only the env vars didn't land. " +
-        "Retry manually: `node " +
-        helper +
-        " '<KEY=VALUE>' [...]`",
-    );
+  while (kept.length > 0 && kept[kept.length - 1].trim() === "") kept.pop();
+  for (const [k, v] of Object.entries(pairs)) kept.push(`${k}=${v}`);
+  writeFileSync(envPath, kept.join("\n") + "\n");
+  ok(`.env updated (${Object.keys(pairs).join(", ")})`);
+
+  const gitignorePath = join(WEB_DIR, ".gitignore");
+  const gitignore = existsSync(gitignorePath) ? readFileSync(gitignorePath, "utf8") : "";
+  if (!gitignore.split("\n").some((l) => l.trim() === ".env")) {
+    const suffix = gitignore.length === 0 || gitignore.endsWith("\n") ? "" : "\n";
+    writeFileSync(gitignorePath, gitignore + suffix + ".env\n");
+    ok(".env added to .gitignore");
   }
-  ok(`Env vars pushed: ${state.envVarsPushed.join(", ")}`);
+
+  for (const [k, v] of Object.entries(pairs)) {
+    await putSecret(k, v);
+  }
+  ok(`Scaleway Secret Manager updated: ${Object.keys(pairs).join(", ")}`);
+
+  state.envVarsPushed = Object.keys(pairs);
 }
 
 // ─── MAIN ─────────────────────────────────────────────────────────────
 await step("preflight", preflight);
-await step("getApiKey", getApiKey);
-await step("installSdk", installSdk);
+await step("configureDomain", configureDomain);
 await step("writeMailTs", writeMailTs);
 await step("writeContactRouter", writeContactRouter);
 await step("registerRouter", registerRouter);
@@ -413,23 +392,33 @@ await step("pushEnvVars", pushEnvVars);
 dumpHandoff(true);
 
 console.log(`
-🎉 setup-email complete (${provider}).
+🎉 setup-email complete (Scaleway TEM).
 
-   Provider:      ${provider}
+   Sender:        ${senderName} <${senderEmail}>
+   TEM domain:    ${domain} (id ${state.temDomainId}, status: ${state.temDomainStatus})
+   DNS records:   ${state.dnsAutoPublished ? "published automatically" : "MUST be published manually - see above"}
    mail.ts:       src/server/mail.ts
    Contact route: src/server/api/routers/contact.ts (registered as \`contact\` in root.ts)
    Env vars:      ${state.envVarsPushed.join(", ")}
 
-Next: Claude takes over for the CLAUDE.md update (via _update-claude-md), the optional
-domain-config flow (Resend) or sender-verification reminder (Brevo), the optional
-contact-page creation (via _create-contact-page), and the user-facing summary.
+Reminder: TEM domain verification is asynchronous and can take up to 48h even
+after the DNS records above are live. Sending will fail until it completes.
+
+Next: Claude takes over for the CLAUDE.md update (via _update-claude-md), the
+RGPD subprocessor registry update, the optional contact-page creation (via
+_create-contact-page), and the user-facing summary.
 `);
 
 // Last line: structured JSON for Claude to parse.
 console.log(
   JSON.stringify({
     success: true,
-    provider,
+    senderEmail,
+    senderName,
+    domain,
+    temDomainId: state.temDomainId,
+    temDomainStatus: state.temDomainStatus,
+    dnsAutoPublished: state.dnsAutoPublished,
     envVars: state.envVarsPushed,
   }),
 );

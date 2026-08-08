@@ -11,11 +11,11 @@ Adds an **interactive map** to your site (contact page, list of branches, events
 
 ## How it works
 
-1. **One question**: Hypervibe asks you what you want to do with the map. From your answer, it infers everything else (how many points, on which page, static or interactive).
-2. **You provide the locations**: either the postal address (Hypervibe geocodes it automatically via OpenStreetMap), or directly the GPS coordinates if you have them.
-3. **Hypervibe installs the technical building blocks**: the map library (MapLibre GL JS), the React components, and the connection to the tile service (OpenFreeMap: free, no key).
-4. **Hypervibe wires the map onto the right page**: depending on your use case, it is integrated into your contact page, into a new dedicated page (`/agences`, `/locations`...), or full screen on the home.
-5. **Text fallback for SEO**: under each map, Hypervibe automatically adds the textual list of points with a Google Maps link. This way, Google indexes the addresses and screen readers can access them.
+1. **One question**: Baudrier asks you what you want to do with the map. From your answer, it infers everything else (how many points, on which page, static or interactive).
+2. **You provide the locations**: either the postal address (Baudrier geocodes it automatically via OpenStreetMap), or directly the GPS coordinates if you have them.
+3. **Baudrier installs the technical building blocks**: the map library (MapLibre GL JS), the React components, and the connection to the tile service (OpenFreeMap: free, no key).
+4. **Baudrier wires the map onto the right page**: depending on your use case, it is integrated into your contact page, into a new dedicated page (`/agences`, `/locations`...), or full screen on the home.
+5. **Text fallback for SEO**: under each map, Baudrier automatically adds the textual list of points with a Google Maps link. This way, Google indexes the addresses and screen readers can access them.
 6. **Privacy policy update**: OpenFreeMap is added as a subprocessor (it sees the visitor's IP when it loads the tiles: no cookie, infrastructure in Europe).
 
 ## What it creates for you
@@ -48,5 +48,5 @@ If you have many points in a small area (like the shops of a city), ask Claude *
 {{/callout}}
 
 {{callout:warning|Geocoding at runtime}}
-If your users enter free-text addresses in a form and you want to display them on the map automatically, that requires a paid geocoding service (Mapbox / MapTiler): OpenStreetMap Nominatim limits too strictly for that. Hypervibe uses Nominatim **only at install time** for your fixed points, not in production.
+If your users enter free-text addresses in a form and you want to display them on the map automatically, that requires a paid geocoding service (Mapbox / MapTiler): OpenStreetMap Nominatim limits too strictly for that. Baudrier uses Nominatim **only at install time** for your fixed points, not in production.
 {{/callout}}

@@ -1,131 +1,196 @@
 #!/usr/bin/env node
 // bootstrap-init.mjs - Deterministic early-phase bootstrap for a new T3 project.
 //
-// Runs all mechanical steps of /bootstrap without LLM involvement, from empty
-// directory to first Vercel deploy.
+// Runs all mechanical steps of /bootstrap without LLM involvement, from an
+// empty pre-existing repo checkout to a live Scaleway Serverless Container
+// deployment (region fr-par, CONTRACT.md §1/§5). The harness itself builds
+// and pushes the Docker image - no GitHub Actions anywhere in this pipeline.
+//
+// IN-PLACE ONLY (CONTRACT.md §7): the repo pre-exists (created from a GitHub
+// template, or already cloned) and this script scaffolds INTO the checkout
+// it is run from - PROJECT_DIR is always the current directory. There is no
+// sibling-directory mode and no repo-creation step.
 //
 // Sequence (all idempotency caveats below):
-//   1. Preflight: required CLIs present + authenticated, cwd not inside a git repo.
-//   2. npx create-t3-app@latest <name> --CI --noInstall --noGit ... then
-//      pnpm install (we control the package manager and git entirely).
-//   3. Bump drizzle-orm + drizzle-kit to latest (CVE-2025-XXXX, fixed in 0.45.2).
-//   4. Cleanup T3 demo: delete src/server/api/routers/post.ts, strip postRouter
-//      from root.ts, replace src/app/page.tsx with a minimal placeholder.
-//   4b. Normalize lint scripts to the ESLint CLI: `next lint` is deprecated since
-//      Next 15.5 and removed in Next 16. If the scaffolder emitted `next lint`,
-//      rewrite to `eslint .` / `eslint . --fix`, and ensure a flat config +
-//      eslint deps exist (no-op when the scaffolder already did the right thing).
-//   5. Inject src/server/api/routers/healthcheck.ts + register in root.ts so
-//      appRouter is never empty (avoids TS2314 at build time).
-//   6. shadcn/ui init (via npx - pnpm dlx breaks with ERR_PNPM_NO_IMPORTER_MANIFEST_FOUND),
-//      add base components, create src/components/ui/link-button.tsx
-//      (wraps next/link with buttonVariants - shadcn v4 has no asChild).
-//   7. Run setup-security.mjs (headers + remotePatterns + rate limiter + rateLimitedProcedure).
-//   8. Run setup-seo.mjs (metadata + sitemap + robots + JSON-LD).
-//   9. notFoundPage: write a polished src/app/not-found.tsx (server component, shadcn Button).
-//  10. claudeMdCore: write the project's initial CLAUDE.md with the unconditional
-//      T3-specific conventions. Addons (add-db, add-email, ...) extend it later
-//      via _update-claude-md, and the bootstrap SKILL adds CDC-related lines after
-//      the user-facing CDC step.
-//  10b. vercelConfig: write vercel.json with `regions: ["fra1"]` so all
-//      serverless functions run in Frankfurt (EU) rather than the default
-//      iad1 (US East). Lower latency for EU visitors + EU data residency.
-//  10b'. launchJsonConfig: write .claude/launch.json so the Claude Preview
-//      MCP can launch `pnpm dev` instantly at the end of bootstrap (when the
-//      user accepts the preview prompt). Without it, the MCP probes for
-//      ~30s trying to find a runnable config → bad UX.
-//  10c. privacyPolicy: write a data-driven RGPD privacy policy page
-//      (src/app/politique-de-confidentialite/page.tsx) that renders from a
-//      subprocessors registry (src/lib/subprocessors.ts). Seed the registry
-//      with Vercel via update-privacy-policy.mjs. Each /add-* skill that
-//      introduces a third-party data processor adds itself to the registry.
-//  11. One commit capturing the whole scaffolded state.
-//  12. gh repo create + push.
-//  13. vercel link.
-//  14. push-env-vars.mjs with DATABASE_URL placeholder (syntactically-valid postgres URL,
-//      passes T3's z.string().url() Zod validation without making any real connection)
-//      and NEXT_PUBLIC_APP_URL (real Vercel URL for prod+preview, localhost for dev).
-//      Note: NextAuth is NOT scaffolded by T3 unless --nextAuth is passed (which we don't),
-//      so AUTH_SECRET / AUTH_DISCORD_* placeholders are not needed. /add-auth handles them
-//      later if the user opts into auth.
-//  15. pnpm build locally. This is the gate before the real deploy.
-//  16. If build OK → vercel --prod.
-//      If build KO → exit non-zero with a clear message, Claude takes over to fix.
-//  17. smokeTest: curl the deployed URL with retry, verify 200 + project name appears
-//      in the rendered HTML. Catches "deploy succeeded but the live page is broken".
-//      Uses the actual alias URL captured by deploy() - Vercel may suffix the bare
-//      ${name}.vercel.app subdomain (henna, nine, …) if it's taken by another user.
-//  18. fixAppUrl: if Vercel suffixed the alias, re-push NEXT_PUBLIC_APP_URL with the
-//      real URL so the NEXT auto-deploy (triggered by step 19's empty commit + push)
-//      bakes the correct value into the client bundle. The first deploy briefly serves
-//      the wrong NEXT_PUBLIC_APP_URL but is overwritten ~50s later by the auto-deploy.
-//  19. verifyAutoDeploy: empty commit + git push + check `vercel[bot]` picks up the
-//      deployment via gh api. NON-BLOCKING - if the GH↔Vercel integration isn't wired,
-//      adds a warning to the handoff banner so Claude can guide the user to fix it.
+//   1. preflight checks tooling, the repo-access gate (`git ls-remote
+//     origin` - never a `gh`-based auth check, CONTRACT.md §7) and Scaleway
+//     credentials.
+//   2. scwProject creates (or reuses) the dedicated Scaleway Project for
+//     this app - right after preflight, before scaffoldT3 writes a single
+//     local file. check-scw-permissions.mjs is a denial-only probe by
+//     design: a clean read cannot prove the create right, only a missing
+//     right. Running the real find-or-create here both proves the right and
+//     does the required work in one step. A 403 raises the existing
+//     needs_admin error (recipe "project", docs/ADMIN-SCALEWAY.md) before a
+//     single local file exists, so nothing needs cleanup - re-run with
+//     --scw-project-id and the run starts clean, instead of a ~5-minute
+//     scaffold-then-discover detour through create-t3-app + pnpm install.
+//     In poc mode (readScwMode(), CONTRACT.md §1) this step never calls
+//     createProject: it requires --scw-project-id instead, and refuses a
+//     Project that already carries another app's secret.
+//   3-13. Scaffold + harden the T3 app (unchanged in spirit from earlier
+//     iterations of this script): create-t3-app scaffold under a scratch
+//     directory then moved into place, .gitattributes + stage (the repo
+//     already exists - no `git init`), drizzle bump (SQL injection CVE),
+//     demo cleanup, ESLint CLI normalization, healthcheck router, shadcn +
+//     LinkButton + Geist fix, security headers, base SEO, local image
+//     placeholders, polished 404 page.
+//   14-17. Copy the Scaleway deploy artifacts from templates/deploy/ into the
+//     project: Dockerfile (multi-stage, node:24-alpine, output:'standalone'),
+//     a PATCH (not overwrite) of next.config.* for `output:'standalone'` +
+//     image remotePatterns (security() already patched next.config.js with
+//     headers by this point - see nextConfigStandalone() for why this step
+//     patches instead of copying templates/deploy/next.config.js verbatim),
+//     copy-assets.js (restores .next/static + public/ into the standalone
+//     output - skipping this ships an unstyled site that still passes its
+//     health check), src/proxy.ts (the IP-allowlist gate, CONTRACT.md §6).
+//   18-19. claudeMdCore (project CLAUDE.md - addons extend it later via
+//     _update-claude-md), privacyPolicy (RGPD page + subprocessors registry).
+//   20. cleanupWorkflow writes .github/workflows/clean-merged-branches.yml,
+//     the dispatch-only branch-cleanup maintenance workflow (CONTRACT.md §5
+//     exception - NOT a build workflow, the pipeline stays direct).
+//   21-22. One commit capturing the whole scaffolded state, then
+//     `git push -u origin <branch>` (the repo already exists - see
+//     pushToOrigin()'s comment for what happens when the push is rejected).
+//   23-24. Provision the remaining Scaleway resources (the Project itself
+//     already exists from step 2, CONTRACT.md: one Project per app): a
+//     Container Registry namespace, a Serverless Containers namespace.
+//   25. dockerBuildPush starts the Docker daemon if needed (ensureDocker()),
+//     then builds and pushes the image directly (scripts/_docker-build.mjs)
+//     tagged with the commit SHA - the same tag format the removed GitHub
+//     Actions workflow used (`${{ github.sha }}`, templates/deploy/build.yml,
+//     now deleted).
+//   26. scwContainer creates the Serverless Container (scale preset S:
+//     250mvCPU/512MB/maxConcurrency 8, min_scale 0, max_scale 5, port 8080 -
+//     see SCALE_PRESETS.S in scripts/scaleway/container.mjs) pointed at THAT
+//     real, already-pushed tag and waits for it to become ready: Scaleway
+//     validates the registry image at container-creation time, so a
+//     placeholder tag that does not exist yet is rejected outright
+//     (verified on a live run - see scwContainer()'s comment, and
+//     CONTRACT.md §1). dockerBuildPush therefore always runs before this step.
+//   27. smokeTest fetches the container's URL from the operator's machine
+//     (on the VPN, so it passes the IP gate) and asserts both HTTP 200 AND
+//     that the linked stylesheet actually loads - a naive 200-check misses
+//     the copy-assets.js / Geist regressions documented in
+//     templates/deploy/README.md. On a Claude Code web sandbox
+//     (isRemoteSandbox()), a 403 is the EXPECTED outcome (the gate is up,
+//     the sandbox is not allowlisted) - see that function's comment.
 //
 // After a successful run, control returns to the caller (typically Claude via
-// /bootstrap) for the cahier-des-charges conversation, addon invocations (add-db,
-// add-auth, ...), and the application build.
+// /bootstrap) for the cahier-des-charges conversation, addon invocations
+// (add-db, add-auth, add-email, add-storage, add-analytics, add-map), and the
+// application build.
 //
-// Usage:
-//   node bootstrap-init.mjs --name my-project \
-//     --description "Short SEO description, ~150 chars" \
-//     [--locale fr_FR] [--private|--public] [--skip-deploy]
+// Usage (run from the repo root - the checkout the app already lives in):
+//   node bootstrap-init.mjs --description "Short SEO description, ~150 chars" \
+//     [--name deploy-name-override] [--locale fr_FR] [--skip-deploy]
 //
-// Run this from the directory WHERE the project folder should be created
-// (e.g. C:/DEV or ~/dev). The script creates <cwd>/<name>/ and cd's into it.
+// --name overrides only the Scaleway resource name (Project/registry
+// namespace/container namespace/container); by default that name is the repo
+// name itself (deriveAppName()). Use it when the repo name is not kebab-case.
 //
-// Idempotency: NOT idempotent. It's a one-shot from empty to deployed. If any
-// step fails, the partial state is left on disk for inspection; fix the cause
-// and either nuke the folder + retry, or have Claude continue from where it died.
+// Idempotency: NOT idempotent. It's a one-shot from an empty checkout to
+// deployed. If any step fails, the partial state is left on disk (and
+// possibly partially provisioned on Scaleway) for inspection; fix the cause
+// and have Claude continue from where it died.
 
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, readdirSync, rmdirSync } from "node:fs";
-import { resolve, dirname, join, basename, relative } from "node:path";
-import { homedir, platform } from "node:os";
+import { randomBytes } from "node:crypto";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, readdirSync, rmdirSync, renameSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { render } from "./_render.mjs";
-import { ensureToolsInPath } from "./_ensure-tools-path.mjs";
+import { isRemoteSandbox } from "./_platform.mjs";
+import { ensureDocker } from "./ensure-dockerd.mjs";
+import { buildAndPushImage } from "./_docker-build.mjs";
+import { requireCredentials, readScwMode, deriveAppName, cacheProjectId, api, sdkCall, slugify, ScwError } from "./scaleway/_scw-auth.mjs";
+import { ensureRegistryNamespace } from "./scaleway/registry.mjs";
+import { SCALE_PRESETS, ensureNamespace, findContainerByName, createContainer, updateContainer, syncContainerSecrets, waitForContainerReady } from "./scaleway/container.mjs";
+import { getSecret, putSecret, listSecrets } from "./scaleway/secrets.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// Prepend common CLI install dirs to process.env.PATH so the preflight subprocess
-// invocations (`pnpm`, `gh`, `vercel`, `git`, `node`) find their binaries even if
-// the parent Claude Code session inherited a stale PATH (typical when /start has
-// just installed tools but Claude was launched before the install).
-ensureToolsInPath();
-
 // ─── args ─────────────────────────────────────────────────────────────
+// Pure CLI-usage errors (bad/missing flags) use this lightweight exit instead
+// of the real fail() defined in the "helpers" section below: fail() drives
+// dumpHandoff(), which reports against STEPS/PROJECT_DIR/completed - none of
+// which exist yet this early, so calling it here would throw a confusing
+// "Cannot access 'STEPS' before initialization" instead of the usage message.
+function usageError(msg) {
+  console.error(`\n❌ ${msg}`);
+  process.exit(1);
+}
+
+/** 8-4-4-4-12 hex, case-insensitive - the shape of every Scaleway id. */
+function isUuid(v) {
+  return typeof v === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+}
+
 const args = process.argv.slice(2);
-let name = "";
+let nameOverride = "";
 let description = "";
 let locale = "fr_FR";
-let visibility = "private";
+// --private/--public are accepted (kept as no-ops) rather than rejected: the
+// repo already exists (in-place bootstrap, CONTRACT.md §7), so there is no
+// repo-creation step left to apply them to. Kept out of usageError's
+// unknown-arg rejection purely so an unchanged caller still passing this flag
+// does not crash on an "Unknown arg" error before the SKILL that calls this
+// script catches up with the new model.
 let skipDeploy = false;
+let scwProjectIdArg = null;
 
 for (let i = 0; i < args.length; i++) {
   const a = args[i];
-  if (a === "--name" && args[i + 1]) name = args[++i];
+  if (a === "--name" && args[i + 1]) nameOverride = args[++i];
   else if (a === "--description" && args[i + 1]) description = args[++i];
   else if (a === "--locale" && args[i + 1]) locale = args[++i];
-  else if (a === "--private") visibility = "private";
-  else if (a === "--public") visibility = "public";
+  else if (a === "--private" || a === "--public") continue;
   else if (a === "--skip-deploy") skipDeploy = true;
-  else fail(`Unknown arg: ${a}`);
+  else if (a === "--scw-project-id" && args[i + 1]) scwProjectIdArg = args[++i];
+  else usageError(`Unknown arg: ${a}`);
 }
 
-if (!name || !description) {
-  fail(
-    'Usage: node bootstrap-init.mjs --name NAME --description "DESC" ' +
-      "[--locale fr_FR] [--private|--public] [--skip-deploy]",
+if (!description) {
+  usageError(
+    'Usage: node bootstrap-init.mjs --description "DESC" ' +
+      "[--name deploy-name-override] [--locale fr_FR] [--skip-deploy] [--scw-project-id <uuid>]",
   );
 }
-if (!/^[a-z0-9][a-z0-9-]{0,48}[a-z0-9]$/.test(name)) {
-  fail(`--name must be kebab-case (lowercase a-z, 0-9, -), 2-50 chars. Got: ${name}`);
+
+const KEBAB_RE = /^[a-z0-9][a-z0-9-]{0,48}[a-z0-9]$/;
+if (nameOverride && !KEBAB_RE.test(nameOverride)) {
+  usageError(`--name must be kebab-case (lowercase a-z, 0-9, -), 2-50 chars. Got: ${nameOverride}`);
+}
+if (scwProjectIdArg && !isUuid(scwProjectIdArg)) {
+  usageError(`--scw-project-id must be a UUID. Got: ${scwProjectIdArg}`);
 }
 
+// App name: the repo name itself (deriveAppName - CONTRACT.md §2, a
+// Project's name is always the app name, which is always the repo name),
+// unless --name overrides the SCALEWAY RESOURCE name only (the git repo
+// keeps its own name either way - there is no repo-creation step left that
+// could rename it). Validated kebab-case exactly like before; when the repo
+// name itself is not kebab-case, --name is required.
+const appName = deriveAppName();
+if (!nameOverride && !KEBAB_RE.test(appName)) {
+  usageError(
+    `The repo name "${appName}" is not kebab-case (lowercase a-z, 0-9, -), 2-50 chars. ` +
+      "Pass --name <deploy-name> to choose a different name for the Scaleway resources.",
+  );
+}
+const name = nameOverride || appName;
+
+// Resolved once, early - before any local file changes, so this reads the
+// operator-level BAUDRIER_SCW_MODE env var (CONTRACT.md §1, §2), never a
+// stale value. scwProject() and the linkage step (scwContainer()) both
+// depend on it.
+const scwMode = readScwMode();
+
+// In-place only (CONTRACT.md §7): the repo pre-exists, and this script
+// scaffolds into the checkout it is run from - there is no sibling-directory
+// mode left.
 const CWD = process.cwd();
-const PROJECT_DIR = resolve(CWD, name);
+const PROJECT_DIR = CWD;
 
 // ─── helpers ──────────────────────────────────────────────────────────
 // Step tracking - used to print a structured handoff if/when we fail, so a
@@ -133,6 +198,7 @@ const PROJECT_DIR = resolve(CWD, name);
 // whole log. `STEPS` is the full ordered pipeline; `current` is what's running.
 const STEPS = [
   "preflight",
+  "scwProject",
   "scaffoldT3",
   "gitattributes",
   "bumpDrizzle",
@@ -142,21 +208,22 @@ const STEPS = [
   "shadcn",
   "security",
   "seo",
+  "imagePlaceholders",
   "notFoundPage",
+  "dockerfile",
+  "nextConfigStandalone",
+  "copyAssets",
+  "accessProxy",
   "claudeMdCore",
-  "vercelConfig",
-  "launchJsonConfig",
   "privacyPolicy",
+  "cleanupWorkflow",
   "commit",
-  "ghRepo",
-  "vercelLink",
-  "gitConnect",
-  "pushEnvVars",
-  "localBuild",
-  "deploy",
+  "pushToOrigin",
+  "scwRegistryNamespace",
+  "scwContainerNamespace",
+  "dockerBuildPush",
+  "scwContainer",
   "smokeTest",
-  "fixAppUrl",
-  "verifyAutoDeploy",
 ];
 const completed = [];
 const warnings = [];
@@ -179,25 +246,11 @@ function warn(msg) {
   console.warn(`  ⚠️  ${msg}`);
   warnings.push(msg);
 }
-// Retract previously-emitted warning(s) when a later step proves they were a
-// false alarm - e.g. `vercel git connect` errored cosmetically but the webhook
-// is actually wired (verifyAutoDeploy sees vercel[bot] pick up the push).
-// Returns the number of warnings removed.
-function unwarn(prefix) {
-  let removed = 0;
-  for (let i = warnings.length - 1; i >= 0; i--) {
-    if (warnings[i].startsWith(prefix)) {
-      warnings.splice(i, 1);
-      removed++;
-    }
-  }
-  return removed;
-}
 
 // Sanity check after a regex-based file modification. Prints a warning if the
 // edit didn't actually take effect - typically because T3 changed the file
-// structure since this script was written. Doesn't abort: the build gate at
-// the end will catch any real breakage.
+// structure since this script was written. Doesn't abort: the direct
+// build/push (dockerBuildPush) is the real gate.
 function expect(file, predicate, label) {
   try {
     const content = readFileSync(file, "utf8");
@@ -226,9 +279,17 @@ function dumpHandoff(success) {
       "\nFor the agent picking this up:\n" +
         `  - Project dir on disk: ${PROJECT_DIR}\n` +
         "  - The failure is above the handoff banner. Read the actual error there.\n" +
-        "  - Re-run THIS script in a fresh dir if T3 itself failed,\n" +
-        "    OR continue manually from the failing step using the SKILL.md as reference.\n" +
-        "  - Each step in this script maps 1:1 to a section of the bootstrap SKILL.md.\n",
+        "  - Continue manually from the failing step using the SKILL.md as reference -\n" +
+        "    the repo already existed before this run (in-place bootstrap), so there is\n" +
+        "    no fresh directory to retry into.\n" +
+        "  - Each step in this script maps 1:1 to a section of the bootstrap SKILL.md.\n" +
+        "  - scwProject runs right after preflight, before any local file changes. A\n" +
+        "    failure there (most often a 403 needing ProjectManager) leaves nothing on\n" +
+        "    disk - re-run with --scw-project-id and the run starts clean.\n" +
+        "  - A failure at any later step may leave local files on disk AND partial\n" +
+        "    Scaleway resources behind (a Project, a registry namespace, a container\n" +
+        "    namespace, a container) - the Scaleway side is safe to re-run: every\n" +
+        "    scripts/scaleway/ helper used here is find-or-create / idempotent-PATCH.\n",
     );
   }
   console.log("────────────────────────────────────────────────────────");
@@ -292,66 +353,107 @@ function capture(cmd, cwd, opts = {}) {
   return run(cmd, cwd, { capture: true, allowFail: true, ...opts });
 }
 
+// Resolve {owner, repo} from the project's `origin` remote. Used by the git
+// identity fallback (web) and the final banner - never talks to any GitHub
+// API, only parses the remote URL git itself already knows (gh is no longer
+// part of the toolchain, CONTRACT.md §7).
+function getGhOwnerRepo() {
+  const remote = capture("git remote get-url origin", PROJECT_DIR).stdout?.trim() || "";
+  // Charsets are GitHub's own (owner: alphanumeric + "-"; repo adds "._").
+  // The owner lands inside a shell-quoted `git config` call, so the tight
+  // charset is what makes that interpolation safe.
+  const m = remote.match(/github\.com[:/]([A-Za-z0-9-]+)\/([A-Za-z0-9._-]+?)(?:\.git)?$/);
+  if (!m) fail("Could not parse the GitHub owner/repo from the origin remote.");
+  return { owner: m[1], repo: m[2] };
+}
+
 // ─── Step 1: preflight ────────────────────────────────────────────────
 function preflight() {
   log("Preflight");
 
-  if (existsSync(PROJECT_DIR)) {
-    fail(`${PROJECT_DIR} already exists. Pick a different --name or remove it first.`);
-  }
-
-  const inRepo = capture("git rev-parse --is-inside-work-tree", CWD);
-  if (inRepo.status === 0 && inRepo.stdout.trim() === "true") {
+  // In-place only (CONTRACT.md §7): the repo pre-exists, so this run must be
+  // happening AT the repo's own root - not a parent directory (the old
+  // sibling-directory mode, removed) and not a subdirectory of it. git always
+  // prints the toplevel with forward slashes, even on Windows, so normalize
+  // both sides the same way before comparing.
+  const normalizeSlashes = (p) => p.replace(/\\/g, "/").replace(/\/+$/, "");
+  const top = capture("git rev-parse --show-toplevel", CWD);
+  if (top.status !== 0 || normalizeSlashes(top.stdout.trim()) !== normalizeSlashes(CWD)) {
     fail(
-      `${CWD} is inside a git repo. Run from a plain directory like C:/DEV or ~/dev so ` +
-        `the new project gets its own repo.`,
+      `${CWD} is not the root of a git repository. /bootstrap scaffolds in place: the app's repo already ` +
+        "exists (created from the GitHub template, or already cloned) - run this from that checkout's top level.",
     );
   }
 
-  for (const tool of ["pnpm", "git", "gh", "vercel", "node", "npx"]) {
+  for (const tool of ["pnpm", "git", "node", "npx"]) {
     const c = capture(`${tool} --version`, CWD);
     if (c.status !== 0) fail(`CLI missing or broken: ${tool}. Install it and retry.`);
   }
 
-  // Check gh auth - robust against false negatives.
-  //
-  // `gh auth status` (no host) is flaky on Windows because:
-  //   1. it queries ALL configured hosts (github.com + GHES + …) - a single
-  //      broken host causes exit 1 even if github.com is fine
-  //   2. concurrent access to the OS credential manager (VS Code's GH extension,
-  //      another gh process, GitHub Desktop…) can transiently fail the keyring
-  //      read for ~100-500 ms - gh exits 1 then but the token is valid
-  //   3. some scope-warning code paths exit non-zero on stderr noise
-  //
-  // We do a 3-tier check: scoped status → retry → real API call. We only fail
-  // if all three fail. This eliminates the "Token expired ❌ - wait, actually
-  // it works" loop reported by users.
-  let ghOk = capture("gh auth status -h github.com", CWD).status === 0;
-  if (!ghOk) {
-    // Brief pause to let any keyring race settle, then retry the scoped status.
-    const start = Date.now();
-    while (Date.now() - start < 800) {
-      // busy-wait ~800ms (we don't have setTimeout in a sync script)
-    }
-    ghOk = capture("gh auth status -h github.com", CWD).status === 0;
+  // Repo-access gate (CONTRACT.md §7): `git ls-remote origin`, never a
+  // `gh`-based auth check - the shell git credential's own status command is
+  // unreliable on Claude Code web (it exits non-zero even when it works,
+  // live-verified) and `gh` is no longer part of the toolchain at all.
+  const remoteUrl = capture("git remote get-url origin", CWD).stdout?.trim();
+  if (!remoteUrl) {
+    fail("No `origin` remote is configured. The app's repo already exists on GitHub - add it as `origin` and retry.");
   }
-  if (!ghOk) {
-    // Final fallback: try a real authenticated API call. If THIS works, the
-    // token is genuinely valid and the status command was a false negative.
-    ghOk = capture("gh api /user", CWD).status === 0;
-    if (ghOk) {
-      console.log("⚠️  gh auth status was flaky but `gh api /user` succeeds - continuing.");
-    }
+  const lsRemote = capture("git ls-remote origin", CWD);
+  if (lsRemote.status !== 0) {
+    fail(
+      `"git ls-remote origin" failed: ${(lsRemote.stderr || lsRemote.stdout || "").trim()}. ` +
+        "Check the repo's access and this machine's git credentials.",
+    );
   }
-  if (!ghOk) fail("gh is not authenticated. Run: gh auth login");
 
-  const vc = capture("vercel whoami", CWD);
-  if (vc.status !== 0) fail("vercel is not authenticated. Run: vercel login");
+  // No prior scaffold (CONTRACT.md §7's in-place invariant): a fresh checkout
+  // has neither yet.
+  if (existsSync(join(PROJECT_DIR, "package.json")) || existsSync(join(PROJECT_DIR, "src"))) {
+    fail(`${PROJECT_DIR} already looks scaffolded (package.json or src/ exists). /bootstrap only runs once, in a fresh checkout.`);
+  }
 
-  for (const k of ["user.name", "user.email"]) {
-    const g = capture(`git config --global ${k}`, CWD);
-    if (g.status !== 0 || !g.stdout.trim()) {
-      fail(`git config --global ${k} is not set. Configure it and retry.`);
+  // Scaleway credentials: SCW_ACCESS_KEY / SCW_SECRET_KEY env vars, the only
+  // source (CONTRACT.md §2) - see scripts/scaleway/_scw-auth.mjs. `scw` has no
+  // OAuth/device-code login (CONTRACT.md §1) so there is no CLI "logged in?"
+  // check to run here; requireCredentials() throws a friendly, actionable
+  // message if nothing is configured.
+  try {
+    const creds = requireCredentials();
+    if (!creds.organizationId) {
+      fail(
+        "SCW_DEFAULT_ORGANIZATION_ID is not set. scwProject (creating a dedicated " +
+          "Scaleway Project for this app) needs it. Set it alongside SCW_ACCESS_KEY / SCW_SECRET_KEY.",
+      );
+    }
+  } catch (e) {
+    fail(e.message);
+  }
+
+  // Git identity: off web, an unconfigured identity is a hard failure exactly
+  // like before. On a Claude Code web sandbox (isRemoteSandbox()), there is no
+  // human to have configured one - set it from the origin remote's owner
+  // instead (CONTRACT.md §7) and warn, rather than failing the whole run.
+  const identityStatus = {
+    "user.name": capture("git config --global user.name", CWD).stdout?.trim(),
+    "user.email": capture("git config --global user.email", CWD).stdout?.trim(),
+  };
+  const missingIdentity = Object.entries(identityStatus)
+    .filter(([, v]) => !v)
+    .map(([k]) => k);
+  if (missingIdentity.length) {
+    if (isRemoteSandbox()) {
+      const { owner } = getGhOwnerRepo();
+      if (!identityStatus["user.name"]) {
+        const r = spawnSync("git", ["config", "--global", "user.name", owner], { cwd: CWD, encoding: "utf8" });
+        if (r.status !== 0) fail(`git config user.name failed: ${(r.stderr || r.stdout || "").trim()}`);
+      }
+      if (!identityStatus["user.email"]) {
+        const r = spawnSync("git", ["config", "--global", "user.email", `${owner}@users.noreply.github.com`], { cwd: CWD, encoding: "utf8" });
+        if (r.status !== 0) fail(`git config user.email failed: ${(r.stderr || r.stdout || "").trim()}`);
+      }
+      warn(`git identity was not configured (${missingIdentity.join(", ")}) - set from the origin remote owner "${owner}".`);
+    } else {
+      fail(`git config --global ${missingIdentity.join(" / ")} is not set. Configure it and retry.`);
     }
   }
 
@@ -390,7 +492,179 @@ function preflight() {
   ok("All prerequisites OK");
 }
 
-// ─── Step 2: scaffold T3 ──────────────────────────────────────────────
+// ─── Step 2: dedicated Scaleway Project ────────────────────────────────
+// Runs immediately after preflight, before scaffoldT3 writes a single local
+// file - CONTRACT.md: one Scaleway Project per app (so a Secret Manager
+// secret's name IS the env var name, no cross-app collisions). There is no
+// scripts/scaleway/ module wrapping the Account/Projects API, so this talks
+// to the SDK directly: `@scaleway/sdk`'s `Account.v3` namespace exposes
+// Projects as `ProjectAPI` (not the default "API" class - see api()'s third
+// argument below), with `listProjects`/`createProject` mirroring the
+// find-or-create pattern every other scripts/scaleway/* namespace helper
+// uses (see e.g. registry.mjs#ensureRegistryNamespace). The Account API is
+// Organization-scoped, not region-scoped, so no `region` field is passed.
+//
+// WHY THIS RUNS FIRST: on a live run, an operator key without ProjectManager
+// failed here (`scaleway-sdk-go: insufficient permissions: write project`)
+// only after scaffoldT3 + pnpm install had already spent ~5 minutes building
+// the local project directory, with no idempotent way to recover short of
+// deleting the directory and starting over. check-scw-permissions.mjs cannot
+// replace this step: it is a denial-only probe by design, so a clean read
+// proves an absent right but never proves the create right is present.
+// Running the real find-or-create here both proves the right and does the
+// required work. On a 403, the needs_admin error below (recipe "project")
+// now stops the run before a single local file exists, so the operator
+// re-runs /bootstrap with --scw-project-id and the run starts clean.
+let scwProjectId = null;
+
+// A 403 here means the operator's key lacks ProjectManager - mapped onto
+// needs_admin so /bootstrap can hand the user a forwardable French request
+// instead of dying on a raw SDK error.
+function needsAdminProjectError(e, slug) {
+  if (e?.status !== 403) return e;
+  return new ScwError(
+    "Votre clé Scaleway n’a pas les droits nécessaires pour créer un projet. " +
+      `Demandez à l’administrateur de créer un projet Scaleway nommé « ${slug} », de vous accorder les droits ` +
+      "de service nécessaires sur ce projet (voir docs/ADMIN-SCALEWAY.md, recette « projet »), puis de vous " +
+      "communiquer l’identifiant du projet. Relancez ensuite /bootstrap avec --scw-project-id et cet identifiant.",
+    { type: "needs_admin", details: { recipe: "project", projectName: slug } },
+  );
+}
+
+// poc mode never calls createProject (CONTRACT.md §1) - mirrors
+// needsAdminProjectError's shape so /bootstrap's SKILL can catch it the same
+// way.
+function needsProjectIdError() {
+  return new ScwError(
+    "Le mode PoC est actif : Baudrier ne peut pas créer de projet Scaleway lui-même, il a besoin de l’identifiant " +
+      "d’un projet existant pour cette application. Utilisez le projet que votre administrateur a préparé pour " +
+      "elle, ou votre propre projet par défaut pour un premier essai, puis relancez /bootstrap avec " +
+      "--scw-project-id et cet identifiant.",
+    { type: "poc_needs_project_id" },
+  );
+}
+
+// A second app reusing one Project would collide two apps' secrets under
+// CONTRACT.md §2's name-equals-var invariant (Secret Manager naming) - this
+// is the one place left to catch that once scwProject() skips its own
+// find-or-create (poc mode, or a --scw-project-id retry after a full-mode
+// 403).
+async function refuseIfProjectAlreadyUsed(projectId) {
+  const KNOWN_NAMES = new Set(["DATABASE_URL", "AUTH_SECRET", "ACCESS_RESTRICTED", "APP_URL"]);
+  const existing = await listSecrets({ projectId });
+  const hit = existing.find((s) => KNOWN_NAMES.has(s.name) || s.name.startsWith("BAUDRIER_"));
+  if (!hit) return;
+  throw new ScwError(
+    `Ce projet Scaleway contient déjà un secret d’une autre application Baudrier (« ${hit.name} »). ` +
+      "Chaque application doit avoir son propre projet Scaleway : partager un projet entre deux applications " +
+      "casserait la correspondance entre le nom d’un secret et sa variable d’environnement. Indiquez l’identifiant " +
+      "d’un autre projet, ou demandez-en un nouveau à votre administrateur.",
+    { type: "project_already_used", details: { projectId, secretName: hit.name } },
+  );
+}
+
+async function scwProject() {
+  if (skipDeploy) {
+    log("--skip-deploy was passed; skipping Scaleway provisioning (scwProject).");
+    return;
+  }
+  const slug = slugify(name);
+  if (scwMode === "poc") {
+    if (!scwProjectIdArg) throw needsProjectIdError();
+    await refuseIfProjectAlreadyUsed(scwProjectIdArg);
+    scwProjectId = scwProjectIdArg;
+    cacheProjectId(slug, scwProjectId);
+    ok(`Using the PoC Scaleway Project (${scwProjectId})`);
+    return;
+  }
+  if (scwProjectIdArg) {
+    await refuseIfProjectAlreadyUsed(scwProjectIdArg);
+    scwProjectId = scwProjectIdArg;
+    cacheProjectId(slug, scwProjectId);
+    ok(`Using the admin-provided Scaleway Project (${scwProjectId})`);
+    return;
+  }
+  log(`Creating dedicated Scaleway Project "${name}"`);
+  const creds = requireCredentials();
+
+  const projects = await api("Account", "v3", "ProjectAPI");
+  let existing;
+  try {
+    existing = await sdkCall(() =>
+      projects.listProjects({ organizationId: creds.organizationId, name: slug }).all(),
+    );
+  } catch (e) {
+    throw needsAdminProjectError(e, slug);
+  }
+  const hit = existing.find((p) => p.name === slug);
+  if (hit) {
+    scwProjectId = hit.id;
+    cacheProjectId(slug, scwProjectId);
+    ok(`Reusing existing Scaleway Project "${slug}" (${scwProjectId})`);
+    return;
+  }
+
+  let created;
+  try {
+    created = await sdkCall(() =>
+      projects.createProject({
+        name: slug,
+        organizationId: creds.organizationId,
+        description: description.slice(0, 200),
+      }),
+    );
+  } catch (e) {
+    throw needsAdminProjectError(e, slug);
+  }
+  scwProjectId = created.id;
+  // Written here, not only left to resolveProjectId()'s own lazy lookup, so
+  // deploy.mjs and every scripts/scaleway/*.mjs consumer resolves this app's
+  // Project instantly for the rest of this session (CONTRACT.md §2, §7's
+  // session-scoped /tmp cache).
+  cacheProjectId(slug, scwProjectId);
+  ok(`Scaleway Project "${slug}" created (${scwProjectId})`);
+}
+
+// create-t3-app still emits the Next 15 dependency set. This map overrides
+// the versions in package.json before `pnpm install`, so the scaffold lands
+// on the Next 16 / zod 4 baseline instead. Two holdbacks stay below latest:
+//   - typescript stays ^5.9: typescript-eslint's peer range is
+//     ">=4.8.4 <6.1.0" (refuses TS 7).
+//   - eslint stays ^9: eslint-config-next's parser path crashes under
+//     eslint 10 (verified live). eslint-config-next declares no peer
+//     ceiling, so pnpm gives no warning if this hold is dropped - re-verify
+//     live before raising it.
+const NEXT16_VERSIONS = {
+  dependencies: {
+    next: "^16.0.0",
+    zod: "^4.0.0",
+    "@t3-oss/env-nextjs": "^0.13.0",
+  },
+  devDependencies: {
+    "@types/node": "^24.0.0",
+    typescript: "^5.9.0",
+    eslint: "^9.0.0",
+    "eslint-config-next": "^16.0.0",
+  },
+};
+
+/** Overwrites each pinned dependency in NEXT16_VERSIONS onto `pkg`, only
+ * when the key already exists (create-t3-app owns whether a dep is present
+ * at all). Warns, does not fail, when a key is missing - a sign create-t3-app
+ * changed its output shape. */
+function applyNext16VersionOverrides(pkg) {
+  for (const [field, deps] of Object.entries(NEXT16_VERSIONS)) {
+    for (const [dep, version] of Object.entries(deps)) {
+      if (pkg[field]?.[dep] === undefined) {
+        warn(`applyNext16VersionOverrides: ${field}.${dep} not found in package.json - create-t3-app may have changed its scaffold shape. Add it manually if the app needs it.`);
+        continue;
+      }
+      pkg[field][dep] = version;
+    }
+  }
+}
+
+// ─── Step 3: scaffold T3 ──────────────────────────────────────────────
 // We go through `npx create-t3-app` rather than `pnpm create t3-app` because
 // pnpm 10 is strict: `pnpm create/dlx/exec` errors out with
 // ERR_PNPM_NO_IMPORTER_MANIFEST_FOUND when cwd has no package.json - which
@@ -398,18 +672,70 @@ function preflight() {
 // npx has no such constraint. After scaffold, we wipe the npm-generated
 // lockfile + node_modules and re-install with pnpm so the rest of the
 // pipeline (shadcn, drizzle, etc.) runs on a clean pnpm install.
+// Moves every entry (including dotfiles) from `scratchDir` up into
+// `targetDir`. `.gitignore` is MERGED (append whatever line the scaffold adds
+// that the repo doesn't already have) rather than overwritten - the repo may
+// already carry its own (from the GitHub template). The repo's own
+// `README.md` is KEPT and the scaffold's is dropped, for the same reason.
+// Any other name collision is a fail(): silently overwriting a file the repo
+// already had would be worse than stopping to ask.
+function moveScaffoldIntoPlace(scratchDir, targetDir) {
+  for (const entry of readdirSync(scratchDir, { withFileTypes: true })) {
+    const src = join(scratchDir, entry.name);
+    const dest = join(targetDir, entry.name);
+
+    if (entry.name === ".gitignore" && existsSync(dest)) {
+      const existingLines = new Set(
+        readFileSync(dest, "utf8").split(/\r?\n/).map((l) => l.trim()).filter(Boolean),
+      );
+      const incoming = readFileSync(src, "utf8").split(/\r?\n/);
+      const toAppend = incoming.filter((l) => l.trim() && !existingLines.has(l.trim()));
+      if (toAppend.length) {
+        const existing = readFileSync(dest, "utf8");
+        const sep = existing.length === 0 || existing.endsWith("\n") ? "" : "\n";
+        writeFileSync(dest, existing + sep + toAppend.join("\n") + "\n");
+      }
+      continue;
+    }
+    if (entry.name === "README.md" && existsSync(dest)) {
+      continue; // keep the repo's own README, drop the scaffold's
+    }
+    if (existsSync(dest)) {
+      fail(
+        `Scaffold conflict: "${entry.name}" already exists in ${targetDir} and is neither .gitignore nor ` +
+          "README.md (both of those are merged/kept automatically). Resolve the conflict manually and retry.",
+      );
+    }
+    renameSync(src, dest);
+  }
+  rmSync(scratchDir, { recursive: true, force: true });
+}
+
 function scaffoldT3() {
   // We pass `--noInstall --noGit` to create-t3-app so it just writes the files:
   // no `npm install` (we'll do pnpm install ourselves), no `git init + git add`
-  // (we'll init git ourselves with .gitattributes already in place). This
-  // avoids the fragile npm→pnpm conversion + git index reconciliation dance
-  // that previously lived in scaffoldT3 + gitattributes.
-  log("Scaffolding T3 app via npx (--noInstall --noGit)");
+  // (the repo already exists - see gitattributes() below). This avoids the
+  // fragile npm→pnpm conversion + git index reconciliation dance that
+  // previously lived in scaffoldT3 + gitattributes.
+  //
+  // create-t3-app writes into a directory named after its positional arg, and
+  // that directory must not already exist - so it cannot target PROJECT_DIR
+  // directly (the repo checkout, which already has .git/, possibly a
+  // README.md, etc.). Scaffold under a scratch directory INSIDE PROJECT_DIR
+  // instead, then move its contents up (moveScaffoldIntoPlace, above).
+  const scratchName = `baudrier-scratch-${process.pid}-${Date.now()}`;
+  const scratchDir = join(PROJECT_DIR, scratchName);
+  if (existsSync(scratchDir)) rmSync(scratchDir, { recursive: true, force: true });
+
+  log(`Scaffolding T3 app via npx (--noInstall --noGit) into a scratch dir`);
   run(
-    `npx --yes create-t3-app@latest ${name} --CI --noInstall --noGit --tailwind --trpc --drizzle --appRouter --eslint --dbProvider postgres`,
-    CWD,
+    `npx --yes create-t3-app@latest ${scratchName} --CI --noInstall --noGit --tailwind --trpc --drizzle --appRouter --eslint --dbProvider postgres`,
+    PROJECT_DIR,
   );
-  if (!existsSync(PROJECT_DIR)) fail("T3 scaffold did not create the expected directory.");
+  if (!existsSync(scratchDir)) fail("T3 scaffold did not create the expected scratch directory.");
+
+  log(`Moving the scaffold into ${PROJECT_DIR} (merging .gitignore, keeping the existing README.md)`);
+  moveScaffoldIntoPlace(scratchDir, PROJECT_DIR);
 
   // Patch package.json to make pnpm happy from the start:
   //   1. Strip `"packageManager": "npm@..."` so pnpm refuses to use npm.
@@ -421,25 +747,60 @@ function scaffoldT3() {
   log("Patching package.json for pnpm (strip packageManager, whitelist native-build deps)");
   const pkgPath = join(PROJECT_DIR, "package.json");
   const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+  // create-t3-app named the package after the scratch directory it scaffolded
+  // into (moveScaffoldIntoPlace() above) - fix it to the app's real name now
+  // that the files live at PROJECT_DIR.
+  pkg.name = slugify(name);
   if (pkg.packageManager && pkg.packageManager.startsWith("npm")) {
     delete pkg.packageManager;
   }
-  pkg.pnpm ??= {};
-  const existing = new Set(pkg.pnpm.onlyBuiltDependencies ?? []);
-  const NATIVE_BUILD_DEPS = [
-    "sharp",
-    "esbuild",
-    "@tailwindcss/oxide",
-    "@swc/core",
-    "@parcel/watcher",
-    "bufferutil",
-    "utf-8-validate",
-    "better-sqlite3",
-    "core-js",
-    "core-js-pure",
-  ];
-  for (const dep of NATIVE_BUILD_DEPS) existing.add(dep);
-  pkg.pnpm.onlyBuiltDependencies = [...existing].sort();
+  // T3 scaffolds "dev": "next dev --turbo". Turbopack (Next 16's default
+  // engine) PANICS in this environment at BOTH `next dev` and `next build` -
+  // verified live. The rewrite below covers every script, not only `dev`:
+  // it also catches `build` (and `preview`, which chains `next build`) - the
+  // Dockerfile's `RUN pnpm build` resolves through scripts.build, so a
+  // dev-only fix would still panic in the image. Proven on a real Next
+  // 16.2.12 scaffold: resulting scripts read
+  // "dev": "next dev --webpack", "build": "next build --webpack",
+  // "preview": "next build --webpack && next start". Do NOT restore
+  // Turbopack without a live re-verification.
+  for (const [key, val] of Object.entries(pkg.scripts ?? {})) {
+    if (typeof val !== "string") continue;
+    pkg.scripts[key] = val.replace(
+      /\bnext (dev|build)\b(?:\s+--turbo\b)?(?:\s+--webpack\b)?/g,
+      "next $1 --webpack",
+    );
+  }
+  // create-t3-app still emits the Next 15 dependency set - apply the Next 16
+  // baseline before `pnpm install` resolves anything (NEXT16_VERSIONS above).
+  applyNext16VersionOverrides(pkg);
+  // pnpm >= 11 never reads `pnpm.onlyBuiltDependencies` from package.json
+  // (pnpm-workspace.yaml's `allowBuilds:`, written in shadcn() below, is the
+  // real mechanism there) and WARNS on every command while the dead key is
+  // still present - verified on a live run (pnpm 11.18.0): "The pnpm field
+  // in package.json is no longer read by pnpm." Only pnpm <= 10 still reads
+  // this field, so write it there only - PNPM_BUILD_FLAGS is already "" on
+  // that path (see preflight() above).
+  if (PNPM_BUILD_FLAGS) {
+    delete pkg.pnpm;
+  } else {
+    pkg.pnpm ??= {};
+    const existing = new Set(pkg.pnpm.onlyBuiltDependencies ?? []);
+    const NATIVE_BUILD_DEPS = [
+      "sharp",
+      "esbuild",
+      "@tailwindcss/oxide",
+      "@swc/core",
+      "@parcel/watcher",
+      "bufferutil",
+      "utf-8-validate",
+      "better-sqlite3",
+      "core-js",
+      "core-js-pure",
+    ];
+    for (const dep of NATIVE_BUILD_DEPS) existing.add(dep);
+    pkg.pnpm.onlyBuiltDependencies = [...existing].sort();
+  }
   writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
 
   // pnpm 11 changed the build-script approval mechanism in two breaking ways:
@@ -487,27 +848,31 @@ function scaffoldT3() {
   ok(`T3 scaffold written to ${PROJECT_DIR} (pnpm-managed, native builds approved)`);
 }
 
-// ─── Step 2.5: init git with .gitattributes already in place ─────────
-// Since scaffoldT3 uses --noGit, we control git init entirely. We write
-// .gitattributes FIRST (so its rules apply to the very first `git add`),
-// then init git, then stage everything. Zero reconciliation, zero friction.
+// ─── Step 4: .gitattributes + stage ─────────────────────────────────
+// The repo already exists (in-place bootstrap, CONTRACT.md §7) - there is no
+// `git init` left to do here, only writing .gitattributes and staging
+// everything the scaffold + move just wrote.
 function gitattributes() {
   log("Writing .gitattributes");
   const content = [
-    "# Normalize line endings across OSes - force LF everywhere except Windows scripts.",
+    "# Normalize line endings - force LF everywhere.",
     "* text=auto eol=lf",
-    "*.{cmd,bat,ps1} text eol=crlf",
+    // Explicit, not just covered by the blanket rule above: a CRLF shebang in a
+    // shell script produces `exec /entrypoint.sh: no such file or directory`
+    // while the file visibly exists on disk (CONTRACT.md §7, cross-platform
+    // rules). Any .sh a future add-* skill writes (or COPYs into a Dockerfile)
+    // inherits this rule from day one, regardless of the author's OS/editor.
+    "*.sh text eol=lf",
     "",
   ].join("\n");
   writeFileSync(join(PROJECT_DIR, ".gitattributes"), content);
 
-  log("git init + initial stage (attrs applied from the start)");
-  run("git init -b main", PROJECT_DIR);
+  log("Staging (attrs applied from the start)");
   run("git add -A", PROJECT_DIR);
-  ok("Git repo initialized with .gitattributes in effect");
+  ok("Scaffold staged with .gitattributes in effect");
 }
 
-// ─── Step 3: bump drizzle ─────────────────────────────────────────────
+// ─── Step 5: bump drizzle ─────────────────────────────────────────────
 function bumpDrizzle() {
   log("Bumping drizzle-orm + drizzle-kit (SQL injection patch)");
   run(`pnpm add drizzle-orm@latest ${PNPM_BUILD_FLAGS}`, PROJECT_DIR);
@@ -515,7 +880,7 @@ function bumpDrizzle() {
   ok("drizzle upgraded");
 }
 
-// ─── Step 4: cleanup demo ─────────────────────────────────────────────
+// ─── Step 6: cleanup demo ─────────────────────────────────────────────
 function cleanupDemo() {
   log("Cleaning up T3 demo files");
 
@@ -567,40 +932,118 @@ function cleanupDemo() {
   const envExample = join(PROJECT_DIR, ".env.example");
   if (existsSync(envExample)) rmSync(envExample);
 
-  // Reset src/server/db/schema.ts to a bare-bones helper-only file. T3 scaffolds
-  // a demo `posts` table that setup-db.mjs would otherwise push to Neon. Later,
-  // when Claude (or the user) replaces that table with the real app schema,
-  // drizzle-kit detects "table dropped + table added" and triggers a TTY
-  // interactive prompt ("is `contacts` a rename of `posts`?") - which crashes
-  // in Claude Code's non-TTY environment. By clearing schema.ts here, the
-  // initial setup-db push creates zero tables, and subsequent pushes only see
-  // additions (no rename detection ever fires).
+  // Reset src/server/db/schema.ts to a bare-bones placeholder. T3 scaffolds a
+  // demo `posts` table and (by default) a `pgTableCreator` table-name-prefix
+  // helper meant to let several projects share one Postgres instance. Neither
+  // applies here: each app gets its OWN dedicated Scaleway Serverless SQL
+  // database (CONTRACT.md §4), so there is no prefix hack to carry forward -
+  // tables are declared directly with drizzle-orm/pg-core's `pgTable`.
+  // Clearing the file also means the initial `drizzle-kit generate` sees zero
+  // tables, so a later replacement with the real app schema is a pure
+  // "tables added" diff - never a "table dropped + table added" diff, which
+  // triggers drizzle-kit's interactive "is `x` a rename of `y`?" TTY prompt
+  // that crashes in Claude Code's non-TTY environment.
   const schemaPath = join(PROJECT_DIR, "src/server/db/schema.ts");
   if (existsSync(schemaPath)) {
-    // String-concat to avoid escaping nested template literals: the script's
-    // `name` is the project name (e.g. "crm-perso"), and the literal `${name}`
-    // in the output is the runtime callback param (the table name).
     const schemaSrc =
-      'import { pgTableCreator } from "drizzle-orm/pg-core";\n\n' +
-      "/**\n" +
-      " * Multi-project schema prefix - every table name is automatically prefixed\n" +
-      " * with the project name to allow sharing a Neon DB across projects.\n" +
-      " * @see https://orm.drizzle.team/docs/goodies#multi-project-schema\n" +
-      " */\n" +
-      "export const createTable = pgTableCreator((name) => `" + name + "_${name}`);\n";
+      "// Add tables here with drizzle-orm/pg-core's `pgTable` - e.g.:\n" +
+      "//\n" +
+      '//   import { pgTable, serial, text } from "drizzle-orm/pg-core";\n' +
+      "//\n" +
+      '//   export const users = pgTable("users", {\n' +
+      '//     id: serial("id").primaryKey(),\n' +
+      '//     email: text("email").notNull(),\n' +
+      "//   });\n" +
+      "//\n" +
+      "// No table-name-prefix helper is needed: this app has its own dedicated\n" +
+      "// Postgres database (CONTRACT.md §4), unlike setups that share one Postgres\n" +
+      "// instance across projects.\n";
     writeFileSync(schemaPath, schemaSrc);
   } else {
     warn(`${schemaPath} not found - T3 may have moved the schema file. Skipping reset.`);
   }
 
-  ok("Demo router + component + homepage + .env.example removed, schema.ts reset to empty");
+  // T3's drizzle.config.ts keeps a `tablesFilter: ["<project>_*"]` entry for
+  // setups that share ONE Postgres instance across several apps. It does not
+  // apply here (schema.ts above was just reset WITHOUT the pgTableCreator
+  // prefix helper - CONTRACT.md §4, each app has its own database) and
+  // actively breaks drizzle-kit if left in: a table declared with a bare
+  // `pgTable` name falls OUTSIDE the filter, so drizzle-kit silently never
+  // sees it.
+  const drizzleConfigPath = join(PROJECT_DIR, "drizzle.config.ts");
+  if (existsSync(drizzleConfigPath)) {
+    const before = readFileSync(drizzleConfigPath, "utf8");
+    const after = before.replace(/^\s*tablesFilter:\s*\[[^\]]*\],?\s*\r?\n/m, "");
+    if (after !== before) {
+      writeFileSync(drizzleConfigPath, after);
+    } else {
+      warn(`${drizzleConfigPath}: no tablesFilter line found to strip - verify manually.`);
+    }
+  } else {
+    warn(`${drizzleConfigPath} not found - T3 may have moved drizzle config. Skipping tablesFilter strip.`);
+  }
+
+  // Under Next 16 the inline-type import form (`import { type AppRouter }`)
+  // still imports the value binding at runtime, dragging the server router's
+  // Node-only imports (e.g. `pg`) into this "use client" bundle. A top-level
+  // `import type` is erased at compile time instead - verified live.
+  const trpcReactPath = join(PROJECT_DIR, "src/trpc/react.tsx");
+  if (existsSync(trpcReactPath)) {
+    const before = readFileSync(trpcReactPath, "utf8");
+    const OLD_IMPORT = 'import { type AppRouter } from "~/server/api/root";';
+    const NEW_IMPORT = 'import type { AppRouter } from "~/server/api/root";';
+    if (before.includes(OLD_IMPORT)) {
+      writeFileSync(trpcReactPath, before.replace(OLD_IMPORT, NEW_IMPORT));
+    } else if (!before.includes(NEW_IMPORT)) {
+      warn(`${trpcReactPath}: expected AppRouter import not found - T3 may have changed its shape. Verify the import is type-only so the server router does not leak into the client bundle.`);
+    }
+  } else {
+    warn(`${trpcReactPath} not found - T3 may have moved the tRPC client. Verify the AppRouter import is type-only so the server router does not leak into the client bundle.`);
+  }
+
+  ok("Demo router + component + homepage + .env.example removed, schema.ts reset, tablesFilter stripped, trpc/react.tsx type-only import fixed");
 }
 
-// ─── Step 4b: lint scripts → ESLint CLI ───────────────────────────────
+// ─── Step 7: lint scripts → ESLint CLI ───────────────────────────────
 // `next lint` is deprecated since Next 15.5 and removed in Next 16, and in
 // Next 16 `next build` no longer runs ESLint either - the standalone lint
 // script becomes the only lint gate, so it must work. create-next-app ≥15.5
 // already emits `eslint`, but create-t3-app may still emit `next lint`.
+
+/** Rewires a FlatCompat-based "next/core-web-vitals" extend to
+ * eslint-config-next 16's native flat config. eslint-config-next 16 exports
+ * flat configs directly; FlatCompat cannot translate them and crashes
+ * eslint 9 with "TypeError: Converting circular structure to JSON" -
+ * verified live. Each replacement is tolerant: it applies only the patterns
+ * it finds, so a config that already looks different is left alone. */
+function patchFlatCompatToNative(content) {
+  let patched = content;
+  let applied = false;
+
+  const withImport = patched.replace(
+    'import { FlatCompat } from "@eslint/eslintrc";',
+    'import coreWebVitals from "eslint-config-next/core-web-vitals";',
+  );
+  if (withImport !== patched) {
+    patched = withImport;
+    applied = true;
+  }
+
+  const withoutCompat = patched.replace(/const compat = new FlatCompat\(\{[\s\S]*?\}\);\n*/, "");
+  if (withoutCompat !== patched) {
+    patched = withoutCompat;
+    applied = true;
+  }
+
+  const withSpread = patched.replace('...compat.extends("next/core-web-vitals"),', "...coreWebVitals,");
+  if (withSpread !== patched) {
+    patched = withSpread;
+    applied = true;
+  }
+
+  return { content: patched, applied };
+}
+
 function eslintCli() {
   log("Normalizing lint scripts to the ESLint CLI (next lint is deprecated)");
 
@@ -623,22 +1066,16 @@ function eslintCli() {
   const hasFlatConfig = ["eslint.config.js", "eslint.config.mjs", "eslint.config.cjs", "eslint.config.ts"]
     .some((f) => existsSync(join(PROJECT_DIR, f)));
   if (!hasFlatConfig) {
+    // eslint-config-next 16 exports a native flat config, so this fallback
+    // needs no FlatCompat wiring at all (unlike the scaffolder-shipped
+    // config patched below).
     writeFileSync(
       join(PROJECT_DIR, "eslint.config.mjs"),
       [
-        'import { dirname } from "path";',
-        'import { fileURLToPath } from "url";',
-        'import { FlatCompat } from "@eslint/eslintrc";',
-        "",
-        "const __filename = fileURLToPath(import.meta.url);",
-        "const __dirname = dirname(__filename);",
-        "",
-        "const compat = new FlatCompat({",
-        "  baseDirectory: __dirname,",
-        "});",
+        'import coreWebVitals from "eslint-config-next/core-web-vitals";',
         "",
         "const eslintConfig = [",
-        '  ...compat.extends("next/core-web-vitals"),',
+        "  ...coreWebVitals,",
         "  {",
         "    ignores: [",
         '      "node_modules/**",',
@@ -655,9 +1092,19 @@ function eslintCli() {
       ].join("\n"),
     );
     const allDeps = { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) };
-    const missing = ["eslint", "eslint-config-next", "@eslint/eslintrc"].filter((d) => !allDeps[d]);
+    // Pinned to the Next 16 baseline (NEXT16_VERSIONS) - an unversioned
+    // install would pull today's latest eslint (10), which crashes under
+    // eslint-config-next's parser path. @eslint/eslintrc is not needed: the
+    // template above uses eslint-config-next's native flat config, not
+    // FlatCompat.
+    const FALLBACK_ESLINT_SPECS = {
+      eslint: `eslint@${NEXT16_VERSIONS.devDependencies.eslint}`,
+      "eslint-config-next": `eslint-config-next@${NEXT16_VERSIONS.devDependencies["eslint-config-next"]}`,
+    };
+    const missing = Object.keys(FALLBACK_ESLINT_SPECS).filter((d) => !allDeps[d]);
     if (missing.length > 0) {
-      run(`pnpm add -D ${missing.join(" ")} ${PNPM_BUILD_FLAGS}`, PROJECT_DIR);
+      const specs = missing.map((d) => FALLBACK_ESLINT_SPECS[d]);
+      run(`pnpm add -D ${specs.join(" ")} ${PNPM_BUILD_FLAGS}`, PROJECT_DIR);
     }
     warn("No flat ESLint config found - wrote eslint.config.mjs (next/core-web-vitals). Verify the scaffolder output.");
   } else {
@@ -670,7 +1117,24 @@ function eslintCli() {
       .map((f) => join(PROJECT_DIR, f))
       .find((p) => existsSync(p));
     if (cfgFile) {
-      const cfg = readFileSync(cfgFile, "utf8");
+      let cfg = readFileSync(cfgFile, "utf8");
+
+      // create-t3-app still routes "next/core-web-vitals" through
+      // FlatCompat - eslint-config-next 16 ships native flat configs, and
+      // that FlatCompat path crashes eslint 9 (see patchFlatCompatToNative).
+      const { content: nativeCfg, applied } = patchFlatCompatToNative(cfg);
+      if (applied) {
+        cfg = nativeCfg;
+        writeFileSync(cfgFile, cfg);
+        ok(`${cfgFile}: rewired FlatCompat to eslint-config-next's native flat config`);
+      } else if (!cfg.includes("eslint-config-next/core-web-vitals")) {
+        warn(
+          `${cfgFile}: expected FlatCompat wiring not found, and it does not already import ` +
+            '"eslint-config-next/core-web-vitals" either - verify eslint runs cleanly ' +
+            "(eslint 9 crashes under FlatCompat with eslint-config-next 16).",
+        );
+      }
+
       if (!cfg.includes("next-env.d.ts")) {
         // Inject into the first `ignores: [ ... ]` array (the global ignores).
         const patched = cfg.replace(/ignores:\s*\[([^\]]*)\]/, (_m, inner) => {
@@ -698,7 +1162,7 @@ function eslintCli() {
   );
 }
 
-// ─── Step 5: healthcheck router ───────────────────────────────────────
+// ─── Step 8: healthcheck router ───────────────────────────────────────
 function healthcheck() {
   log("Injecting healthcheck router");
 
@@ -748,10 +1212,19 @@ export const healthcheckRouter = createTRPCRouter({
     writeFileSync(rootPath, updated);
   }
 
-  ok("Healthcheck wired into appRouter + stale JSDoc stripped");
+  // The IP gate (proxy.ts, CONTRACT.md §6) exempts only the plain
+  // /api/healthz route below, with an EXACT pathname match - a tRPC prefix
+  // exemption was a batching bypass (healthcheck.ping,admin.x?batch=1). The
+  // keep-warm Job (setup-cron-worker.mjs) pings /api/healthz for the same
+  // reason. If this route ever moves, proxy.ts must move with it.
+  const healthzDir = join(PROJECT_DIR, "src/app/api/healthz");
+  mkdirSync(healthzDir, { recursive: true });
+  writeFileSync(join(healthzDir, "route.ts"), render("deploy/healthz-route.ts", {}));
+
+  ok("Healthcheck wired: tRPC router (internal) + /api/healthz route (gate-exempt) + stale JSDoc stripped");
 }
 
-// ─── Step 6: shadcn + LinkButton ──────────────────────────────────────
+// ─── Step 9: shadcn + LinkButton ──────────────────────────────────────
 // Run an `npx shadcn` command. shadcn invokes `pnpm add` internally to install
 // the packages it needs; on pnpm 11 this can hit ERR_PNPM_IGNORED_BUILDS if a
 // new transitive dep brings a postinstall script (e.g. msw via @base-ui/react).
@@ -792,7 +1265,27 @@ function shadcn() {
   // any future `pnpm install` (e.g. when the user adds a package) exits with
   // ERR_PNPM_IGNORED_BUILDS even when `strict-dep-builds=false` is in .npmrc.
   const knownBuildPkgs = ["msw", "sharp", "esbuild", "@tailwindcss/oxide", "@swc/core", "@parcel/watcher", "unrs-resolver"];
-  const newWs = "allowBuilds:\n" + knownBuildPkgs.map((p) => `  ${p.includes("/") ? `"${p}"` : p}: true`).join("\n") + "\n";
+  const newWs =
+    "allowBuilds:\n" +
+    knownBuildPkgs.map((p) => `  ${p.includes("/") ? `"${p}"` : p}: true`).join("\n") +
+    "\n" +
+    // Both advisories are reached only through next's OWN bundled copies of
+    // postcss and sharp, not the project's direct dependency on either -
+    // verified on a live run (`pnpm audit --prod` reports `.>next>postcss`
+    // and `.>next>sharp`). `pnpm update` cannot move a transitive dep by
+    // itself; pnpm 11 needs this override instead. Drop it once next bundles
+    // patched versions of both.
+    "overrides:\n" +
+    '  postcss: ">=8.5.18"\n' +
+    '  sharp: ">=0.35.0"\n' +
+    // A published-minutes-ago version is how an npm worm reaches a project
+    // (ChainDrop, 2026: 1557 poisoned versions, pulled within hours). pnpm 11
+    // already defaults to 1440; 4320 is the 3-day floor the advisories ask for.
+    // minimumReleaseAgeStrict must stay false: pnpm defaults it to TRUE as soon
+    // as minimumReleaseAge is set explicitly, which turns "the only match is too
+    // new" into a hard install failure in front of a non-technical user.
+    "minimumReleaseAge: 4320\n" +
+    "minimumReleaseAgeStrict: false\n";
   if (existingWs !== newWs) {
     writeFileSync(wsPath, newWs);
     console.log("  → Pre-wrote pnpm-workspace.yaml with known build-script packages approved");
@@ -868,7 +1361,7 @@ export function LinkButton({ className, variant, size, ...props }: LinkButtonPro
   ok("shadcn + LinkButton + Geist fix ready");
 }
 
-// ─── Step 7 + 8: sibling scripts ──────────────────────────────────────
+// ─── Step 10 + 11: sibling scripts ──────────────────────────────────────
 function runSibling(script, extraArgs = []) {
   const p = join(__dirname, script);
   if (!existsSync(p)) fail(`Sibling script missing: ${p}`);
@@ -896,22 +1389,255 @@ function seo() {
   ok("SEO done");
 }
 
-// ─── Step 9: 404 page ─────────────────────────────────────────────────
+// ─── Step 12: local image placeholders (public/placeholders/) ─────────
+// Generated as real files, never a remote URL - the previous default (Lorem
+// Picsum / Unsplash, skills/bootstrap/SKILL.md) sent every visitor's IP to a
+// US third party on page load, invisible to rgpd-audit.mjs since it's
+// neither a dependency nor an env var. Deterministic on purpose (same index
+// -> byte-identical SVG): re-running bootstrap on the same project never
+// changes what ships, matching every other idempotent step in this file.
+const PLACEHOLDER_PALETTES = [
+  ["#6D28D9", "#DB2777"],
+  ["#2563EB", "#06B6D4"],
+  ["#059669", "#A3E635"],
+  ["#EA580C", "#FACC15"],
+  ["#DC2626", "#F472B6"],
+  ["#0F766E", "#38BDF8"],
+  ["#7C3AED", "#4F46E5"],
+  ["#B45309", "#DC2626"],
+];
+const PLACEHOLDER_GRADIENT_DIRECTIONS = [
+  { x1: "0%", y1: "0%", x2: "100%", y2: "100%" },
+  { x1: "0%", y1: "100%", x2: "100%", y2: "0%" },
+  { x1: "0%", y1: "0%", x2: "100%", y2: "0%" },
+  { x1: "0%", y1: "0%", x2: "0%", y2: "100%" },
+];
+const PLACEHOLDER_COUNT = 8;
+
+// Deterministic PRNG (mulberry32) seeded per-image, so shape placement varies
+// between the 8 placeholders without relying on Math.random (non-reproducible).
+function mulberry32(seed) {
+  let a = seed | 0;
+  return function () {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function renderPlaceholderSvg(index) {
+  const width = 1600;
+  const height = 900;
+  const [from, to] = PLACEHOLDER_PALETTES[index % PLACEHOLDER_PALETTES.length];
+  const dir = PLACEHOLDER_GRADIENT_DIRECTIONS[index % PLACEHOLDER_GRADIENT_DIRECTIONS.length];
+  const rand = mulberry32(index * 1000003 + 7);
+
+  const circles = [];
+  for (let i = 0; i < 3; i++) {
+    const cx = Math.round(rand() * width);
+    const cy = Math.round(rand() * height);
+    const r = Math.round(90 + rand() * 260);
+    const opacity = (0.06 + rand() * 0.1).toFixed(2);
+    circles.push(`<circle cx="${cx}" cy="${cy}" r="${r}" fill="${i % 2 === 0 ? "#ffffff" : "#000000"}" opacity="${opacity}" />`);
+  }
+  const p1 = [Math.round(rand() * width), Math.round(rand() * height)];
+  const p2 = [Math.round(rand() * width), Math.round(rand() * height)];
+  const p3 = [Math.round(rand() * width), Math.round(rand() * height)];
+  const triangleOpacity = (0.05 + rand() * 0.08).toFixed(2);
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" role="img" aria-hidden="true">
+  <defs>
+    <linearGradient id="g${index}" x1="${dir.x1}" y1="${dir.y1}" x2="${dir.x2}" y2="${dir.y2}">
+      <stop offset="0%" stop-color="${from}" />
+      <stop offset="100%" stop-color="${to}" />
+    </linearGradient>
+  </defs>
+  <rect width="${width}" height="${height}" fill="url(#g${index})" />
+  ${circles.join("\n  ")}
+  <polygon points="${p1.join(",")} ${p2.join(",")} ${p3.join(",")}" fill="#ffffff" opacity="${triangleOpacity}" />
+</svg>
+`;
+}
+
+function imagePlaceholders() {
+  log("Generating local image placeholders (public/placeholders/)");
+  const dir = join(PROJECT_DIR, "public/placeholders");
+  mkdirSync(dir, { recursive: true });
+  for (let i = 0; i < PLACEHOLDER_COUNT; i++) {
+    const filename = `placeholder-${String(i + 1).padStart(2, "0")}.svg`;
+    writeFileSync(join(dir, filename), renderPlaceholderSvg(i));
+  }
+  ok(`${PLACEHOLDER_COUNT} placeholder SVGs written to public/placeholders/`);
+}
+
+// ─── Step 13: 404 page ─────────────────────────────────────────────────
 // Polished server-component 404 with the shadcn Button. Generated as part of
-// the initial scaffold so every project ships with one out of the box. If
-// /add-i18n is invoked later, that addon moves this file under [locale]/ and
-// rewires it to use translations.
+// the initial scaffold so every project ships with one out of the box.
 function notFoundPage() {
   log("Writing src/app/not-found.tsx");
   // Template: templates/not-found/plain.tsx (no vars to substitute - purely static).
   // Uses LinkButton (created in shadcn()) because shadcn v4 has no asChild on Button.
-  // The i18n variant lives at templates/not-found/i18n.tsx and is swapped in by
-  // /add-i18n via _i18n-upgrade.mjs when the feature manifest is detected.
   writeFileSync(join(PROJECT_DIR, "src/app/not-found.tsx"), render("not-found/plain.tsx", {}));
   ok("404 page written");
 }
 
-// ─── Step 10: CLAUDE.md core ──────────────────────────────────────────
+// ─── Step 14: Dockerfile ───────────────────────────────────────────────
+// Copies templates/deploy/Dockerfile verbatim (no {{PLACEHOLDER}}s in it) -
+// see templates/deploy/README.md for the three failure modes it exists to
+// prevent (arm64 image, missing copy-assets step, binding 127.0.0.1). Nothing
+// here invokes `docker` yet - dockerBuildPush() builds and pushes the image
+// later, once the registry namespace exists.
+function dockerfile() {
+  log("Writing Dockerfile (multi-stage, node:24-alpine, Scaleway Serverless Containers)");
+  writeFileSync(join(PROJECT_DIR, "Dockerfile"), render("deploy/Dockerfile", {}));
+  writeFileSync(join(PROJECT_DIR, ".dockerignore"), render("deploy/.dockerignore", {}));
+  // migrate.mjs runs the migration Job (scripts/deploy.mjs) on the app image
+  // itself, so it must land in the build context the Dockerfile's runner
+  // stage COPYs from (see templates/deploy/Dockerfile).
+  writeFileSync(join(PROJECT_DIR, "migrate.mjs"), render("deploy/migrate.mjs", {}));
+  ensureMigrationJournal();
+  // proxy-ca.crt is written into the build context by _docker-build.mjs for
+  // the duration of each build and removed right after; the ignore line
+  // keeps a leftover from a killed build out of the repo.
+  const gitignorePath = join(PROJECT_DIR, ".gitignore");
+  const gitignore = existsSync(gitignorePath) ? readFileSync(gitignorePath, "utf8") : "";
+  if (!gitignore.split(/\r?\n/).some((l) => l.trim() === "proxy-ca.crt")) {
+    const sep = gitignore.length === 0 || gitignore.endsWith("\n") ? "" : "\n";
+    writeFileSync(gitignorePath, gitignore + sep + "proxy-ca.crt\n");
+  }
+  ok("Dockerfile + migrate.mjs written");
+}
+
+// migrate.mjs treats an empty or missing journal as a safe no-op (see
+// templates/deploy/migrate.mjs), but the FILE must exist so the Dockerfile's
+// `COPY drizzle ./drizzle` never fails on a fresh project - schema.ts starts
+// empty (cleanupDemo() above) and nothing in this pipeline runs
+// `drizzle-kit generate` before the first real table is added, so the
+// drizzle/ directory would not otherwise exist yet. Verified against a live
+// `drizzle-kit generate` run (drizzle-kit 0.31.10, zero-table schema): it
+// writes exactly this shape, so a later real run only appends to `entries`.
+function ensureMigrationJournal() {
+  const journalPath = join(PROJECT_DIR, "drizzle/meta/_journal.json");
+  if (existsSync(journalPath)) return;
+  mkdirSync(join(PROJECT_DIR, "drizzle/meta"), { recursive: true });
+  writeFileSync(journalPath, JSON.stringify({ version: "7", dialect: "postgresql", entries: [] }, null, 2) + "\n");
+}
+
+// ─── Step 15: next.config → output: 'standalone' ──────────────────────
+// templates/deploy/next.config.js is a FULL REPLACEMENT of next.config.js -
+// but security() (step 9, already run) PATCHES the T3-scaffolded next.config
+// in place to inject security headers, including the CSP + CSP-Report-Only
+// pair (see setup-security.mjs: it regenerates nothing, it locates the
+// existing `const config = {` object literal and injects into it). If
+// nextConfigStandalone() overwrote the file wholesale with the template, the
+// security headers security() just added would be silently lost.
+//
+// DECISION: convert templates/deploy/next.config.js's *content* (output:
+// 'standalone' + images.remotePatterns for **.scw.cloud) into a second PATCH
+// of the same style as setup-security.mjs, rather than reordering steps to
+// run this before security(). Reordering was the other option, but the
+// target step sequence puts security before this step, and a patch
+// generalizes better anyway: any
+// FUTURE step that also patches next.config.js (a11y headers, i18n, a
+// wrapper for next-pwa, ...) keeps composing instead of stepping on whichever
+// patch happens to run last.
+function nextConfigStandalone() {
+  log("Patching next.config for output: 'standalone' + Scaleway image remotePatterns");
+  const candidates = ["next.config.ts", "next.config.mjs", "next.config.js"];
+  const file = candidates.map((f) => join(PROJECT_DIR, f)).find((p) => existsSync(p));
+  if (!file) {
+    warn("next.config.(ts|mjs|js) not found - cannot patch for standalone output. See templates/deploy/next.config.js.");
+    return;
+  }
+
+  let content = readFileSync(file, "utf8");
+  let changed = false;
+
+  if (!/output:\s*["']standalone["']/.test(content)) {
+    const objRe = /(const\s+\w+\s*(?::\s*[\w.]+)?\s*=\s*\{)/;
+    const m = content.match(objRe);
+    if (!m) {
+      warn(`${file}: could not locate the config object literal - add output: "standalone" manually (see templates/deploy/next.config.js).`);
+    } else {
+      content = content.replace(objRe, `$1\n  output: "standalone",`);
+      changed = true;
+    }
+  }
+
+  if (!content.includes("**.scw.cloud")) {
+    if (/remotePatterns\s*:\s*\[/.test(content)) {
+      // An `images.remotePatterns` array already exists (another patch got here
+      // first) - extend it instead of adding a second `images` key.
+      content = content.replace(
+        /remotePatterns\s*:\s*\[/,
+        `remotePatterns: [\n      { protocol: "https", hostname: "**.scw.cloud" },`,
+      );
+    } else if (/images\s*:\s*\{/.test(content)) {
+      content = content.replace(
+        /images\s*:\s*\{/,
+        `images: {\n    remotePatterns: [{ protocol: "https", hostname: "**.scw.cloud" }],`,
+      );
+    } else {
+      const objRe = /(const\s+\w+\s*(?::\s*[\w.]+)?\s*=\s*\{)/;
+      content = content.replace(
+        objRe,
+        `$1\n  images: {\n    remotePatterns: [{ protocol: "https", hostname: "**.scw.cloud" }],\n  },`,
+      );
+    }
+    changed = true;
+  }
+
+  // Enables next/image for the local SVG placeholders (public/placeholders/,
+  // see imagePlaceholders() above) - Next.js blocks SVG optimisation by
+  // default (a script can hide inside an SVG), these three keys are Next's
+  // own documented safe opt-in. By this point the `images: {` object always
+  // exists (created or extended above), so the same locate-and-inject
+  // pattern applies.
+  if (!content.includes("dangerouslyAllowSVG")) {
+    if (/images\s*:\s*\{/.test(content)) {
+      content = content.replace(
+        /images\s*:\s*\{/,
+        `images: {\n    dangerouslyAllowSVG: true,\n    contentDispositionType: "attachment",\n    contentSecurityPolicy: "default-src 'self'; script-src 'none'; sandbox;",`,
+      );
+      changed = true;
+    } else {
+      warn(`${file}: could not locate the images object literal - add dangerouslyAllowSVG manually (see templates/deploy/next.config.js).`);
+    }
+  }
+
+  if (changed) {
+    writeFileSync(file, content);
+    ok(`${file}: patched for standalone output + Scaleway image remotePatterns + SVG placeholder support (security headers from security() preserved)`);
+  } else {
+    ok(`${file}: already has standalone output + Scaleway remotePatterns + SVG support (idempotent)`);
+  }
+}
+
+// ─── Step 16: copy-assets.js ────────────────────────────────────────────
+// Restores .next/static/ + public/ into .next/standalone/ after `next build`
+// (standalone mode does not copy them itself). Run from the Dockerfile's
+// `builder` stage - see templates/deploy/README.md failure mode #2, the
+// single most likely way this setup gets silently broken by a future edit.
+function copyAssets() {
+  log("Writing copy-assets.js");
+  writeFileSync(join(PROJECT_DIR, "copy-assets.js"), render("deploy/copy-assets.js", {}));
+  ok("copy-assets.js written");
+}
+
+// ─── Step 17: access proxy (IP allowlist) ──────────────────────────────
+// The ACCESS_RESTRICTED / ACCESS_ALLOWED_IPS gate from CONTRACT.md §6, with
+// real IPv4/IPv6 CIDR matching. Application-layer only - Scaleway has no
+// network-level IP filtering for Serverless Containers. Next 16 renamed
+// middleware.ts to proxy.ts (CONTRACT.md §6).
+function accessProxy() {
+  log("Writing src/proxy.ts (IP allowlist gate)");
+  mkdirSync(join(PROJECT_DIR, "src"), { recursive: true });
+  writeFileSync(join(PROJECT_DIR, "src/proxy.ts"), render("deploy/proxy.ts", {}));
+  ok("proxy.ts written");
+}
+
+// ─── Step 18: CLAUDE.md core ──────────────────────────────────────────
 // Writes the project's initial CLAUDE.md. Contains the unconditional T3-specific
 // conventions only - addons (add-db, add-email, ...) extend this file later via
 // _update-claude-md. Cross-project conventions (TypeScript no-any, responsive,
@@ -932,142 +1658,13 @@ function claudeMdCore() {
   ok("CLAUDE.md core written");
 }
 
-// ─── Step 10b: vercel.json (region pinning) ───────────────────────────
-// Pin serverless function execution to Frankfurt (fra1). Default Vercel region
-// is iad1 (US East Virginia), which adds ~80ms latency for EU visitors and
-// keeps data processing in the US. fra1 is the only Vercel region in the EU
-// proper (cdg1 doesn't exist on Vercel - it's a Cloudflare/CloudFront PoP).
-// Edge Functions, middleware and the static CDN are unaffected by this - they
-// still run on the global edge network closest to the visitor.
-function vercelConfig() {
-  log("Writing vercel.json (regions: fra1)");
-  writeFileSync(
-    join(PROJECT_DIR, "vercel.json"),
-    JSON.stringify({ regions: ["fra1"] }, null, 2) + "\n",
-  );
-  ok("vercel.json written");
-}
-
-// ─── workspace-root/.claude/launch.json (Claude Preview MCP) ─────────
-// Pre-registers this project in the Claude Preview MCP launch config so
-// the "Tu veux que je lance l'aperçu ?" prompt at the end of bootstrap
-// works immediately, without the MCP probing for ~30s.
-//
-// ⚠️ CRITICAL: the MCP reads launch.json from the WORKSPACE ROOT (where
-// Claude Code was launched), NOT from the individual project subfolder.
-// On the user's machine, projects live in C:\DEV\<name>\ and Claude Code
-// is launched from C:\DEV\ → the canonical launch.json is at
-// C:\DEV\.claude\launch.json (not C:\DEV\<name>\.claude\launch.json,
-// which would be invisible to the MCP).
-//
-// This function:
-//   1. Resolves the workspace root by walking UP from PROJECT_DIR looking
-//      for an existing .claude/launch.json. If found, that's the workspace.
-//      If not, fall back to dirname(PROJECT_DIR) and create one there.
-//   2. Reads the existing config (or initializes a new one).
-//   3. Adds/updates an entry for this project, using:
-//        - cwd: relative path from workspace root (required by recent MCP)
-//        - runtimeExecutable: "cmd" on Windows (+ /c pnpm dev), "pnpm" elsewhere
-//        - autoPort: true (graceful fallback if 3000 is busy)
-//   4. Preserves all other projects' entries (append-only behavior).
-function launchJsonConfig() {
-  // Walk up from PROJECT_DIR looking for an existing workspace launch.json
-  let workspaceRoot = dirname(PROJECT_DIR);
-  let probe = workspaceRoot;
-  const home = homedir();
-  for (let depth = 0; depth < 6; depth++) {
-    const candidate = join(probe, ".claude", "launch.json");
-    if (existsSync(candidate)) {
-      workspaceRoot = probe;
-      break;
-    }
-    if (probe === home || dirname(probe) === probe) break; // hit home or fs root
-    probe = dirname(probe);
-  }
-
-  const launchPath = join(workspaceRoot, ".claude", "launch.json");
-  const projectName = basename(PROJECT_DIR);
-  const cwdRelative = relative(workspaceRoot, PROJECT_DIR).split("\\").join("/");
-
-  log(`Registering project in ${launchPath} (cwd: ${cwdRelative})`);
-
-  // Read existing or initialize
-  let config = { version: "0.0.1", configurations: [] };
-  if (existsSync(launchPath)) {
-    try {
-      const parsed = JSON.parse(readFileSync(launchPath, "utf8"));
-      if (parsed && typeof parsed === "object") {
-        config = {
-          version: parsed.version || "0.0.1",
-          configurations: Array.isArray(parsed.configurations) ? parsed.configurations : [],
-        };
-      }
-    } catch (e) {
-      warn(`Existing launch.json is corrupted (${e.message}). Backing up to launch.json.bak and starting fresh.`);
-      writeFileSync(launchPath + ".bak", readFileSync(launchPath, "utf8"));
-    }
-  } else {
-    mkdirSync(dirname(launchPath), { recursive: true });
-  }
-
-  // Build the entry for this project (platform-aware runtime)
-  const isWindows = platform() === "win32";
-  const entry = {
-    name: projectName,
-    runtimeExecutable: isWindows ? "cmd" : "pnpm",
-    runtimeArgs: isWindows ? ["/c", "pnpm dev"] : ["dev"],
-    cwd: cwdRelative,
-    port: 3000,
-    autoPort: true,
-  };
-
-  // Replace existing entry with the same name, OR append
-  const idx = config.configurations.findIndex((c) => c.name === projectName);
-  if (idx >= 0) {
-    config.configurations[idx] = entry;
-  } else {
-    config.configurations.push(entry);
-  }
-
-  writeFileSync(launchPath, JSON.stringify(config, null, 2) + "\n");
-  ok(`Project '${projectName}' registered in workspace launch.json`);
-
-  // Also write a project-local launch.json so the preview works when the
-  // user launches Claude Code directly from the project dir (instead of
-  // from the workspace root). The two files never conflict - the MCP only
-  // reads one based on where Claude Code was started.
-  //
-  // Project-local entry uses cwd: "." since the workspace root IS the
-  // project itself in that case.
-  const projectLocalPath = join(PROJECT_DIR, ".claude", "launch.json");
-  mkdirSync(dirname(projectLocalPath), { recursive: true });
-  const projectLocalConfig = {
-    version: "0.0.1",
-    configurations: [
-      {
-        name: projectName,
-        runtimeExecutable: isWindows ? "cmd" : "pnpm",
-        runtimeArgs: isWindows ? ["/c", "pnpm dev"] : ["dev"],
-        cwd: ".",
-        port: 3000,
-        autoPort: true,
-      },
-    ],
-  };
-  writeFileSync(projectLocalPath, JSON.stringify(projectLocalConfig, null, 2) + "\n");
-  ok(`Project-local launch.json also written (for direct project launches)`);
-}
-
-// ─── Step 10c: privacy policy page + seed subprocessors registry ──────
+// ─── Step 19: privacy policy page + seed subprocessors registry ───────
 // Writes a data-driven privacy policy page that renders from
-// src/lib/subprocessors.ts. Then seeds that registry with Vercel - the
-// hosting provider, always present. As /add-* skills introduce new
-// third-party data processors, each one calls _update-privacy-policy to
-// add itself to the registry. The page picks up changes automatically,
-// no template re-rendering needed.
-//
-// If /add-i18n is invoked later, the page must be moved under [locale]/
-// alongside page/layout/not-found (add-i18n's SKILL.md handles this).
+// src/lib/subprocessors.ts. Then seeds that registry with Scaleway - the
+// hosting + database provider, always present. As /add-* skills introduce new
+// third-party data processors, each one calls _update-privacy-policy to add
+// itself to the registry. The page picks up changes automatically, no
+// template re-rendering needed.
 function privacyPolicy() {
   log("Writing privacy policy page + seeding subprocessors registry");
 
@@ -1082,14 +1679,37 @@ function privacyPolicy() {
     }),
   );
 
-  // Seed the registry with Vercel. This sibling call also creates
-  // src/lib/subprocessors.json and the typed TS wrapper.
-  runSibling("update-privacy-policy.mjs", ["--add", "vercel"]);
+  // KNOWN CROSS-FILE DEPENDENCY (scripts/update-privacy-policy.mjs is NOT owned
+  // by this script - see its CATALOG constant): as of this writing that
+  // catalog still only has a hosting entry for the platform this harness used
+  // BEFORE the Scaleway migration, not a "scaleway" one. This call will fail
+  // ("Unknown key: scaleway") until whoever owns that file adds a "scaleway"
+  // CATALOG entry (host + database processor, region fr-par, see CONTRACT.md
+  // §1 for the exact services). Calling `--add scaleway` here (the
+  // semantically correct key for this architecture) rather than continuing
+  // to seed the retired catalog key, so the failure is loud and obvious
+  // instead of silently shipping a wrong/stale subprocessor.
+  runSibling("update-privacy-policy.mjs", ["--add", "scaleway"]);
 
-  ok("Privacy policy page + Vercel subprocessor written");
+  ok("Privacy policy page + Scaleway subprocessor written");
 }
 
-// ─── Step 11: initial commit ──────────────────────────────────────────
+// ─── Step 20: branch-cleanup workflow ──────────────────────────────────
+// Dispatch-only maintenance workflow, the one CONTRACT.md §5 exception: a
+// web session cannot delete a remote ref, so the repository owner deletes
+// merged branches from the Actions tab instead. Not a build workflow -
+// checks 56 and 60 in tools/verify.mjs pin this.
+function cleanupWorkflow() {
+  log("Writing .github/workflows/clean-merged-branches.yml (dispatch-only maintenance workflow)");
+  mkdirSync(join(PROJECT_DIR, ".github/workflows"), { recursive: true });
+  writeFileSync(
+    join(PROJECT_DIR, ".github/workflows/clean-merged-branches.yml"),
+    render("deploy/clean-merged-branches.yml", {}),
+  );
+  ok("clean-merged-branches.yml written");
+}
+
+// ─── Step 21: initial commit ───────────────────────────────────────────
 function commit() {
   log("Creating initial commit");
   run("git add -A", PROJECT_DIR);
@@ -1101,192 +1721,363 @@ function commit() {
     return;
   }
   run(
-    ["git", "commit", "-m", '"chore: initial scaffold + security + SEO"'].join(" "),
+    ["git", "commit", "-m", '"chore: initial scaffold + security + SEO + deploy artifacts"'].join(" "),
     PROJECT_DIR,
   );
   ok("Commit done");
 }
 
-// ─── Step 10: gh repo create + push ───────────────────────────────────
-function ghRepo() {
-  log(`Creating GitHub repo (${visibility})`);
-  run(
-    `gh repo create ${name} --${visibility} --source=. --remote=origin --push`,
-    PROJECT_DIR,
-  );
-  ok("GitHub repo created + initial push");
-}
-
-// ─── Step 11: vercel link ─────────────────────────────────────────────
-function vercelLink() {
-  log("Linking Vercel project");
-  // --yes accepts the "link or create" prompt; --project pins the name.
-  run(`vercel link --yes --project ${name}`, PROJECT_DIR);
-  ok("Vercel linked");
-}
-
-// ─── Step 11b: vercel git connect (auto-deploy wiring) ────────────────
-// `vercel link` only binds the LOCAL FOLDER to the Vercel project - it does NOT
-// connect the GitHub repository. Without an explicit connection, auto-deploy
-// relies on Vercel's implicit auto-link at deploy time, which only works when
-// the user's Vercel GitHub App is installed AND covers this brand-new repo.
-// Most first-time users either have no app at all (email signup, or "logged in
-// with GitHub" which is OAuth, not the integration app) or installed it with
-// "Only select repositories" - both break the implicit link. Connecting
-// explicitly here surfaces the problem in seconds instead of after a 90s poll
-// at the very end, and verifyAutoDeploy() then merely confirms the webhook.
-let gitConnectOk = false;
-
-function gitConnect() {
-  log("Connecting GitHub repo to Vercel project (auto-deploy)");
-  const res = capture("vercel git connect --yes", PROJECT_DIR);
-  const out = `${res.stdout || ""}\n${res.stderr || ""}`.trim();
-  if (out) console.log(out.split("\n").map((l) => `  ${l}`).join("\n"));
-  if (res.status === 0) {
-    gitConnectOk = true;
-    ok("Git repository connected - pushes will auto-deploy");
-    return;
-  }
-  // Non-fatal: the first deploy goes through `vercel --prod` anyway. Claude
-  // handles the GitHub-App installation with the user at SKILL Étape 3, then
-  // re-runs `vercel git connect --yes`.
-  warn(
-    "GH_VERCEL_CONNECT_FAILED: `vercel git connect` could not attach the GitHub repo " +
-      "to the Vercel project. Typical causes: Vercel's GitHub App is not installed on the " +
-      "user's GitHub account, or it is restricted to selected repositories that do not " +
-      "include this brand-new repo. The bootstrap continues (first deploy is CLI-direct), " +
-      "but future `git push` will NOT auto-deploy until this is fixed. Claude: follow the " +
-      "GH_VERCEL_INTEGRATION_MISSING procedure in the bootstrap SKILL (Étape 3), then " +
-      "re-run `vercel git connect --yes` in the project directory.",
-  );
-}
-
-// ─── Step 14: push placeholder env vars ───────────────────────────────
-function pushEnvVars() {
-  log("Generating env vars + pushing to .env and Vercel");
-  // T3 with `--trpc --drizzle --appRouter --dbProvider postgres` (no --nextAuth)
-  // only requires DATABASE_URL in src/env.js. NextAuth-related vars (AUTH_SECRET,
-  // AUTH_DISCORD_*) are not scaffolded - /add-auth pushes real ones later when the
-  // user opts into auth. Keeping the placeholder set minimal:
-  //   - DATABASE_URL: syntactically-valid postgres URL so Drizzle's z.string().url()
-  //     validation passes at build time without ever opening a connection.
-  //   - NEXT_PUBLIC_APP_URL: the real Vercel URL for prod+preview (so SEO metadata,
-  //     sitemap, JSON-LD all resolve to the live domain on first deploy), and
-  //     localhost:3000 for dev. The default Vercel project URL is deterministic
-  //     (https://<name>.vercel.app) right after `vercel link`, so we can push it
-  //     here BEFORE the first deploy.
-  const dbPlaceholder = "postgresql://placeholder:placeholder@localhost:5432/placeholder";
-  const vercelUrl = `https://${name}.vercel.app`;
-  const localUrl = "http://localhost:3000";
-
-  // DATABASE_URL: no NEXT_PUBLIC_ prefix → push-env-vars defaults to production+preview
-  // (dev untouched, replaced later by /add-db with the real Neon connection).
-  runSibling("push-env-vars.mjs", [`"DATABASE_URL=${dbPlaceholder}"`]);
-
-  // NEXT_PUBLIC_APP_URL: different value per environment. Two calls - one for
-  // production+preview (real Vercel URL), one for development (localhost).
-  // push-env-vars uses --target=<env>[,<env>...] for explicit targeting, and is
-  // idempotent across re-runs.
-  runSibling("push-env-vars.mjs", [
-    "--target=production,preview",
-    `"NEXT_PUBLIC_APP_URL=${vercelUrl}"`,
-  ]);
-  runSibling("push-env-vars.mjs", [
-    "--target=development",
-    `"NEXT_PUBLIC_APP_URL=${localUrl}"`,
-  ]);
-
-  ok("Env vars written locally + pushed to Vercel (DATABASE_URL + NEXT_PUBLIC_APP_URL)");
-}
-
-// ─── Step 13: local build (gate) ──────────────────────────────────────
-function localBuild() {
-  log("Local build (pnpm build) - gate before deploy");
-  const res = run("pnpm build", PROJECT_DIR, { allowFail: true });
-  if (res.status !== 0) {
-    console.error(
-      "\n❌ Local build failed. Read the error above.\n" +
-        "   The partial state is on disk at:\n" +
-        `     ${PROJECT_DIR}\n` +
-        "   Vercel deploy NOT attempted. Fix the issue, then either re-run this script\n" +
-        "   in a fresh directory, or let Claude take over from here manually.\n",
+// ─── Step 22: push to the pre-existing origin ──────────────────────────
+// The repo already exists (in-place bootstrap, CONTRACT.md §7) - there is no
+// repo to create, only a first push of the scaffolded commit. A push
+// rejected by branch protection is a WARNING, not a failure: the session's
+// own pull-request flow still delivers the code (CONTRACT.md §5's fallout
+// note), and the web git credential 403s on ref DELETE (live-verified) - so
+// this never tries to work around a rejection by deleting or force-pushing
+// anything.
+function pushToOrigin() {
+  const branch = capture("git rev-parse --abbrev-ref HEAD", PROJECT_DIR).stdout?.trim() || "main";
+  log(`Pushing ${branch} to origin`);
+  const push = capture(`git push -u origin ${branch}`, PROJECT_DIR);
+  if (push.status !== 0) {
+    warn(
+      `git push was rejected: ${(push.stderr || push.stdout || "").trim().slice(0, 300)}. This is often branch ` +
+        "protection on the default branch - open a pull request instead (the session's own PR flow) to land " +
+        "this commit. Never delete or force-push the remote branch to work around it.",
     );
-    process.exit(1);
-  }
-  ok("Local build passed");
-}
-
-// ─── Step 16: vercel --prod ───────────────────────────────────────────
-// Capture stdout so we can extract the actual alias URL - Vercel often
-// suffixes the alias (crm-perso-henna.vercel.app, crm-perso-nine.vercel.app)
-// when the bare ${name}.vercel.app subdomain is already taken by another user.
-// Constructing `https://${name}.vercel.app` would hit someone else's project.
-let deployedUrl = null;
-
-function deploy() {
-  if (skipDeploy) {
-    log("--skip-deploy was passed; stopping before vercel --prod.");
     return;
   }
-  log("Deploying to Vercel production");
-  const res = capture("vercel --prod --yes", PROJECT_DIR);
-  // Tee output to our log for debugging (we lose live streaming during the
-  // deploy itself - ~45-90s - but the Monitor doesn't watch Vercel CLI lines
-  // anyway, only our own ▸ step markers).
-  if (res.stdout) process.stdout.write(res.stdout);
-  if (res.stderr) process.stderr.write(res.stderr);
-  if (res.status !== 0) {
-    fail(`vercel --prod failed (exit ${res.status})`);
+  ok(`Pushed ${branch} to origin`);
+}
+
+// ─── Step 23: Container Registry namespace ─────────────────────────────
+let registryNamespace = null;
+
+async function scwRegistryNamespace() {
+  if (skipDeploy) {
+    log("--skip-deploy was passed; skipping scwRegistryNamespace.");
+    return;
+  }
+  log("Creating Scaleway Container Registry namespace");
+  registryNamespace = await ensureRegistryNamespace(name, { projectId: scwProjectId });
+  ok(`Registry namespace ready: ${registryNamespace.endpoint}`);
+}
+
+// ─── Step 24: Serverless Containers namespace ──────────────────────────
+let containerNamespaceId = null;
+let containerNamespaceName = null;
+
+async function scwContainerNamespace() {
+  if (skipDeploy) {
+    log("--skip-deploy was passed; skipping scwContainerNamespace.");
+    return;
+  }
+  log("Creating Scaleway Serverless Containers namespace");
+  const ns = await ensureNamespace(name, { projectId: scwProjectId });
+  containerNamespaceId = ns.id;
+  containerNamespaceName = ns.name;
+  ok(`Container namespace ready (${containerNamespaceId})`);
+}
+
+// ─── Step 25: direct build + push ───────────────────────────────────────
+// Direct pipeline (CONTRACT.md §5): the machine running the harness builds
+// and pushes the image itself - no GitHub Actions, no repo secret. Runs
+// BEFORE scwContainer(): Scaleway validates a container's registryImage
+// against the registry at creation time (verified on a live run - see
+// scwContainer()'s comment below), so the container cannot exist until an
+// image is already pushed under some tag. commitSha becomes that tag - the
+// same tag format the removed GitHub Actions workflow used
+// (`${{ github.sha }}`, templates/deploy/build.yml, now deleted).
+let commitSha = null;
+let imageUri = null;
+
+async function dockerBuildPush() {
+  if (skipDeploy) {
+    log("--skip-deploy was passed; skipping dockerBuildPush.");
+    return;
+  }
+  await ensureDocker();
+  commitSha = capture("git rev-parse HEAD", PROJECT_DIR).stdout.trim();
+  const slug = slugify(name);
+
+  log(`Building + pushing the Docker image (tag ${commitSha.slice(0, 7)})`);
+  const result = await buildAndPushImage({
+    projectDir: PROJECT_DIR,
+    registryEndpoint: registryNamespace.endpoint,
+    registryNamespaceId: registryNamespace.id,
+    imageName: slug,
+    tag: commitSha,
+    log: (msg) => log(msg),
+  });
+  imageUri = result.imageUri;
+  ok(result.skipped ? `Image already present under this tag, reused: ${imageUri}` : `Image built and pushed: ${imageUri}`);
+}
+
+// ─── Step 26: Scaleway container ───────────────────────────────────────
+// Scaleway validates registryImage against the registry when a container is
+// created - a tag that does not exist yet is rejected outright
+// (`ScwError: resource registry image with ID <slug> is not found`),
+// verified on a live run. An earlier revision of this script created the
+// container first, pointed at a placeholder tag
+// (`<endpoint>/<slug>:bootstrap-pending`), meaning to repoint it at the real
+// tag once a later step had pushed it - that placeholder trick does not
+// work; Scaleway checks the image at creation time, not at deploy time.
+// dockerBuildPush() now runs first (previous step), so by the time this step
+// runs the image is already pushed under its real tag, the commit SHA
+// (CONTRACT.md §1, §5). This function both creates
+// the container AND waits for it to become ready, so a separate
+// "firstDeploy" step is no longer needed.
+//
+// Scale preset S (CONTRACT.md §1 defaults) via SCALE_PRESETS.S from
+// scripts/scaleway/container.mjs - createContainer({scale:"S"}) resolves it
+// internally; SCALE_PRESETS is also imported directly here so the values are
+// logged rather than silently trusted.
+//
+// find-or-create, mirroring deploy.mjs#updateContainerStep: a container
+// created by an earlier, partially-failed run must be reused, not treated
+// as an error on retry. The DATABASE_URL placeholder is only set on the
+// create branch - on reuse, a real value may already have been written by
+// /add-db, and this step must not clobber it.
+let containerId = null;
+let containerDomain = null;
+
+// The operator's public egress address(es), detected once by scwContainer
+// and reused by smokeTest to explain a 403.
+let detectedEgressIps = [];
+let accessBypassToken = null;
+
+// One IPv4 and one IPv6 lookup, each best-effort with a short timeout. The
+// ipify hosts return the bare address as plain text; the strict format check
+// means a captive portal or an error page can never land in
+// ACCESS_ALLOWED_IPS. This call sends the OPERATOR's own IP to a US service
+// (ipify.org) - never a visitor's - see skills/bootstrap/DOC.md.
+async function detectEgressIps() {
+  // A Claude Code web sandbox's own address is not the operator's - recording
+  // it would allowlist the sandbox VM, not the person who needs access, and
+  // sandbox VMs are ephemeral anyway (CONTRACT.md §7). Skip the network call
+  // entirely and let the SKILL ask the user for their own address instead
+  // (https://ip.me), or /publish to lift the gate.
+  if (isRemoteSandbox()) {
+    warn(
+      "Running in a Claude Code web sandbox: this machine's address is not the operator's own, so " +
+        "ACCESS_ALLOWED_IPS is not seeded from it. Ask the user to open https://ip.me and paste their own " +
+        "address, or use /publish to lift the IP gate instead.",
+    );
+    return [];
   }
 
-  const combined = (res.stdout || "") + (res.stderr || "");
-  const aliasMatch = combined.match(/Aliased:\s+(https:\/\/\S+\.vercel\.app)/);
-  const prodMatch = combined.match(/Production:\s+(https:\/\/\S+\.vercel\.app)/);
-  deployedUrl = aliasMatch?.[1] ?? prodMatch?.[1] ?? null;
+  const found = [];
+  const probes = [
+    { url: "https://api.ipify.org", re: /^\d{1,3}(\.\d{1,3}){3}$/, suffix: "/32" },
+    { url: "https://api6.ipify.org", re: /^(?=.*:)[0-9a-f:]{2,45}$/i, suffix: "/128" },
+  ];
+  for (const probe of probes) {
+    try {
+      const res = await fetch(probe.url, { signal: AbortSignal.timeout(5000) });
+      if (!res.ok) continue;
+      const ip = (await res.text()).trim();
+      if (probe.re.test(ip)) found.push(`${ip}${probe.suffix}`);
+    } catch {
+      // no route for this address family, or the service is down - non-fatal
+    }
+  }
+  return found;
+}
 
-  if (deployedUrl) {
-    ok(`Deployed to production: ${deployedUrl}`);
+async function scwContainer() {
+  if (skipDeploy) {
+    log("--skip-deploy was passed; skipping scwContainer.");
+    return;
+  }
+  const preset = SCALE_PRESETS.S;
+  log(
+    `Creating Scaleway Serverless Container (scale S: ${preset.cpuLimit}mvCPU / ${preset.memoryLimit}MB / ` +
+      `maxConcurrency ${preset.maxConcurrency}, min_scale 0, max_scale 5, port 8080)`,
+  );
+
+  const slug = slugify(name);
+  const image = `${registryNamespace.endpoint}/${slug}:${commitSha}`;
+  // Syntactically-valid Postgres URL so T3's src/env.js Zod validation
+  // (z.string().url()) passes at container startup without ever opening a
+  // real connection. /add-db replaces it with the real Serverless SQL
+  // connection string (CONTRACT.md §4) and additionally registers it in
+  // Secret Manager per the rotation model in CONTRACT.md §1.
+  const dbPlaceholder = "postgresql://placeholder:placeholder@localhost:5432/placeholder";
+
+  let created = await findContainerByName(containerNamespaceId, name);
+  if (created) {
+    ok(`Reusing existing container "${name}" (${created.id}) - pointing it at ${slug}:${commitSha.slice(0, 7)}`);
+    created = await updateContainer(created.id, { registryImage: image });
+  } else {
+    created = await createContainer({
+      namespaceId: containerNamespaceId,
+      name,
+      registryImage: image,
+      scale: "S",
+    });
+    // Only on first creation: DATABASE_URL does not exist in Secret Manager
+    // yet. A reused container implies an earlier run got this far, and a
+    // real value may already sit there (written by /add-db) - never clobber
+    // it with the placeholder again. putSecret() is create-or-new-version,
+    // so /add-db's later putSecret("DATABASE_URL", ...) still overwrites
+    // this placeholder cleanly regardless.
+    await putSecret("DATABASE_URL", dbPlaceholder, { projectId: scwProjectId });
+  }
+  containerId = created.id;
+  containerDomain = created.domain_name;
+
+  // Scaleway refuses writes while the container is in a transient state
+  // ("creating"/"deploying": 409 TransientStateError - verified on a live
+  // run), and a secret write itself triggers a new deployment. The rhythm is
+  // therefore wait, write, wait - never write-write.
+  log("Waiting for the container to leave its creation state...");
+  await waitForContainerReady(containerId, { timeoutMs: 300_000 });
+
+  // APP_URL, ACCESS_RESTRICTED and ACCESS_ALLOWED_IPS are now made CANONICAL
+  // in Secret Manager, not written to the container directly - see
+  // container.mjs's header comment: a container GET can only ever return an
+  // argon2 hash, never plaintext, so the container itself can never again
+  // serve as a read-back source of truth, and a write REPLACES the whole
+  // secret map, so a partial write deletes whatever it omits. A previous
+  // revision of this function wrote a partial map straight to the container
+  // via setContainerSecrets() - that is what deleted DATABASE_URL on a
+  // later, unrelated write elsewhere, and what turned a read-back argon2
+  // hash into a value the proxy could never match, locking every
+  // operator out with a 403.
+  //
+  // APP_URL (CONTRACT.md §2 - replaces the old hosting platform's public-URL
+  // var) is only known once the container exists (domain_name is assigned at
+  // creation). ACCESS_RESTRICTED defaults every app to IP-restricted
+  // (CONTRACT.md §6) - proxy.ts now fails CLOSED on an unset/unrecognised
+  // value, but this is still set explicitly rather than relied upon as a
+  // fallback.
+  // ACCESS_ALLOWED_IPS: without it, the fail-closed proxy lets nobody
+  // through while ACCESS_RESTRICTED is on - proxy.ts ships with NO
+  // built-in allowlist (a hardcoded default made every new project reachable
+  // only from one machine's VPN, verified on a live run). Detect this
+  // machine's egress address(es) and allow them, so the smoke test and the
+  // operator's own browser work out of the box. Best-effort: on failure the
+  // smoke test explains the 403 instead.
+  detectedEgressIps = await detectEgressIps();
+  await putSecret("ACCESS_RESTRICTED", "true", { projectId: scwProjectId });
+  await putSecret("APP_URL", `https://${containerDomain}`, { projectId: scwProjectId });
+  // ACCESS_BYPASS_TOKEN (CONTRACT.md §6): the harness's own pass through the
+  // IP gate. The web sandbox egresses from a shared pool that can never be
+  // allowlisted by address, so the smoke tests authenticate with this header
+  // token instead. Minted here, projected into the container by the secret
+  // sync below like every other non-excluded secret.
+  accessBypassToken = randomBytes(32).toString("hex");
+  await putSecret("ACCESS_BYPASS_TOKEN", accessBypassToken, { projectId: scwProjectId });
+  if (detectedEgressIps.length) {
+    const allowedIps = detectedEgressIps.join(",");
+    await putSecret("ACCESS_ALLOWED_IPS", allowedIps, { projectId: scwProjectId });
+    ok(`Operator egress address detected - ACCESS_ALLOWED_IPS=${allowedIps}`);
+    if (detectedEgressIps.length === 1) {
+      // An operator machine commonly egresses BOTH address families, and a
+      // client (e.g. curl) often prefers IPv6 - if only one family was
+      // detected here, a request over the other family gets a 403 with no
+      // clue why it happened. Warn now, while the cause is still obvious.
+      const seenFamily = detectedEgressIps[0].includes(":") ? "IPv6" : "IPv4";
+      const otherFamily = seenFamily === "IPv6" ? "IPv4" : "IPv6";
+      warn(
+        `Only ${seenFamily} was detected for this machine, so ACCESS_ALLOWED_IPS only allows ${seenFamily}. ` +
+          `If this machine also has a working ${otherFamily} address and a client prefers it, that request ` +
+          `will get HTTP 403 with no other clue why. Add the missing ${otherFamily} address to ` +
+          "ACCESS_ALLOWED_IPS if that happens.",
+      );
+    }
   } else {
     warn(
-      `Could not parse deploy URL from vercel output. Smoke test will fall back to https://${name}.vercel.app (likely wrong).`,
+      "Could not detect this machine's public IP address. ACCESS_ALLOWED_IPS stays unset, so the " +
+        "restricted app will answer 403 to everyone (including the smoke test below) until it is set " +
+        "or the app is published with /publish.",
     );
-    ok("Deployed to production");
   }
+
+  // syncContainerSecrets() does its own wait-write-wait around the secrets
+  // write (CONTRACT.md §1) and returns the container once ready again.
+  log("Syncing container secrets from Secret Manager...");
+  created = await syncContainerSecrets(containerId, { projectId: scwProjectId });
+  containerDomain = created.domain_name || containerDomain;
+
+  // No linkage file is written (CONTRACT.md §2, §7: app repos carry no
+  // Scaleway metadata at all). Every later script finds this same container
+  // again by name - the Project resolves by name (resolveProjectId()), the
+  // namespace and container by name within it (ensureNamespace() /
+  // findContainerByName(), both called with `name` again, exactly as above).
+  ok(`Container deployed and ready: https://${containerDomain}`);
 }
 
-// ─── Step 17: smoke test the live deployment ──────────────────────────
-// Curl the deployed URL with retry (Vercel can take 30-90s to serve the first
-// deploy from a fresh project), check HTTP 200 and that the project name
-// appears in the rendered HTML - proves the page rendered our code, not a
-// Vercel default landing.
+// ─── Step 27: smoke test ────────────────────────────────────────────────
+// Authenticates through the IP gate with ACCESS_BYPASS_TOKEN (minted in
+// scwContainer above, checked by templates/deploy/proxy.ts), so a 200 is
+// expected from ANY machine - web sandbox included - and a 403 is a real
+// failure, not an artifact of the caller's address. A bare 200-check is NOT
+// enough: the Geist font clobber and the missing-copy-assets.js regression
+// (templates/deploy/README.md) both still return HTTP 200 with
+// broken/unstyled markup. So this also resolves the page's own stylesheet
+// link and confirms IT loads.
 async function smokeTest() {
   if (skipDeploy) {
     log("--skip-deploy was passed; skipping smoke test too.");
     return;
   }
-  const url = deployedUrl ?? `https://${name}.vercel.app`;
+  const url = `https://${containerDomain}`;
   log(`Smoke-testing ${url}`);
+  if (!accessBypassToken) {
+    try {
+      accessBypassToken = await getSecret("ACCESS_BYPASS_TOKEN", { projectId: scwProjectId });
+    } catch {
+      warn("ACCESS_BYPASS_TOKEN could not be read back - the smoke test runs without it and a 403 below is inconclusive.");
+    }
+  }
+  const bypassHeaders = accessBypassToken ? { "x-baudrier-access-token": accessBypassToken } : {};
 
   const MAX_ATTEMPTS = 8;
   const DELAY_MS = 8000;
   let lastStatus = null;
-  let lastBody = "";
+  // The address the proxy itself observed, from its x-baudrier-client-ip
+  // 403 header (templates/deploy/proxy.ts) - lets the warning below name
+  // the exact address that failed, not just "some" 403.
+  let observedClientIp = null;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
-      const res = await fetch(url, { redirect: "follow" });
+      const res = await fetch(url, { redirect: "follow", headers: bypassHeaders });
       lastStatus = res.status;
+      if (res.status === 403) {
+        observedClientIp = res.headers.get("x-baudrier-client-ip");
+      }
       if (res.status === 200) {
-        lastBody = await res.text();
-        if (lastBody.includes(name)) {
-          ok(`HTTP 200 + project name "${name}" present in HTML (attempt ${attempt}/${MAX_ATTEMPTS})`);
+        const html = await res.text();
+        const cssMatch = html.match(/href="([^"]+\.css)"/);
+        if (!cssMatch) {
+          warn(`Smoke test: HTTP 200 but no <link ...css"> found in the HTML - cannot confirm styling shipped. Inspect ${url} manually.`);
           return;
         }
-        lastStatus = `200 but body missing "${name}" (likely Vercel propagation page)`;
+        const cssUrl = new URL(cssMatch[1], url).toString();
+        const cssRes = await fetch(cssUrl, { headers: bypassHeaders });
+        if (cssRes.status === 200) {
+          const cssBody = await cssRes.text();
+          if (cssBody.length > 50) {
+            ok(`HTTP 200 + stylesheet loads (${cssBody.length} bytes, ${cssMatch[1]}) - styling confirmed (attempt ${attempt}/${MAX_ATTEMPTS})`);
+            return;
+          }
+        }
+        warn(
+          `Smoke test: page loaded (200) but the stylesheet ${cssUrl} did not load correctly ` +
+            `(status ${cssRes.status}) - this is exactly the missing-copy-assets.js regression ` +
+            `documented in templates/deploy/README.md. Inspect the Dockerfile build logs.`,
+        );
+        return;
       }
     } catch (e) {
       lastStatus = `network error: ${e.message}`;
     }
+
+    // 403 is deterministic: the container answered and the IP gate rejected
+    // this machine. Retrying cannot change the outcome - explain it instead.
+    if (lastStatus === 403) break;
 
     if (attempt < MAX_ATTEMPTS) {
       log(`  attempt ${attempt}/${MAX_ATTEMPTS}: ${lastStatus} - waiting ${DELAY_MS / 1000}s`);
@@ -1294,182 +2085,48 @@ async function smokeTest() {
     }
   }
 
-  // Never converged - non-blocking warn, the deploy itself succeeded.
-  warn(
-    `Smoke test inconclusive after ${MAX_ATTEMPTS} attempts: last status was ${lastStatus}. ` +
-      `The deploy command succeeded but ${url} isn't serving the expected content. ` +
-      "Claude should investigate (DNS propagation, build error post-deploy, wrong project URL).",
-  );
-}
-
-// ─── Step 18: fix NEXT_PUBLIC_APP_URL if Vercel suffixed the alias ────
-// pushEnvVars (step 12) pushed `https://${name}.vercel.app` as best-guess,
-// but Vercel often suffixes when the bare subdomain is taken (henna, nine, …).
-// If so, re-push the corrected URL - verifyAutoDeploy's empty commit + push
-// will then trigger a 2nd auto-deploy that bakes the right value into the
-// client bundle (NEXT_PUBLIC_* is bundled at build time, so the 1st deploy
-// has the wrong value briefly, but the 2nd build picks up the correction).
-function fixAppUrl() {
-  if (skipDeploy) {
-    log("--skip-deploy was passed; skipping NEXT_PUBLIC_APP_URL fixup.");
-    return;
-  }
-  const bestGuess = `https://${name}.vercel.app`;
-  if (!deployedUrl || deployedUrl === bestGuess) {
-    log(`NEXT_PUBLIC_APP_URL already matches deployed URL (${bestGuess}) - no fix needed`);
-    return;
-  }
-  log(`Correcting NEXT_PUBLIC_APP_URL: ${bestGuess} → ${deployedUrl}`);
-  runSibling("push-env-vars.mjs", [
-    "--target=production,preview",
-    `"NEXT_PUBLIC_APP_URL=${deployedUrl}"`,
-  ]);
-  ok(`NEXT_PUBLIC_APP_URL corrected to ${deployedUrl} (will be baked into next build)`);
-}
-
-// ─── Step 19: verify GitHub↔Vercel auto-deploy integration ────────────
-// Push an empty commit and check whether vercel[bot] picks it up via the
-// GitHub deployments API. If not, the GitHub↔Vercel integration is missing
-// and the user will need to authorize it in their Vercel account. Non-blocking
-// - adds a structured warning to the handoff banner so Claude can guide the
-// user through the manual fix.
-async function verifyAutoDeploy() {
-  if (skipDeploy) {
-    log("--skip-deploy was passed; skipping auto-deploy verification.");
-    return;
-  }
-  log("Verifying GitHub↔Vercel auto-deploy integration");
-
-  // Empty commit + push to trigger the integration (if connected).
-  run(
-    ["git", "commit", "--allow-empty", "-m", '"chore: verify auto-deploy"'].join(" "),
-    PROJECT_DIR,
-  );
-  run("git push", PROJECT_DIR);
-
-  // Resolve owner/repo from origin URL.
-  const remote = capture("git remote get-url origin", PROJECT_DIR).stdout?.trim() || "";
-  const m = remote.match(/github\.com[:/]([^/]+)\/([^/.]+)(?:\.git)?$/);
-  if (!m) {
-    warn(
-      "Could not parse GitHub owner/repo from origin remote. Skipping vercel[bot] check; " +
-        "Claude should verify auto-deploy is wired in the final summary.",
-    );
-    return;
-  }
-  const [, owner, repo] = m;
-
-  // Vercel's webhook → GitHub deployment registration can take 30-120s on the FIRST
-  // push to a freshly-linked project (cold start, GitHub App propagation, Vercel
-  // build queue under load). Earlier versions waited only 12s, then 30/90s, and still
-  // emitted false-positive warnings when the user re-ran the same check 1-2 minutes
-  // later (without changing anything) and it succeeded. Now: poll up to ~120s total -
-  // exit on the first success.
-  // Even when gitConnect() reported failure, the implicit auto-link often works anyway
-  // (connect can error for a cosmetic/API reason while the webhook is fine). So we no
-  // longer cut that branch down to a short net - we give it a real ~90s window before
-  // declaring the integration broken, which is what eliminated the observed false
-  // positive (webhook landed at ~30-120s, past the old 30s cutoff).
-  const MAX_ATTEMPTS = gitConnectOk ? 12 : 9;
-  const DELAY_MS = 10000;
-  // per_page=10 to be safe in case there are stale deployments ahead in the list.
-  const cmd = `gh api "repos/${owner}/${repo}/deployments?per_page=10" --jq "[.[] | .creator.login]"`;
-
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    log(`  attempt ${attempt}/${MAX_ATTEMPTS}: waiting ${DELAY_MS / 1000}s for vercel[bot]`);
-    await new Promise((r) => setTimeout(r, DELAY_MS));
-
-    const res = capture(cmd, PROJECT_DIR);
-    const creators = res.stdout?.trim() || "";
-
-    if (creators.includes("vercel[bot]")) {
-      ok(
-        `vercel[bot] picked up the push - GitHub↔Vercel auto-deploy is wired ` +
-          `(detected after ~${attempt * (DELAY_MS / 1000)}s)`,
+  if (lastStatus === 403) {
+    const seen = observedClientIp ?? "an address the gate could not report";
+    if (!accessBypassToken) {
+      warn(
+        `Smoke test got HTTP 403 and no ACCESS_BYPASS_TOKEN was available to authenticate with (the gate saw ${seen}). ` +
+          "The deploy itself is fine; the gate is up. Re-run the container secret sync so the token exists, or " +
+          "check the token minting step above.",
       );
-      // The webhook is proven working, so any earlier `vercel git connect`
-      // failure was cosmetic (API/CLI hiccup). Retract its warning so the
-      // handoff banner doesn't scare the user with a contradicted alarm.
-      if (unwarn("GH_VERCEL_CONNECT_FAILED") > 0) {
-        ok(
-          "Earlier `vercel git connect` warning retracted - auto-deploy is " +
-            "proven working, the connect error was cosmetic.",
-        );
-      }
       return;
     }
+    // The request carried a valid, freshly minted token, so the gate itself
+    // rejected it: either the container's secret sync did not project
+    // ACCESS_BYPASS_TOKEN yet, or the generated src/proxy.ts lost its
+    // bypassTokenMatches() check.
+    warn(
+      `Smoke test got HTTP 403 DESPITE presenting ACCESS_BYPASS_TOKEN (the gate saw ${seen}). ` +
+        "The app is up but the harness token bypass is not working. Check that the ACCESS_BYPASS_TOKEN secret " +
+        "reached the container env (syncContainerSecrets) and that src/proxy.ts carries the " +
+        "x-baudrier-access-token check (templates/deploy/proxy.ts). The operator's own browser access is a " +
+        "separate matter: ACCESS_ALLOWED_IPS (ask https://ip.me) or /publish.",
+    );
+    return;
   }
 
-  // No vercel[bot] in the last 10 deployments after ~90s.
-  warn(
-    "GH_VERCEL_INTEGRATION_MISSING: a `git push` did not trigger a Vercel deployment " +
-      `within ~${(MAX_ATTEMPTS * DELAY_MS) / 1000}s (no vercel[bot] in the last 10 deployments on GitHub). ` +
-      "The first deploy via `vercel --prod` succeeded, but future pushes won't auto-deploy " +
-      "until the user authorizes Vercel's GitHub app at https://vercel.com/integrations/github. " +
-      "Claude should walk the user through this in the bootstrap SKILL flow. " +
-      "Note: false positives are possible if the webhook is just slow - Claude's retry in Step 3 " +
-      "should poll for another ~90s before declaring the integration broken.",
-  );
-}
-
-// ─── Detect actual GitHub user + Vercel scope for the final summary ───
-async function detectIdentities() {
-  const ghUser = capture("gh api user --jq .login", PROJECT_DIR).stdout?.trim() || "<your-gh-user>";
-  // The Vercel CLI doesn't expose teams as JSON, so we hit the REST API directly
-  // using the CLI's stored auth token (same approach as push-env-vars.mjs).
-  let vercelScope = "<your-vercel-scope>";
-  try {
-    const projectJson = JSON.parse(
-      readFileSync(join(PROJECT_DIR, ".vercel/project.json"), "utf8"),
+  if (isRemoteSandbox() && typeof lastStatus === "string" && lastStatus.startsWith("network error")) {
+    warn(
+      `Smoke test could not reach the container from this sandbox (${lastStatus}). If this persists, add the ` +
+        "container run domain family (*.fnc.fr-par.scw.cloud) to the environment's Custom network allowlist.",
     );
-    const orgId = projectJson.orgId;
-    if (orgId?.startsWith("team_")) {
-      // Vercel CLI auth file path varies by OS AND by CLI version (~v40+ moved
-      // from `Data/auth.json` to `auth.json` directly). Try both candidates per
-      // platform - must mirror push-env-vars.mjs's getAuthFilePathCandidates().
-      const os = platform();
-      const candidates = [];
-      if (os === "win32") {
-        const appData = process.env.APPDATA || join(homedir(), "AppData", "Roaming");
-        candidates.push(join(appData, "com.vercel.cli", "Data", "auth.json"));
-        candidates.push(join(appData, "com.vercel.cli", "auth.json"));
-      } else if (os === "darwin") {
-        const base = join(homedir(), "Library", "Application Support", "com.vercel.cli");
-        candidates.push(join(base, "Data", "auth.json"));
-        candidates.push(join(base, "auth.json"));
-      } else {
-        const xdgData = process.env.XDG_DATA_HOME || join(homedir(), ".local", "share");
-        candidates.push(join(xdgData, "com.vercel.cli", "Data", "auth.json"));
-        candidates.push(join(xdgData, "com.vercel.cli", "auth.json"));
-      }
-      let token = null;
-      for (const p of candidates) {
-        if (existsSync(p)) {
-          try {
-            const data = JSON.parse(readFileSync(p, "utf8"));
-            if (data.token) { token = data.token; break; }
-          } catch {/* try next candidate */}
-        }
-      }
-      if (!token) throw new Error("Vercel auth file not found in any known location.");
-      const res = await fetch("https://api.vercel.com/v2/teams", {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        const t = (data.teams || []).find((x) => x.id === orgId);
-        if (t?.slug) vercelScope = t.slug;
-      }
-    } else {
-      const who = capture("vercel whoami", PROJECT_DIR).stdout?.trim();
-      if (who) vercelScope = who;
-    }
-  } catch {/* keep placeholder - the run still succeeded, only the URL hint is approximate */}
-  return { ghUser, vercelScope };
+    return;
+  }
+
+  warn(
+    `Smoke test inconclusive after ${MAX_ATTEMPTS} attempts: last status was ${lastStatus}. ` +
+      `The deploy itself succeeded (scwContainer waited for "ready") but ${url} isn't responding as expected. ` +
+      "Claude should investigate (cold start, health-check path, missing env var).",
+  );
 }
 
 // ─── MAIN ─────────────────────────────────────────────────────────────
 await step("preflight", preflight);
+await step("scwProject", scwProject);
 await step("scaffoldT3", scaffoldT3);
 await step("gitattributes", gitattributes);
 await step("bumpDrizzle", bumpDrizzle);
@@ -1479,35 +2136,38 @@ await step("healthcheck", healthcheck);
 await step("shadcn", shadcn);
 await step("security", security);
 await step("seo", seo);
+await step("imagePlaceholders", imagePlaceholders);
 await step("notFoundPage", notFoundPage);
+await step("dockerfile", dockerfile);
+await step("nextConfigStandalone", nextConfigStandalone);
+await step("copyAssets", copyAssets);
+await step("accessProxy", accessProxy);
 await step("claudeMdCore", claudeMdCore);
-await step("vercelConfig", vercelConfig);
-await step("launchJsonConfig", launchJsonConfig);
 await step("privacyPolicy", privacyPolicy);
+await step("cleanupWorkflow", cleanupWorkflow);
 await step("commit", commit);
-await step("ghRepo", ghRepo);
-await step("vercelLink", vercelLink);
-await step("gitConnect", gitConnect);
-await step("pushEnvVars", pushEnvVars);
-await step("localBuild", localBuild);
-await step("deploy", deploy);
+await step("pushToOrigin", pushToOrigin);
+await step("scwRegistryNamespace", scwRegistryNamespace);
+await step("scwContainerNamespace", scwContainerNamespace);
+await step("dockerBuildPush", dockerBuildPush);
+await step("scwContainer", scwContainer);
 await step("smokeTest", smokeTest);
-await step("fixAppUrl", fixAppUrl);
-await step("verifyAutoDeploy", verifyAutoDeploy);
 
-const { ghUser, vercelScope } = await detectIdentities();
+// Built from the origin remote, never an API call - gh is no longer part of
+// the toolchain (CONTRACT.md §7).
+const { owner: ghOwner, repo: ghRepoName } = getGhOwnerRepo();
 
 console.log(`
 🎉 bootstrap-init complete.
 
-   Project:  ${PROJECT_DIR}
-   GitHub:   https://github.com/${ghUser}/${name}
-   Vercel:   https://vercel.com/${vercelScope}/${name}
-   Live:     ${deployedUrl ?? `https://${name}.vercel.app (UNRESOLVED - deploy URL was not captured)`}
+   Project:    ${PROJECT_DIR}
+   GitHub:     https://github.com/${ghOwner}/${ghRepoName}
+   Scaleway:   https://console.scaleway.com/ (Project "${name}"${scwProjectId ? `, ${scwProjectId}` : ""})
+   Live:       ${containerDomain ? `https://${containerDomain}` : "(UNRESOLVED - --skip-deploy was passed, or the container URL was not captured)"}
 
 Next: Claude takes over for the cahier-des-charges step, addon invocations
 (add-db to replace the DATABASE_URL placeholder, add-auth, add-email,
-add-stripe, ...), the application build, and the legal pages.
+add-storage, add-analytics, add-map), the application build, and the legal pages.
 `);
 
 dumpHandoff(true);

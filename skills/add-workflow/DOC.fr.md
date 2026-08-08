@@ -13,15 +13,15 @@ Le point commun : une **séquence finie** (2 à 8 étapes connues d'avance), dé
 
 ## Comment ça se passe
 
-1. **Vous décrivez la chaîne** : l'événement déclencheur, les étapes dans l'ordre, le résultat attendu. Hypervibe repère seule les étapes qui demandent de l'intelligence.
+1. **Vous décrivez la chaîne** : l'événement déclencheur, les étapes dans l'ordre, le résultat attendu. Baudrier repère seule les étapes qui demandent de l'intelligence.
 
-2. **Le garde-fou de durée** : Hypervibe estime le temps total et le compare à ce que votre hébergement autorise pour un traitement d'un seul tenant. En dessous de la minute, c'est toujours bon ; quelques minutes se configurent ; au-delà, elle vous propose honnêtement la version découpée (l'événement enregistre la demande, un rendez-vous planifié traite la file) ou vous réoriente vers `/add-automation`.
+2. **Le garde-fou de durée** : Baudrier estime le temps total et le compare à ce que votre hébergement autorise pour un traitement d'un seul tenant. En dessous de la minute, c'est toujours bon ; quelques minutes se configurent ; au-delà, elle vous propose honnêtement la version découpée (l'événement enregistre la demande, un rendez-vous planifié traite la file) ou vous réoriente vers `/add-automation`.
 
-3. **Mise en place** : Hypervibe crée le moteur de workflow du projet (une seule fois), votre workflow avec ses étapes typées, et le déclencheur choisi : une action dans l'app, une adresse sécurisée pour un service externe (webhook), ou un horaire via `/add-cron`.
+3. **Mise en place** : Baudrier crée le moteur de workflow du projet (une seule fois), votre workflow avec ses étapes typées, et le déclencheur choisi : une action dans l'app, une adresse sécurisée pour un service externe (webhook), ou un horaire via `/add-cron`.
 
 4. **Chaque exécution est tracée** : étape par étape, avec les durées et les erreurs, dans une table de votre base. Vous pouvez demander à tout moment : *« montre-moi les dernières exécutions »*.
 
-5. **La vraie logique, maintenant ou plus tard** : comme toujours, vous décrivez et Hypervibe implémente, ou vous gardez le squelette d'exemple et y revenez quand vous voulez.
+5. **La vraie logique, maintenant ou plus tard** : comme toujours, vous décrivez et Baudrier implémente, ou vous gardez le squelette d'exemple et y revenez quand vous voulez.
 
 ## Ce que ça crée pour vous
 
@@ -29,13 +29,13 @@ Le point commun : une **séquence finie** (2 à 8 étapes connues d'avance), dé
 - **Votre workflow**, avec ses étapes (relance automatique sur les appels réseau qui échouent)
 - Le **déclencheur** : action dans l'app, webhook sécurisé, ou tâche planifiée
 - La **table de traçage** `workflow_run` dans votre base (chaque exécution, chaque étape, chaque durée)
-- La clé Claude (`ANTHROPIC_API_KEY`) configurée si vos étapes intelligentes en ont besoin
+- La clé Scaleway Generative APIs (`SCW_GENERATIVE_API_KEY`) configurée si vos étapes intelligentes en ont besoin - réutilisée automatiquement si `/add-agent` en a déjà créé une
 - Mise à jour de `CLAUDE.md` avec le récap du workflow
 
 ## Prérequis
 
-- Un projet Next.js déployé sur Vercel (typiquement par `/bootstrap`)
-- Pour les étapes intelligentes : une clé API Claude (Hypervibe vous guide pour la créer, c'est l'affaire de 2 minutes ; chaque exécution coûte alors quelques centimes au plus, selon la taille des contenus)
+- Un projet Next.js déployé sur Scaleway (typiquement par `/bootstrap`)
+- Pour les étapes intelligentes : une clé Scaleway Generative APIs (Baudrier la crée automatiquement, aucune manip console) ; chaque exécution coûte alors une fraction de centime, selon la taille des contenus
 - Une base de données (`/add-db`) pour le traçage ; sans elle, le workflow fonctionne quand même, tracé dans les journaux
 
 ## Astuces

@@ -1,0 +1,37 @@
+{
+  "name": "baudrier",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Runtime dependencies for Baudrier, the Claude Code plugin by Calopsys. Installed into ${CLAUDE_PLUGIN_DATA} by the SessionStart hook, never into the read-only plugin cache.",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=20.20.2"
+  },
+  "dependencies": {
+    "@scaleway/sdk": "3.11.1",
+    "@scaleway/sdk-client": "2.4.2",
+    "@aws-sdk/client-s3": "^3.716.0",
+    "@aws-sdk/s3-request-presigner": "^3.716.0"
+  },
+  "comment": [
+    "VERSIONS ARE PINNED EXACTLY, NOT RANGED, AND THAT IS DELIBERATE.",
+    "",
+    "Scaleway's npm release pipeline is currently broken: the most recent publish",
+    "of every @scaleway/* package ships only package.json, README.md and LICENSE,",
+    "with no dist/ directory, while still declaring `exports` that point into",
+    "dist/. Verified against registry.npmjs.org itself (fileCount: 3), so it is",
+    "not a local install artifact.",
+    "",
+    "  @scaleway/sdk          3.11.1 ships 4 files   | 3.11.2 and 4.0.0 ship 2  BROKEN",
+    "  @scaleway/sdk-client   2.4.2  ships 137 files | 2.5.0 ships 3            BROKEN",
+    "  @scaleway/sdk-container 2.8.3 ships 36 files  | 2.8.4, 2.9.0 ship 3      BROKEN",
+    "",
+    "3.11.1 + 2.4.2 is the last combination where all 56 transitive @scaleway",
+    "packages resolve with dist/ present. A caret range here would resolve to a",
+    "broken release and fail at import time with a confusing ERR_MODULE_NOT_FOUND.",
+    "",
+    "Before relaxing these pins, check that the newer tarball actually contains",
+    "dist/ - tools/check-deps-health.mjs does exactly that."
+  ]
+}

@@ -15,16 +15,17 @@ import "maplibre-gl/dist/maplibre-gl.css";
 //
 // OpenFreeMap est gratuit, sans clé API, sans cookie, infra dédiée en Europe.
 // Maintenu par 1 personne (Zsolt Ero, ex-MapHub) avec funding par dons et
-// pas de SLA. La lib MapLibre GL JS (sur laquelle on s'appuie) est elle
-// soutenue par AWS / Microsoft, donc rock-solid à long terme - c'est juste
-// le tile provider qu'on peut vouloir swapper si OpenFreeMap tombe.
+// pas de SLA. La lib MapLibre GL JS (sur laquelle on s’appuie) est elle
+// soutenue par AWS / Microsoft, donc rock-solid à long terme - c’est juste
+// le tile provider qu’on peut vouloir swapper si OpenFreeMap tombe.
 //
 // Fallbacks possibles (1 ligne à changer ici, pas de refacto autre) :
 //   • MapTiler (100K loads/mois free, signup) :
 //       "https://api.maptiler.com/maps/streets/style.json?key=<KEY>"
 //   • Stadia Maps (200K loads/mois free en dev, signup) :
 //       "https://tiles.stadiamaps.com/styles/osm_bright.json"
-//   • Self-host PMTiles sur Cloudflare R2 (~$3/mois) :
+//   • Self-host PMTiles sur Scaleway Object Storage (S3-compatible, voir
+//       STORAGE_* dans CONTRACT.md §2) :
 //       voir docs/self-host-tiles.md
 // ───────────────────────────────────────────────────────────────────────────
 const TILE_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
@@ -197,7 +198,7 @@ export function MapView({
             anchor="bottom"
             onClick={(e) => {
               // Empêche le clic Marker de remonter au Map et de fermer le Popup
-              // qu'on est en train d'ouvrir.
+              // qu’on est en train d’ouvrir.
               e.originalEvent.stopPropagation();
               setSelected(m);
             }}

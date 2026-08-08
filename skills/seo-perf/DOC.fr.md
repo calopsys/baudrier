@@ -10,9 +10,9 @@ Mesure la vitesse réelle de votre site avec PageSpeed Insights, l'outil officie
 
 ## Comment ça se passe
 
-1. **Vérifications** : le site doit être déployé (on mesure le site en ligne, pas le code local). À la première utilisation, Hypervibe vous guide pour créer une clé Google gratuite (2 minutes, une seule fois pour tous vos projets, rangée dans votre coffre-fort).
+1. **Vérifications** : le site doit d'abord être **public** - chaque application est restreinte au VPN de l'entreprise par défaut, et Google ne peut pas atteindre un site restreint, donc Baudrier vérifie ça et propose `/publish` si besoin. Il doit aussi être déployé (on mesure le site en ligne, pas le code local). À la première utilisation, Baudrier vous guide pour créer une clé Google gratuite (2 minutes, une seule fois pour tous vos projets, rangée dans le coffre de secrets Scaleway).
 
-2. **Choix des pages représentatives** : on n'audite pas tout le site. Les pages d'un même type (template) ont la même performance, donc Hypervibe sélectionne 3 à 5 pages types (accueil, listing, formulaire...) et mesure en mobile d'abord (c'est ce que Google regarde).
+2. **Choix des pages représentatives** : on n'audite pas tout le site. Les pages d'un même type (template) ont la même performance, donc Baudrier sélectionne 3 à 5 pages types (accueil, listing, formulaire...) et mesure en mobile d'abord (c'est ce que Google regarde).
 
 3. **Mesure** : chaque page est chargée par les serveurs de Google (15 à 30 secondes par page), après un "réveil" du site pour ne pas mesurer un faux départ à froid.
 
@@ -26,10 +26,11 @@ Mesure la vitesse réelle de votre site avec PageSpeed Insights, l'outil officie
 
 - Un rapport de performance chiffré par page (scores + Core Web Vitals)
 - Les corrections validées appliquées au code
-- Une clé PageSpeed Insights réutilisable dans votre coffre-fort (première fois uniquement)
+- Une clé PageSpeed Insights réutilisable dans le coffre de secrets Scaleway (première fois uniquement)
 
 ## Prérequis
 
+- Un site **public** (`/publish`) : chaque application est restreinte au VPN de l'entreprise par défaut, et Google ne peut pas atteindre un site restreint
 - Un site **déployé** (l'audit mesure le site en ligne)
 - Une clé Google PageSpeed gratuite (création guidée à la première utilisation)
 

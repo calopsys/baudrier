@@ -1,8 +1,8 @@
 ---
 name: add-dark-mode
-description: Add dark mode support (light / dark / system) to an existing Next.js + Tailwind v4 project using next-themes. Configures the dark variant in globals.css, audits existing colors and proposes dark-mode tokens, mounts ThemeProvider in the root layout (and in the [locale] layout if i18n is detected), and creates a 3-state ThemeToggle component ready to drop in the header / navbar / footer.
+description: Add dark mode support (light / dark / system) to an existing Next.js + Tailwind v4 project using next-themes. Configures the dark variant in globals.css, audits existing colors and proposes dark-mode tokens, mounts ThemeProvider in the root layout, and creates a 3-state ThemeToggle component ready to drop in the header / navbar / footer.
 argument-hint: ""
-compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (vercel, gh)."
+compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (scw, gh)."
 ---
 
 # Add Dark Mode - next-themes + Tailwind v4
@@ -205,37 +205,17 @@ export function ThemeProvider({
 
 ## Step 6 - Create the ThemeToggle component
 
-The `ThemeToggle` component follows the standard pattern of the plugin's i18n-aware features. Templates in `templates/theme-toggle/{plain.tsx, i18n.tsx, messages-fr.json, messages-en.json, manifest.json}`.
-
-### 6.a - Detect i18n and choose the variant
+### 6.a - Copy the template
 
 ```bash
 PLUGIN_ROOT="${CLAUDE_SKILL_DIR}/../.."
-if [ -f "$WEB_DIR/src/i18n/routing.ts" ]; then
-  VARIANT="i18n"
-else
-  VARIANT="plain"
-fi
-```
-
-### 6.b - Copy the right template
-
-```bash
 mkdir -p "$WEB_DIR/src/components"
-cp "$PLUGIN_ROOT/templates/theme-toggle/$VARIANT.tsx" "$WEB_DIR/src/components/ThemeToggle.tsx"
+cp "$PLUGIN_ROOT/templates/theme-toggle/plain.tsx" "$WEB_DIR/src/components/ThemeToggle.tsx"
 ```
 
-### 6.c - If i18n is active, merge the messages
+The template ships hardcoded French labels (`groupLabel`, `light`, `system`, `dark`) - the app is French-only, no messages to merge.
 
-```bash
-if [ "$VARIANT" = "i18n" ]; then
-  node "$PLUGIN_ROOT/scripts/_i18n-merge-messages.mjs" --web-dir "$WEB_DIR" --feature theme-toggle
-fi
-```
-
-The helper merges the `theme.*` keys (`groupLabel`, `light`, `system`, `dark`) into all the project's `messages/<locale>.json`. EN fallback for the locales the template does not ship.
-
-### 6.d - Check the dependencies
+### 6.b - Check the dependencies
 
 **Check that `lucide-react` is installed** (present by default in most T3 / shadcn projects). Otherwise:
 
@@ -248,9 +228,7 @@ pnpm add lucide-react
 
 ## Step 7 - Mount the ThemeProvider in the root layout
 
-Detect the layout(s) to modify. Cases:
-- **Single layout** (no i18n): `src/app/layout.tsx` (or the detected variant)
-- **With i18n** (next-intl with `[locale]`): mount the provider in `src/app/[locale]/layout.tsx` (the root layout just serves the raw HTML, the provider must be INSIDE the localized segment so the React context is available on the component side)
+Detect the layout to modify: `src/app/layout.tsx` (or the equivalent path detected in the project, e.g. with the `apps/web/` prefix in a monorepo).
 
 Read the target layout. Add the import:
 
@@ -288,7 +266,7 @@ Reason: the ThemeProvider is purely presentation-UI, it does not need the contex
 
 ## Step 8 - Add suppressHydrationWarning to <html>
 
-In the `<html>` of the root layout (the very first one - the one in `app/layout.tsx`, NOT the one in `[locale]/layout.tsx` if i18n):
+In the `<html>` of the root layout (`app/layout.tsx`):
 
 ```tsx
 <html lang="fr" suppressHydrationWarning>

@@ -1,76 +1,40 @@
 #!/usr/bin/env node
-// open-url.mjs - Cross-platform helper to open a URL in the user's default browser.
+// open-url.mjs - Prints a URL for the user to open (no local browser to launch
+// on Claude Code web).
 //
 // Usage:
 //   node open-url.mjs "https://example.com/some/path"
+//   node open-url.mjs --json "https://example.com/some/path"
 //
-// Behavior:
-//   - macOS  : `open <url>`
-//   - Windows: `cmd /c start "" <url>`
-//   - Linux  : `xdg-open <url>` (fallback `sensible-browser`, then `gio open`)
+// --json prints {"ok":true,"opened":false,"method":"none","url":"..."}. In
+// human mode it prints the marker OPEN_URL_MANUAL followed by the URL, so
+// Claude can relay a clickable link to the user.
 //
 // Exit codes:
-//   0 = launch command spawned successfully (browser opening async)
-//   1 = invalid input / no launch command available
+//   0 = URL printed for the user
+//   1 = invalid input (missing / non-http(s) URL)
 
-import { spawn } from "node:child_process";
-import { platform } from "node:os";
+const args = process.argv.slice(2);
+const JSON_OUT = args.includes("--json");
+const url = args.find((a) => !a.startsWith("--"));
 
-const url = process.argv[2];
+// Scheme validation stays even with no launcher: this value reaches the user's
+// clipboard/terminal, and `file://` or `javascript:` must never be relayed.
 if (!url || !/^https?:\/\//.test(url)) {
-  console.error("Usage: open-url.mjs <https-url>");
+  const usage = "Usage: open-url.mjs [--json] <https-url>";
+  if (JSON_OUT) process.stdout.write(JSON.stringify({ ok: false, opened: false, method: "none", reason: usage }) + "\n");
+  else console.error(usage);
   process.exit(1);
 }
 
-const p = platform();
-
-let cmd, args;
-if (p === "darwin") {
-  cmd = "open";
-  args = [url];
-} else if (p === "win32") {
-  // cmd /c start "" <url> - the empty title is intentional so `start` doesn't parse the URL as a title
-  cmd = "cmd";
-  args = ["/c", "start", "", url];
+if (JSON_OUT) {
+  process.stdout.write(JSON.stringify({ ok: true, opened: false, method: "none", url }) + "\n");
 } else {
-  // Linux / *BSD / others
-  cmd = "xdg-open";
-  args = [url];
+  process.stdout.write(
+    "OPEN_URL_MANUAL\n" +
+      "Aucun navigateur ne peut être ouvert automatiquement sur cette machine.\n" +
+      "Ouvrez ce lien vous-même :\n" +
+      `${url}\n`,
+  );
 }
-
-const child = spawn(cmd, args, {
-  detached: true,
-  stdio: "ignore",
-  shell: false,
-});
-
-child.on("error", (err) => {
-  // If xdg-open isn't installed (some minimal Linux distros), try fallbacks
-  if (p !== "darwin" && p !== "win32") {
-    const fallbacks = ["sensible-browser", "gio"];
-    let tried = 0;
-    function tryNext() {
-      if (tried >= fallbacks.length) {
-        console.error(`Failed to open URL: no launcher available (${err.message})`);
-        process.exit(1);
-      }
-      const fb = fallbacks[tried++];
-      const fbArgs = fb === "gio" ? ["open", url] : [url];
-      const c = spawn(fb, fbArgs, { detached: true, stdio: "ignore", shell: false });
-      c.on("error", tryNext);
-      c.on("spawn", () => {
-        c.unref();
-        process.exit(0);
-      });
-    }
-    tryNext();
-  } else {
-    console.error(`Failed to open URL: ${err.message}`);
-    process.exit(1);
-  }
-});
-
-child.on("spawn", () => {
-  child.unref();
-  process.exit(0);
-});
+process.exit(0);

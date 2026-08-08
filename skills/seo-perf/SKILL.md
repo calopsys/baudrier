@@ -2,20 +2,22 @@
 name: seo-perf
 description: "Measures the real performance of a deployed Next.js site via the PageSpeed Insights API (Google-side Lighthouse), on representative pages, then proposes fixes prioritized by measured impact. Confronts the SEO work with objective numbers (Core Web Vitals, performance/accessibility/SEO/best-practices scores). Auto-invoked at the end of /seo (flag --from-seo); also callable standalone when the user wants to re-measure their performance."
 argument-hint: ""
-compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (vercel, gh)."
+compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (scw, gh)."
 ---
 
 # seo-perf: Measured performance audit (PageSpeed Insights / Lighthouse)
 
 ## Communication
-- Detect the user's language from their messages and ALWAYS reply in that language (default: English). This applies to every user-facing message: questions, progress, confirmations, summaries, errors.
+- Detect the user's language from their messages and ALWAYS reply in that language (default: French for this product's user base). This applies to every user-facing message: questions, progress, confirmations, summaries, errors.
 - Use plain, non-technical business language. Never expose internal script names (*.mjs) or jargon; describe actions in human terms.
 - When generating user-facing content for the scaffolded project (UI labels, emails, copy), write it in the user's language too.
 - Show progress as a short natural-language checklist (in-progress and done states).
 
-You measure the real performance of the **deployed** site with the PageSpeed Insights (PSI) API, which runs a real Lighthouse on Google's servers. You confront the result with the optimizations that were made, you give numbers, and you propose fixes sorted by real impact.
+You measure the real performance of the **deployed** site with the PageSpeed Insights (PSI) API, which runs a real Lighthouse on **Google's** servers. You confront the result with the optimizations that were made, you give numbers, and you propose fixes sorted by real impact.
 
 **What this audit brings that reading the code alone does not**: numbers measured on the deployed build (LCP, CLS, INP in milliseconds), the reality of the bundle after build, prioritization by real impact, and (when traffic exists) the Core Web Vitals experienced by real visitors. It is a layer of **measurement and ground-truth**, not a new detection engine: the purely structural checks (presence of `next/image`, `alt`, etc.) are already covered by the static audit of `/seo`.
+
+⚠️ **Honest limitation of this skill in a sovereignty-first harness**: this audit necessarily calls a Google API (there is no French/EU equivalent with the same reach), and it needs Google's servers to actually load the site. Every app ships IP-restricted to the office VPN by default (`ACCESS_RESTRICTED=true`, CONTRACT.md §6), so **this cannot work until the user runs `/publish`**. Step 0 below detects that state up front and explains it in French - it never reports a spurious failure or a misleading score of zero. A self-hosted Lighthouse (no Google dependency at all) is a documented future option, not built here - see the Technical notes at the end.
 
 ---
 
@@ -46,42 +48,102 @@ The user is neither a developer nor a performance expert. The report must be rea
 
 ### 0a: Is the site deployed?
 
-The audit is about the **live production URL**, not the local code. Get the project's prod URL (the `NEXT_PUBLIC_SITE_URL` or `NEXT_PUBLIC_APP_URL` variable in `.env`, or the known custom domain). Verify that it responds:
+The audit is about the **live production URL**, not the local code. Get the project's prod URL (`APP_URL` in `.env`, or the known custom domain). Verify that it responds:
 
 ```bash
 curl -s -o /dev/null -w "%{http_code}" --max-time 20 "<URL_PROD>"
 ```
 
 - If the URL does not exist or returns an error, explain that `seo-perf` measures a site that is **online**, so it must first be deployed (ask me to deploy). Stop cleanly.
-- If the URL still points to a `.vercel.app` (no custom domain), continue anyway, but mention it (the numbers are still valid).
+- If the URL still points to the raw container URL (no custom domain), continue anyway, but mention it (the numbers are still valid).
 
-### 0b: Is the PageSpeed Insights key in the vault?
+### 0b: Detect the VPN IP restriction (must run before any PSI call)
 
-The PSI API **requires a key**: without a key, it systematically returns `429`s (verified in real conditions). It is a **free** Google key (25,000 requests/day, no billing), **global and reusable** across all projects: so it is created only **once**.
+Every app ships IP-restricted by default (`ACCESS_RESTRICTED=true`, CONTRACT.md §6): Google's PageSpeed Insights servers cannot load the site at all in that state - every call would return a generic error or a misleadingly low/zero score, not a real measurement. Detect this explicitly rather than reporting either as if something were broken.
 
-Try to read it (follow the `_get-secret` pattern):
+Resolve the container to confirm the site is deployed, then read the live value from Secret Manager - a container GET only ever returns an argon2 hash, never plaintext (CONTRACT.md §1), so Secret Manager is the only readable source of truth, not the container:
 
 ```bash
-KEY=$(node "${CLAUDE_SKILL_DIR}/../../scripts/vault/vault.mjs" get PAGESPEED api_key 2>/dev/null); echo "exit=$?"
+CONTAINER_MJS="${CLAUDE_SKILL_DIR}/../../scripts/scaleway/container.mjs" \
+SECRETS_MJS="${CLAUDE_SKILL_DIR}/../../scripts/scaleway/secrets.mjs" \
+PROJECT_NAME="<PROJECT_NAME>" \
+CONTAINER_NAME="<resolved container name>" \
+node --input-type=module -e '
+import { pathToFileURL } from "node:url";
+const { ensureNamespace, findContainerByName } = await import(pathToFileURL(process.env.CONTAINER_MJS).href);
+const { getSecret } = await import(pathToFileURL(process.env.SECRETS_MJS).href);
+const ns = await ensureNamespace(process.env.PROJECT_NAME);
+const container = await findContainerByName(ns.id, process.env.CONTAINER_NAME);
+if (!container) { console.log(JSON.stringify({ ok: false, error: "container_not_found" })); process.exit(1); }
+// Production-canonical: this skill only ever audits the public production site (never a preview
+// container), so ACCESS_RESTRICTED is production's own value in Secret Manager.
+try {
+  const accessRestricted = await getSecret("ACCESS_RESTRICTED");
+  console.log(JSON.stringify({ ok: true, accessRestricted }));
+} catch (e) {
+  // not_found (or any other read failure) fails closed: treat as restricted.
+  console.log(JSON.stringify({ ok: true, accessRestricted: e.type === "not_found" ? "true" : null }));
+}
+'
 ```
 
-- **exit 0**: key present, continue.
-- **exit 2 or 3** (vault locked / expired): warn the user ("the vault is locked, a window will open for your master password"), launch `node "${CLAUDE_SKILL_DIR}/../../scripts/vault/launch.mjs" unlock` (blocking), then retry the read.
-- **exit 4** (key absent): this is the first use of `seo-perf` on this machine. Guide the key creation by following the **"Create the PageSpeed Insights key" appendix** below (hardcoded how-to, follow it as-is). Once the user has the key, store it via the vault's masked window:
+- **`container_not_found`** -> already covered by 0a (not deployed), stop there.
+- **`accessRestricted` is `"true"` or missing/unclear** (treat conservatively as restricted) -> **STOP. Do not call PSI at all, do not report a score.** Explain in French:
+
+  > 🔒 **PageSpeed Insights ne peut pas encore mesurer votre site**
+  >
+  > Par défaut, chaque application est protégée : seul le VPN de l'entreprise peut y accéder. Les serveurs de Google (PageSpeed Insights) ne peuvent donc pas du tout charger vos pages tant que cette protection est active - ce n'est pas une panne de ma part, c'est le comportement normal et volontaire de votre application. Lancer l'audit maintenant donnerait un score faux (souvent 0 ou une erreur), pas une vraie mesure.
+  >
+  > Pour que cette analyse fonctionne, il faut d'abord rendre le site public avec `/publish`. Vous pourrez ensuite relancer `/seo-perf`.
+
+  Stop cleanly - do not fall through to Step 1.
+- **`accessRestricted === "false"`** -> the site is public, continue to 0c.
+- If the container lookup fails for an unrelated reason, fall back to `.env`'s `ACCESS_RESTRICTED` as a best-effort signal, noting to the user it may be stale.
+
+### 0c: Is the PageSpeed Insights key available?
+
+The PSI API **requires a key**: without a key, it systematically returns `429`s (verified in real conditions). It is a **free** Google key (25,000 requests/day, no billing), stored in this app's own Scaleway Secret Manager Project as `PAGESPEED_API_KEY` (CONTRACT.md §2). The key value itself is free and reusable: pasting the same value into each new project's Secret Manager costs nothing beyond a minute of setup.
+
+Try to read it:
+
+```bash
+SECRETS_MJS="${CLAUDE_SKILL_DIR}/../../scripts/scaleway/secrets.mjs" \
+node --input-type=module -e '
+import { pathToFileURL } from "node:url";
+const { getSecret } = await import(pathToFileURL(process.env.SECRETS_MJS).href);
+try {
+  const key = await getSecret("PAGESPEED_API_KEY");
+  console.log(JSON.stringify({ ok: true, key }));
+} catch (e) {
+  console.log(JSON.stringify({ ok: false, error: e.type || "error" }));
+}
+'
+```
+
+- **`ok: true`**: key present, continue (never display `key`; keep it in a shell variable).
+- **`ok: false`, `error: "not_found"`**: this is the first use of `seo-perf` on this project. Guide the key creation by following the **"Create the PageSpeed Insights key" appendix** below (hardcoded how-to, follow it as-is) - unless the user already has the key from another project, in which case ask them to paste it directly. Once the user has the key, store it:
 
   ```bash
-  node "${CLAUDE_SKILL_DIR}/../../scripts/vault/launch.mjs" add --name PAGESPEED --service PageSpeed --fields "api_key:secret"
+  SECRETS_MJS="${CLAUDE_SKILL_DIR}/../../scripts/scaleway/secrets.mjs" \
+  KEY_VALUE="<the AIza... key the user pasted>" \
+  node --input-type=module -e '
+  import { pathToFileURL } from "node:url";
+  const { putSecret } = await import(pathToFileURL(process.env.SECRETS_MJS).href);
+  await putSecret("PAGESPEED_API_KEY", process.env.KEY_VALUE);
+  console.log(JSON.stringify({ ok: true }));
+  '
   ```
 
-  (The value is entered in the window, it never passes through you.) Then re-read the key to confirm.
+  Then re-read the key to confirm.
 
   **Once the key is stored and confirmed**, automatically document it in the user's global CLAUDE.md (idempotent: does nothing if it is already there), so they find it in their Claude Code memory:
 
   ```bash
   node "${CLAUDE_SKILL_DIR}/../../scripts/remember-global-key.mjs" \
-    --name PAGESPEED \
-    --line "PAGESPEED (champ api_key) : clé Google PageSpeed Insights, gratuite et globale (réutilisable sur tous les projets). Lue par la skill seo-perf via scripts/psi-audit.mjs. Récupération : KEY=\$(bw-get PAGESPEED api_key)."
+    --name PAGESPEED_API_KEY \
+    --line "PAGESPEED_API_KEY : clé Google PageSpeed Insights, gratuite. La valeur est réutilisable : collez-la telle quelle dans le Secret Manager Scaleway de chaque nouveau projet. Lue par la skill seo-perf via scripts/psi-audit.mjs."
   ```
+- **`ok: false` with another `error`**: relay it plainly (likely missing/invalid Scaleway credentials - point to `/start`).
 
 **Never display the value of the key.** It is read into a shell variable and passed to the script via the `PSI_KEY` env variable.
 
@@ -129,10 +191,15 @@ Options:
 
 ## Step 3: Run the audit
 
-Run the bundled engine on the selected URLs. Pass it the key via the `PSI_KEY` env (never in plain text on the command line), and `--warmup` (a preliminary hit on each page to wake up the Vercel serverless function and **avoid measuring a cold start**, which would artificially inflate the LCP / TTFB).
+Run the bundled engine on the selected URLs. Pass it the key via the `PSI_KEY` env (never in plain text on the command line), and `--warmup` (a preliminary hit on each page to wake up the Scaleway Serverless Container and **avoid measuring a cold start**, which would artificially inflate the LCP / TTFB - the container may have scaled to zero, CONTRACT.md §1).
 
 ```bash
-PSI_KEY=$(node "${CLAUDE_SKILL_DIR}/../../scripts/vault/vault.mjs" get PAGESPEED api_key 2>/dev/null) \
+PSI_KEY=$(SECRETS_MJS="${CLAUDE_SKILL_DIR}/../../scripts/scaleway/secrets.mjs" \
+  node --input-type=module -e '
+  import { pathToFileURL } from "node:url";
+  const { getSecret } = await import(pathToFileURL(process.env.SECRETS_MJS).href);
+  process.stdout.write(await getSecret("PAGESPEED_API_KEY"));
+  ') \
   node "${CLAUDE_SKILL_DIR}/../../scripts/psi-audit.mjs" \
   --urls "<URL1>,<URL2>,<URL3>" --strategy mobile --warmup
 ```
@@ -192,7 +259,7 @@ From the `diagnostics` and `opportunities`, propose fixes. **Strictly distinguis
 |---|---|
 | `color-contrast` | Touches the **brand colors** (e.g. a signature yellow on a light background). It is a design decision, not a patch. Propose a lead, let them decide. |
 | High LCP/INP/TBT due to heavy client JS (`bootup-time`, `mainthread-work-breakdown`, `max-potential-fid`) | Requires **architecture** choices (reduce JS, server components), not a mechanical tweak. |
-| Server response time / TTFB (`server-response-time`) | Depends on the hosting (Vercel cold starts), not on the page code. |
+| Server response time / TTFB (`server-response-time`) | Depends on the hosting (Scaleway Serverless Containers cold starts when scaled to zero), not on the page code. |
 | Number identified as **measurement noise** in Step 3 | You do not fix an unstable number. |
 
 ### Rules of the improvement pass
@@ -233,7 +300,7 @@ Recap:
 
 ## Appendix: Create the PageSpeed Insights key (hardcoded how-to)
 
-Follow **as-is** when the key is absent from the vault (exit 4 in Step 0b). The key is free (no billing) and reusable across all projects: created once.
+Follow **as-is** when the key is absent from Secret Manager (`error: "not_found"` in Step 0c). The key is free (no billing) and its value is reusable across projects: create it once, then paste the same value into each new project's Secret Manager.
 
 Guide the user, step by step:
 
@@ -248,11 +315,7 @@ Guide the user, step by step:
 >    - **Application restrictions** (bottom section): leave it on **"None"**. The key will be called from scripts with a changing IP, so a per-IP or per-site restriction would break it. The risk is low (the key only reads public performance).
 >    - Click **"Create"**. A key `AIza…` is displayed: **copy it**.
 
-Then store the key in the vault (masked window):
-
-```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/vault/launch.mjs" add --name PAGESPEED --service PageSpeed --fields "api_key:secret"
-```
+Then store the key as shown in Step 0c (`putSecret("PAGESPEED_API_KEY", ...)` in this app's own Secret Manager Project).
 
 ---
 
@@ -262,3 +325,4 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/vault/launch.mjs" add --name PAGESPEED -
 - **PSI endpoint**: `https://www.googleapis.com/pagespeedonline/v5/runPagespeed`. One call = **one URL + one strategy** (mobile OR desktop). The full matrix = pages × strategies; hence the "representative pages + mobile by default" rule.
 - **Quota**: 25,000 requests/day, 400 per 100 s with the key. Largely sufficient.
 - **Lighthouse v13.3+** exposes an "Agentic Browsing" category (audit of `llms.txt`, etc.): deliberately **not used here** (no stable score, and not yet exposed by the PSI API). GEO remains the domain of `/geo`.
+- **Google dependency (honest limitation)**: this skill calls the PageSpeed Insights API, a Google service - there is no equivalent French/EU provider with the same Lighthouse-on-real-Chrome reach. A **self-hosted Lighthouse** (running `lighthouse`/`chrome-launcher` inside a Scaleway Serverless Job, no Google API involved) would remove this dependency entirely and is a documented **future option** - it is not built here. Until then, this is the one remaining Google-dependent layer of the SEO suite (`/seo` itself is a fully local static audit, no external call).

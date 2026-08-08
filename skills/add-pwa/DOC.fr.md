@@ -10,15 +10,15 @@ Transforme votre site en app installable (PWA) sur téléphone et ordinateur, sa
 
 ## Comment ça se passe
 
-1. **Vérification** : si la PWA est déjà en place, Hypervibe propose un menu (régénérer les icônes, changer le nom ou les couleurs, réinstaller des morceaux).
+1. **Vérification** : si la PWA est déjà en place, Baudrier propose un menu (régénérer les icônes, changer le nom ou les couleurs, réinstaller des morceaux).
 
-2. **Détection du projet** : Hypervibe vérifie que c'est un projet Next.js et que le favicon (`icon.svg`, créé par `/bootstrap`) est présent, car les icônes de l'app en dérivent.
+2. **Détection du projet** : Baudrier vérifie que c'est un projet Next.js et que le favicon (`icon.svg`, créé par `/bootstrap`) est présent, car les icônes de l'app en dérivent.
 
 3. **Installation de Serwist** : la bibliothèque qui gère le "service worker" (le composant invisible qui rend l'app installable et lui donne un cache hors-ligne).
 
 4. **Manifest** : la carte d'identité de votre app (nom, couleurs, icônes, mode plein écran), générée à partir de votre projet (nom et palette détectés automatiquement).
 
-5. **Icônes** : Hypervibe rasterise votre favicon en toutes les tailles nécessaires (Android, iOS, icône "maskable" avec zone de sécurité), aux couleurs de votre thème.
+5. **Icônes** : Baudrier rasterise votre favicon en toutes les tailles nécessaires (Android, iOS, icône "maskable" avec zone de sécurité), aux couleurs de votre thème.
 
 6. **Fenêtre d'invitation à l'installation** : une petite fenêtre s'affiche sur mobile pour inviter le visiteur à installer l'app. Sur Android, un bouton "Installer" déclenche l'installation native ; sur iPhone, elle explique pas à pas le geste "Partager puis Sur l'écran d'accueil" (Apple n'offre pas de bouton direct). Elle ne s'affiche ni sur ordinateur, ni si l'app est déjà installée, et sait se faire oublier 3 jours quand on la ferme.
 

@@ -10,14 +10,14 @@ Ajoute la **double authentification** au login de votre app : un code à 6 chiff
 
 ## Comment ça se passe
 
-1. **Choix de l'appli** : Hypervibe demande quelle appli d'authentification vous (ou vos utilisateurs) allez utiliser.
+1. **Choix de l'appli** : Baudrier demande quelle appli d'authentification vous (ou vos utilisateurs) allez utiliser.
 
 2. **Détection de l'authentification** : il détecte comment votre projet gère le login et s'adapte :
-  - **Espace admin** (un login unique fixe) : la 2FA est rendue **obligatoire** pour cet admin. La clé secrète et les codes de secours sont rangés en sécurité dans votre coffre-fort de mots de passe, jamais affichés dans le chat.
+  - **Espace admin** (un login unique fixe) : la 2FA est rendue **obligatoire** pour cet admin. La clé secrète et les codes de secours sont rangés en sécurité dans Scaleway Secret Manager, jamais affichés dans le chat.
   - **Comptes utilisateurs** : la 2FA devient **optionnelle pour chaque utilisateur**, et chacun l'active depuis sa propre page de compte. La clé et les codes de secours de chaque personne vivent dans la base de données, liés à son compte.
 
-3. **Installation** : Hypervibe met tout en place : la génération des codes, le parcours de connexion avec l'étape supplémentaire, une option « appareil de confiance » pour ne pas redemander le code à chaque visite, et une déconnexion automatique après inactivité. Il prépare aussi le QR code (ou la clé) pour enrôler votre appli.
+3. **Installation** : Baudrier met tout en place : la génération des codes, le parcours de connexion avec l'étape supplémentaire, une option « appareil de confiance » pour ne pas redemander le code à chaque visite, et une déconnexion automatique après inactivité. Il prépare aussi le QR code (ou la clé) pour enrôler votre appli.
 
-4. **Codes de secours** : un jeu de codes de secours à usage unique est généré au cas où vous perdriez votre téléphone. Ils sont rangés en sécurité (coffre ou compte), jamais affichés en clair dans le chat.
+4. **Codes de secours** : un jeu de codes de secours à usage unique est généré au cas où vous perdriez votre téléphone. Ils sont rangés en sécurité (Secret Manager ou compte), jamais affichés en clair dans le chat.
 
-> **Prérequis** : votre projet doit déjà avoir un login. S'il n'en a pas, Hypervibe propose d'en installer un d'abord, puis ajoute la 2FA juste après.
+> **Prérequis** : votre projet doit déjà avoir un login. S'il n'en a pas, Baudrier propose d'en installer un d'abord, puis ajoute la 2FA juste après.

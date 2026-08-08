@@ -1,0 +1,66 @@
+Baudrier
+Copyright 2026 Calopsys
+
+This product is a derivative work of "Hypervibe Harness", originally
+created by Flavien Chervet (Hyper Wisdom) and distributed at:
+
+    https://github.com/flavien-ia/hypervibe-harness
+
+Hypervibe Harness is:
+
+    Copyright 2026 Hyper Wisdom
+
+Both the original work and this derivative work are licensed under the
+Apache License, Version 2.0 (the "License"); you may not use this file
+except in compliance with the License. You may obtain a copy of the
+License at:
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+--------------------------------------------------------------------------
+
+Substantial modifications from the original Hypervibe Harness
+
+Baudrier re-targets the plugin at a French-sovereign,
+Scaleway-only architecture. Substantial changes include, without
+limitation:
+
+  - Removed: Vercel, Cloudflare (Workers, R2, DNS, Email Routing), Neon,
+    Render, Resend, Brevo, Bitwarden, Stripe, Google/GitHub OAuth,
+    internationalization (i18n), and inbound email receiving.
+
+  - Added / re-targeted: hosting on Scaleway Serverless Containers
+    (region fr-par) with images built and pushed directly by the harness
+    (`docker build`/`docker push`, no CI) to Scaleway Container Registry;
+    Scaleway Serverless SQL Database
+    (PostgreSQL 16) with Drizzle ORM; Scaleway Object Storage
+    (S3-compatible); Scaleway Domains & DNS; Scaleway Transactional
+    Email (TEM); Scaleway Serverless Jobs for scheduling and AI agents;
+    Scaleway Generative APIs for LLM and embeddings; Scaleway Secret
+    Manager for secrets; Matomo for analytics.
+
+  - The generated product is French-only (no i18n), and every scaffolded
+    app is deployed IP-restricted to a company VPN by default.
+
+This NOTICE file is provided for informational purposes as attribution
+under Section 4(d) of the Apache License, Version 2.0, and does not
+modify the License terms.
+
+--------------------------------------------------------------------------
+
+Trademarks
+
+"Hypervibe" and "Certifié Hypervibe" are trademarks of Hyper Wisdom. The
+Apache License covers the code, not these names: it grants no right to
+use them (see Section 6 of the Apache License, Version 2.0). Baudrier
+is an independent fork and is not affiliated with, endorsed by, or
+certified by Hyper Wisdom or Flavien Chervet.
+
+"Baudrier" and "Calopsys" are used here to identify this fork and its
+author and are not part of the Apache License grant either.

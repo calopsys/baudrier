@@ -1,6 +1,6 @@
 # /seo
 
-Audite et améliore le référencement Google de votre site. Hypervibe scanne tout ce qui compte pour Google (contenu, technique, performance, accessibilité), vous explique chaque problème en langage simple et corrige ce qu'elle peut.
+Audite et améliore le référencement Google de votre site. Baudrier scanne tout ce qui compte pour Google (contenu, technique, performance, accessibilité), vous explique chaque problème en langage simple et corrige ce qu'elle peut.
 
 ## Quand l'utiliser
 
@@ -11,7 +11,7 @@ Audite et améliore le référencement Google de votre site. Hypervibe scanne to
 
 ## Comment ça se passe
 
-1. **Audit complet** : Hypervibe scan votre projet selon plusieurs axes :
+1. **Audit complet** : Baudrier scan votre projet selon plusieurs axes :
   - **Technique** : metadata `<title>` + `<description>` sur chaque page, `metadataBase`, sitemap, robots.txt, canonical URLs, JSON-LD, hreflang si i18n, image OG
   - **Contenu** : mots-clés pertinents, structure des titres (H1 / H2 / H3), longueur des textes, fraîcheur du contenu
   - **Performance** : taille des images, lazy loading, polices, JavaScript bloquant, Core Web Vitals (LCP, FID, CLS)
@@ -24,7 +24,7 @@ Audite et améliore le référencement Google de votre site. Hypervibe scanne to
   - **Conséquence concrète** (par ex. "Google ne comprend pas clairement de quoi parle cette page, et elle a moins de chances d'apparaître quand quelqu'un cherche 'contact Mon Entreprise'")
   - **Correction proposée** avec le **pourquoi**
 
-3. **Corrections automatiques** : Hypervibe corrige ce qu'elle peut sans risque (ajout de metadata, optimisation des images, fix de l'arborescence des titres, etc.). Pour les changements qui touchent au contenu (réécrire un texte, choisir un mot-clé principal), elle vous propose et vous décidez.
+3. **Corrections automatiques** : Baudrier corrige ce qu'elle peut sans risque (ajout de metadata, optimisation des images, fix de l'arborescence des titres, etc.). Pour les changements qui touchent au contenu (réécrire un texte, choisir un mot-clé principal), elle vous propose et vous décidez.
 
 ## Ce que ça crée pour vous
 
@@ -36,7 +36,7 @@ Audite et améliore le référencement Google de votre site. Hypervibe scanne to
 ## Prérequis
 
 - Aucun prérequis particulier, `/seo` peut tourner sur n'importe quel projet du plugin
-- Mieux vaut être déjà déployé sur Vercel pour que les audits Lighthouse / Core Web Vitals soient pertinents
+- Mieux vaut être déjà déployé (et rendu public avec `/publish`) pour que l'audit de performance qui suit (`/seo-perf`, Lighthouse / Core Web Vitals via l'API Google PageSpeed Insights) puisse réellement atteindre le site
 
 ## Astuces
 

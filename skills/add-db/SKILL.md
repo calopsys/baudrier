@@ -1,11 +1,11 @@
 ---
 name: add-db
-description: Add a Neon Postgres database to an existing T3 project. Provisions the database, configures Drizzle ORM, and pushes the schema. In a monorepo, creates a shared packages/db package.
+description: Add a Scaleway Serverless SQL Database (PostgreSQL 16) to an existing T3 project. Provisions the database, creates dedicated IAM access, and configures Drizzle ORM. In a monorepo, creates a shared packages/db package.
 argument-hint: ""
-compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (vercel, gh)."
+compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (scw, gh)."
 ---
 
-# Add DB - Neon Postgres Database
+# Add DB - Scaleway Serverless SQL Database
 
 ## Communication
 - Detect the user's language from their messages and ALWAYS reply in that language (default: English). This applies to every user-facing message: questions, progress, confirmations, summaries, errors.
@@ -13,15 +13,13 @@ compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; 
 - When generating user-facing content for the scaffolded project (UI labels, emails, copy), write it in the user's language too.
 - Show progress as a short natural-language checklist (in-progress and done states).
 
-Adds a Neon Postgres database with Drizzle ORM to the current project. Can be called by `/bootstrap` or standalone on an existing project.
+Adds a Scaleway Serverless SQL Database (PostgreSQL 16, region `fr-par`) with Drizzle ORM to the current project. Can be called by `/bootstrap` or standalone on an existing project.
 
-The deterministic core (provisioning, driver swap, schema push, env var push) is handled by `scripts/setup-db.mjs`. This SKILL takes care of the entry-side decisions (re-config detection, monorepo case, MCP availability) and the exit-side communication (CLAUDE.md update, summary).
+The deterministic core (provisioning, dedicated IAM access, driver swap) is handled by `scripts/setup-db.mjs`. This SKILL takes care of the entry-side decisions (re-config detection, monorepo case) and the exit-side communication (CLAUDE.md update, summary).
 
----
+**Hard rule, never work around it**: the operator's machine (this machine) never connects to the database, and no REAL connection string ever exists on it. The local `.env` file carries a syntactically valid placeholder, `postgresql://placeholder:placeholder@localhost:5432/placeholder` - it satisfies T3's `src/env.js` Zod validation and lets `drizzle.config.ts` import that module, but it connects to nothing. **This placeholder is required, not a leftover**: deleting it breaks `pnpm db:generate` (which loads `drizzle.config.ts`, which imports `src/env.js`, which validates `DATABASE_URL` at import time). Never delete it and never replace it with a real value by hand. No step in this skill runs `drizzle-kit push`, `drizzle-kit studio`, `drizzle-kit migrate`, or a seed script - all of those open a real connection. The real `DATABASE_URL` lives only in Scaleway Secret Manager and the containers it is synced into. Schema changes are written to disk with `drizzle-kit generate` (no connection - it only diffs the schema against the SQL files already on disk) and applied for real by the migration Serverless Job that `/deploy` launches. If you ever find yourself about to run a drizzle command with a real `DATABASE_URL` set locally, stop - that is the bug this rule exists to prevent.
 
-## Preflight - vault unlocked
-
-This skill reads the Neon key from the vault, so first make sure the vault is unlocked (follow **`_ensure-vault`**): `node "${CLAUDE_SKILL_DIR}/../../scripts/vault/vault.mjs" status` then, if `locked`/`expired`, run `node "${CLAUDE_SKILL_DIR}/../../scripts/vault/launch.mjs" unlock` (window, once a day); if the vault does not exist yet, delegate to `_add-keyring`.
+**Hard rule, never work around it**: this skill (and this harness generally) **cannot delete a database**. `scripts/scaleway/sdb.mjs`'s `deleteDatabase()` refuses by default - it is guarded by `scripts/scaleway/_destructive-guard.mjs` and only proceeds if a human has set a resource-specific `BAUDRIER_ALLOW_DESTRUCTIVE` environment variable in their own shell, which nothing in this skill (or Claude acting on the user's behalf) ever does. Database deletion is a **manual action a human takes in the Scaleway console**. If a user asks Claude to delete a database, the honest answer is that Claude cannot do it - point them at the console, never attempt a workaround (raw API call, a different script, editing the guard). Why this matters: Serverless SQL Database has automatic daily backups but **no on-demand backup API** (see "Automatic backups" below) - a mistaken deletion is not something a fresh backup could be taken to protect against right before it happens.
 
 ---
 
@@ -37,17 +35,15 @@ db_host=$(echo "$result" | node -e "console.log(JSON.parse(require('fs').readFil
 
 ### If `db_ok = true` then re-configuration mode
 
-A real cloud DB is already wired up (host: `$db_host`). Do NOT run `setup-db.mjs` (it would create a new Neon project, polluting the free tier). Do NOT rewrite `drizzle.config.ts` or the schema. Show a menu:
+A real cloud DB is already wired up (host: `$db_host`). Do NOT run `setup-db.mjs` (it would provision a second database, orphaning the first). Do NOT rewrite `drizzle.config.ts`. Show a menu:
 
 > ## 🗄️ A database is already in place (host: `$db_host`)
 >
 > What do you want to do?
 >
-> 1. **Just push the schema to the DB** (if you changed the Drizzle schema but haven't pushed it yet) - equivalent to `pnpm db:push`
-> 2. **Migrate to a new Neon DB** (e.g. change region, start from a clean project) - ⚠️ **destructive**: all current data is lost. I'll guide you through creating the new project + switching the `DATABASE_URL`
-> 3. **Reset the current schema** (drop + recreate all tables) - ⚠️ destructive, the data in the current DB is lost
-> 4. **Redo everything from scratch** (useful only if your Drizzle config is broken - first remove `DATABASE_URL` from the local `.env`)
-> 5. **Something else** - tell me what you want
+> 1. **Apply a schema change** (you edited `schema.ts` and need it applied) - I generate the migration file locally (no risk, no connection) and the actual apply happens on your next `/deploy`
+> 2. **Migrate to a new database** (e.g. start from a clean database) - ⚠️ **destructive**: all current data is lost. I provision a brand-new database + credentials and switch `DATABASE_URL`; the old database is left in place (delete it yourself later if you want)
+> 3. **Something else** - tell me what you want
 
 Wait for the answer.
 
@@ -55,13 +51,11 @@ Wait for the answer.
 
 | Choice | Action |
 |---|---|
-| 1 (push schema only) | `cd <WEB_DIR> && pnpm db:push` (or `pnpm drizzle-kit push`). Show the result. Skip to the final summary. |
-| 2 (migrate to a new DB) | Confirm with the user "do you confirm losing the current data?" then re-run `setup-db.mjs --name <project-name>` (it provisions a new Neon project and pushes the DATABASE_URL - it will overwrite the old one in `.env` and on Vercel). Mention that the old Neon project stays on the account (the user can delete it manually in dashboard.neon.tech if they want to free up a slot). |
-| 3 (reset schema) | Confirm with the user then try `cd <WEB_DIR> && npx drizzle-kit drop` (depending on the Drizzle version). If not available, list the existing tables via `psql` or the Neon console, then DROP each one via SQL, then `pnpm db:push`. |
-| 4 (redo everything) | Abort: ask the user to remove `DATABASE_URL` from the `.env`, then re-run `/add-db`. |
-| 5 (something else) | Ask for details. Don't run the full flow by default. |
+| 1 (apply schema change) | `cd <WEB_DIR> && npx drizzle-kit generate` (writes a new SQL file under `drizzle/`, no connection opened). Show the generated file name. Remind the user their next `/deploy` will apply it via the migration Job - nothing touches the database right now. |
+| 2 (migrate to a new database) | Confirm with the user "do you confirm losing the current data?" then re-run `setup-db.mjs --name <project-name>` (it provisions a new database + a new dedicated IAM Application/key and overwrites the `DATABASE_URL` secret in Secret Manager). Mention that the old database and its IAM Application are left in place - the user (or a follow-up `/clean`) can delete them manually via the Scaleway console if they want to free up resources. |
+| 3 (something else) | Ask for details. Don't run the full flow by default. |
 
-**At the end**, jump straight to the **final summary** (Step 8 below).
+**At the end**, jump straight to the **final summary** (Step 6 below).
 
 ### If `db_ok = false` (not configured yet)
 
@@ -74,36 +68,18 @@ Continue normally to Step 1.
 Invoke the `_detect-project-root` internal skill to get `PROJECT_NAME`, `WEB_DIR`, `IS_MONOREPO`, and `IS_NEXTJS`.
 
 - If `IS_NEXTJS=no` then abort. This skill requires a Next.js project.
-- If `IS_MONOREPO=yes` then **do not run the script** (it refuses `--monorepo` in v1). Go straight to Step 2 (manual monorepo mode).
-- If `IS_MONOREPO=no` then continue to Step 3 or Step 4 depending on the Neon access mode.
+- If `IS_MONOREPO=yes` then **do not run the script** (it refuses `--monorepo` in v1). Go to Step 2 (manual monorepo mode).
+- If `IS_MONOREPO=no` then go straight to Step 3.
 
-### Neon access - API key from the vault
+### Scaleway access
 
-Everything goes through the Neon REST API (`console.neon.tech/api/v2`) with the `NEON.api_key` from the vault. `setup-db.mjs` enforces `region_id: "aws-eu-central-1"` (Frankfurt, next to Vercel `fra1`).
-
-**Check that the Neon key is in the vault** (`_get-secret` pattern):
-```bash
-VAULT="${CLAUDE_SKILL_DIR}/../../scripts/vault/vault.mjs"
-node "$VAULT" get NEON api_key >/dev/null 2>&1; RC=$?
-```
-- **`RC=0`** then the key is present, go to **Step 4** (REST provisioning via `setup-db.mjs`, which reads the key from the vault itself).
-- **`RC=2/3`** (vault locked/expired) then warn the user, `node "${CLAUDE_SKILL_DIR}/../../scripts/vault/launch.mjs" unlock` (blocking), retry.
-- **`RC=4`** (key missing) then have it created + stored in the vault:
-  > To create your database, I need a Neon key (just once - I'll store it in your vault).
-  > 1. Go to https://console.neon.tech/app/settings/api-keys then **Create new API key** then copy it.
-  > 2. A window will open: paste it in (masked input).
-  ```bash
-  node "${CLAUDE_SKILL_DIR}/../../scripts/vault/launch.mjs" add --name NEON --service Neon --fields "api_key:secret"
-  ```
-  Then retry the `get` then **Step 4**.
-
-(Legacy: `setup-db.mjs` still accepts a `NEON_API_KEY` env var as a fallback during the migration, but the vault is the source of truth.)
+Everything goes through the Scaleway API with the operator's `SCW_ACCESS_KEY`/`SCW_SECRET_KEY` (never asked here - `/start` configures them once, and `scripts/scaleway/_scw-auth.mjs` resolves them automatically). If they are missing, `setup-db.mjs` fails immediately at its preflight step with a message pointing to `/start` - no separate check is needed in this skill.
 
 ---
 
 ## Step 2 - Monorepo mode (manual, outside the script)
 
-The `setup-db.mjs` script does not yet handle the monorepo case (which requires creating a shared `packages/db/` package, moving the schema/client/config). Proceed manually:
+`setup-db.mjs` does not yet handle the monorepo case (which requires creating a shared `packages/db/` package, moving the schema/client/config). Proceed manually, calling the same building blocks the script uses:
 
 1. Create the shared `packages/db` package:
    ```bash
@@ -123,39 +99,48 @@ The `setup-db.mjs` script does not yet handle the monorepo case (which requires 
 3. Install the driver in the package:
    ```bash
    cd packages/db
-   pnpm add @neondatabase/serverless drizzle-orm
-   pnpm add -D drizzle-kit
+   pnpm add pg drizzle-orm
+   pnpm add -D drizzle-kit @types/pg
    ```
 
-4. Move the schema, the client, and the Drizzle config into `packages/db/src/`. All apps (`apps/web`, `apps/worker`) must import from `@<project-name>/db`.
+4. Move the schema, the client, and the Drizzle config into `packages/db/src/`. Write `packages/db/src/index.ts` following `templates/db/index.ts` (pg + `drizzle-orm/node-postgres`, `ssl: true`, no `rejectUnauthorized: false`). All apps (`apps/web`, `apps/worker`) must import from `@<project-name>/db`.
 
-5. Update `apps/web` (and other apps) to import the DB from the shared package instead of the local files.
+5. Update `apps/web` (and other apps) to import the DB from the shared package instead of local files.
 
-6. Provision the Neon project manually via the REST API (the Neon key comes from the vault):
+6. Provision the database and dedicated IAM access via the same primitives `setup-db.mjs` uses:
    ```bash
-   NEON_KEY=$(node "${CLAUDE_SKILL_DIR}/../../scripts/vault/vault.mjs" get NEON api_key)
-   curl -X POST "https://console.neon.tech/api/v2/projects" \
-     -H "Authorization: Bearer $NEON_KEY" \
-     -H "Content-Type: application/json" \
-     -d '{"project":{"name":"<project-name>"}}'
+   node "${CLAUDE_SKILL_DIR}/../../scripts/scaleway/sdb.mjs" ensure "<project-name>"
+   # note the returned id, endpoint, port
+   node "${CLAUDE_SKILL_DIR}/../../scripts/scaleway/sdb.mjs" wait "<database-id>"
+   node "${CLAUDE_SKILL_DIR}/../../scripts/scaleway/iam.mjs" ensure-app "<project-name>-db"
+   node "${CLAUDE_SKILL_DIR}/../../scripts/scaleway/iam.mjs" ensure-policy "<app-id>" "<project-id>" "ServerlessSQLDatabaseReadWrite"
+   node "${CLAUDE_SKILL_DIR}/../../scripts/scaleway/iam.mjs" create-key "<app-id>" "<project-id>" "DATABASE_URL for <project-name> (no expiry)" --reveal
+   # --reveal is required here: the freshly minted secretKey is only ever
+   # returned once and is needed immediately below to build the connection
+   # string - capture it into a shell variable and use it right away, never
+   # echo it again or log it separately.
+   # deliberately no --expires flag anywhere above - see CONTRACT.md §4
+   node "${CLAUDE_SKILL_DIR}/../../scripts/scaleway/sdb.mjs" connection-string --endpoint "<endpoint>" --port "<port>" --db-name "<project-name>" --application-id "<app-id>" --secret-key "<secret-key>"
    ```
-   Get the pooled `connection_uri` from the response.
 
-7. Push `DATABASE_URL=<connection-uri>` to the monorepo root via `_push-env-vars`.
+   **If `ensure-app`, `ensure-policy`, or `create-key` fails with `"type":"permission_denied"`** (the operator's key lacks `IAMManager`): do **not** retry the manual `iam.mjs` commands, and do not relay a request to an administrator here - that no longer happens at this stage. Instead abandon the manual `sdb.mjs`/`iam.mjs` sequence and run the deterministic script:
+   ```bash
+   node "${CLAUDE_SKILL_DIR}/../../scripts/setup-db.mjs" --name "<project-name>" --web-dir "packages/db"
+   ```
+   It tries the delegated `BAUDRIER_DB_KEY` pair first, then falls back to the operator's own personal Scaleway key, silently, recording the fallback in the `BAUDRIER_DEV_FINGERPRINTS` manifest secret so `/publish` can find and swap it later. It provisions the database and stores `DATABASE_URL` in Secret Manager on its own - skip straight to step 8 below once it succeeds. No administrator action is needed at this point: the admin is only asked once, later, when the user runs `/publish` (CONTRACT.md §1), which refuses to proceed while any secret is still dev-backed and prints one consolidated request covering every addon at once.
 
-8. `cd packages/db && npx drizzle-kit push`.
+7. Store the resulting connection string directly in Secret Manager - **never** via `_push-env-vars` (that helper also writes a local `.env`, which is exactly what must never happen for `DATABASE_URL`). `secrets.mjs put` no longer accepts the value as an argv positional (it would sit in plaintext in the process list and shell history) - pipe it in instead:
+   ```bash
+   printf '%s' "<connection-string>" | node "${CLAUDE_SKILL_DIR}/../../scripts/scaleway/secrets.mjs" put DATABASE_URL --stdin
+   ```
 
-9. Jump straight to Step 5 (Update CLAUDE.md), passing `IS_MONOREPO=yes` to `_update-claude-md`.
+8. `cd packages/db && npx drizzle-kit generate` (writes the initial migration SQL, no connection). The actual apply happens on the next `/deploy`.
+
+9. Jump straight to Step 4 (Update CLAUDE.md), passing `IS_MONOREPO=yes` to `_update-claude-md`.
 
 ---
 
-## Step 3 - (removed: no more MCP provisioning)
-
-We **always** provision via the REST API (`setup-db.mjs`, Step 4), which guarantees the Frankfurt region and reads the Neon key from the vault. The monorepo case (Step 2) stays manual but also uses the REST API.
-
----
-
-## Step 4 - Run setup-db.mjs (REST provisioning, Frankfurt region)
+## Step 3 - Run setup-db.mjs
 
 Run the script from the `WEB_DIR`:
 
@@ -165,136 +150,97 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/setup-db.mjs" \
   --web-dir "<WEB_DIR>"
 ```
 
-The script chains 7 sub-steps: preflight, list projects (with a warning if quota), create Neon project, install driver, swap the Drizzle client to neon-http, push schema, push env vars.
+The script chains 6 sub-steps: preflight, provision the database (and wait until ready), create a dedicated IAM Application + policy + non-expiring API key, build `DATABASE_URL` and store it in Secret Manager, install the `pg` driver, swap the Drizzle client to `drizzle-orm/node-postgres`.
 
 ### During execution
 
 The script displays in real time:
 - `▸ <step>` when it starts each sub-step
 - `✅ <result>` at the end of each one
-- `⚠️ <warning>` for non-blocking warnings (Neon quota near limit, name conflict)
+- `⚠️ <warning>` for non-blocking warnings
 - At the end (success OR failure), a structured **handoff banner**
-- As the last line on success, a parseable JSON object: `{"success":true,"projectId":"...","host":"...","projectName":"..."}`
+- As the last line on success, a parseable JSON object: `{"success":true,"databaseId":"...","endpoint":"...","applicationId":"...","databaseName":"..."}`
 
 Let the output stream through live (no `> /tmp/...`, no capture). The user wants to see the progress.
 
 ### If success
 
-Mark the step ✅, capture `projectId` and `host` from the final JSON, and go to Step 5.
-
-If the banner contains warnings (e.g. `NEON_QUOTA_NEAR_LIMIT`, `NEON_PROJECT_NAME_CONFLICT`), mention them in the final summary but don't block - the project is provisioned.
+Mark the step ✅, capture `databaseId` and `endpoint` from the final JSON, and go to Step 4.
 
 ### If failure
 
 1. **Read the detailed error**: just above the handoff banner.
 2. **Identify the failed step** in the banner (`❌ Failed at: <step>`). The name maps 1:1 onto a function in the script - open `setup-db.mjs` and read the function to understand.
 3. **Diagnose**:
-   - `preflight` failed then usually a missing `NEON_API_KEY` or no Next.js / no Drizzle in the project then go back to Step 1.
-   - `listProjects` or `createProject` failed then a Neon API error. Often a quota exceeded (show the error message as-is to the user) or an expired API key.
-   - `installDriver` failed then a pnpm error (network, registry). Retry by hand: `cd <WEB_DIR> && pnpm add @neondatabase/serverless`.
-   - `swapDriver` failed then T3 may have moved `src/server/db/index.ts`. Patch the file manually, taking inspiration from the template in `setup-db.mjs` step `swapDriver`.
-   - `pushSchema` failed then the schema probably has a problem (table already exists with another prefix, migration conflict). Read the drizzle-kit error, fix the schema, and retry: `cd <WEB_DIR> && DATABASE_URL='<connection-uri>' npx drizzle-kit push`.
-   - `pushEnvVars` failed then the Neon project is provisioned + schema pushed, but the env var is not in `.env`/Vercel. Get the connection URI from the script state (visible in the logs) and invoke `_push-env-vars DATABASE_URL=<uri>` manually.
+   - `preflight` failed then usually missing Scaleway credentials (route to `/start`) or no Next.js / no Drizzle in the project (go back to Step 1).
+   - `ensureDatabase` failed then a Scaleway API error provisioning the Serverless SQL Database (quota, transient API issue - the error message is shown as-is).
+   - `ensureIamAccess` failed then an IAM error creating the Application/policy/key - check the operator's Scaleway credentials have IAM rights.
+   - `storeSecret` failed then the database AND the IAM key exist, but the Secret Manager write failed (region mismatch, API error). The connection string was never persisted anywhere - retry the step by hand using `printf '%s' "<uri>" | node scripts/scaleway/secrets.mjs put DATABASE_URL --stdin` with a freshly rebuilt connection string (you'll need to mint a new IAM key, since the old one's secret was only ever held in memory - see `scripts/scaleway/iam.mjs create-key --reveal`).
+   - `installDriver` failed then a pnpm error (network, registry). Retry by hand: `cd <WEB_DIR> && pnpm add pg && pnpm add -D @types/pg`.
+   - `swapDriver` failed then T3 may have moved `src/server/db/index.ts`. Patch the file manually, following `templates/db/index.ts`.
 4. **Continue** the remaining steps manually, taking inspiration from the script's functions.
 
 ---
 
-## Step 5 - Update CLAUDE.md
+## The `tryDb` resilience helper
+
+`setup-db.mjs` also writes `src/server/db/safe.ts`, exporting `tryDb(fn, fallback)`: it runs `fn`, and on any error logs one `console.warn` line (never the connection string) and returns `fallback` instead of throwing. Stored data is an optimisation, not a dependency - route through `tryDb` any read whose value can be recomputed or safely defaulted (a list that can render empty, a counter, a recommendation). A genuine hard dependency (an auth lookup, a payment record) can stay a direct call, but it must render a clear error to the user, never crash the whole page.
+
+---
+
+## Step 4 - Update CLAUDE.md
 
 Invoke `_update-claude-md` with:
-- `stack`: `- **Database**: Neon PostgreSQL`
+- `stack`: `- **Database**: Scaleway Serverless SQL Database (PostgreSQL 16, region fr-par)`
 - `commands`:
-  - `- \`pnpm db:push\` - Push schema to Neon`
-  - `- \`pnpm db:studio\` - Open Drizzle Studio`
-- `env-vars`: `- \`DATABASE_URL\` - Neon PostgreSQL connection string`
+  - `- \`pnpm db:generate\` - After editing the schema, generate the migration SQL file locally (safe: no database connection). Applying it to the real database happens automatically on the next \`/deploy\`.`
+- `env-vars`: `- \`DATABASE_URL\` - Scaleway Serverless SQL connection string (IAM-authenticated, stored in Secret Manager only - never in a local .env, never logged)`
 - `conventions`:
   - `- Data: Optimistic UI - the interface updates reactively right away, the database syncs in the background. Never block the UI waiting for the server response.`
+  - `- Migrations: never run \`drizzle-kit push\`, \`drizzle-kit studio\`, or \`drizzle-kit migrate\` locally - there is no DATABASE_URL on this machine and there never should be. After editing \`schema.ts\`, run \`pnpm db:generate\`, commit the generated SQL file, then \`/deploy\` - the migration Serverless Job applies it.`
+  - `- Serverless SQL constraints: session \`SET\`/\`search_path\` leak across the shared connection pool - wrap any statement that relies on them in a transaction. 1 MB max SQL statement size. No temp tables. No \`CREATE DATABASE\` / \`CREATE ROLE\` via SQL. PostgreSQL version is pinned to 16 and Scaleway-controlled (no manual upgrade).`
   - If `IS_MONOREPO=yes`, also add: `- DB: import from \`@<PROJECT_NAME>/db\`, never a relative cross-app path.`
 
 The helper is idempotent - re-running `/add-db` won't duplicate existing lines.
 
 ---
 
-## Step 6 - Enable automatic backups [MANDATORY - NEVER SKIP]
+## Automatic backups (nothing to configure)
 
-🚨 **This step is mandatory.** You absolutely must invoke `add-backup-db` here, even when `/add-db` is called from `/bootstrap` or another skill. **Skipping this step = serious bug**: the user loses their data if the DB crashes, without knowing it. An internal audit on 2026-05-16 showed that ~36% of bootstraps forgot this step before we made it explicit - it's the main source of potential data loss in Hypervibe.
+**Verified** against Scaleway's own documentation (https://www.scaleway.com/en/docs/serverless-sql-databases/how-to/manage-backups/, "How to manage backups for Serverless SQL Databases"), which states verbatim: *"Serverless SQL Databases are automatically backed up every day at the same time. Backups are stored for 7 days."* So: Scaleway Serverless SQL Database backs itself up automatically - a daily snapshot, 7-day retention, at no extra cost. There is no on/off switch and no separate API to call: unlike the database provider this skill used to target, there is no backup-activation step at all here. Mention this in the Step 6 summary; do not offer an "enable backups" action because none exists.
 
-The `add-backup-db` skill is idempotent (no-op if the project is already registered) - so there's no reason to skip "just to be safe".
+**On-demand backup CREATION does not exist** - if the user asks for a fresh backup right before a risky operation (e.g. before choice 2 in the Step 0 menu), be upfront that there is no API or console button to trigger one on demand; the daily snapshot is the only one that will ever exist for a given day.
 
-```
-Invoke skill: add-backup-db
-With args: --quiet
-```
-
-**Capture the status returned by add-backup-db** (the caller, i.e. you, must decide what to put in the final summary based on this status):
-
-| Returned status | What to do in the summary |
-|---|---|
-| `ok:created` (worker created for the first time + project registered) | Add the line "✅ Automatic backups enabled" + details (see Step 8) |
-| `ok:added` (worker already existed, project added to the list) | Add the line "✅ Automatic backups enabled" + details |
-| `ok:already-registered` (project already in the list, no-op) | Add the line "✅ Automatic backups already active for this project" |
-| `skipped:no-neon-key` (Neon API key missing, quiet mode then couldn't prompt) | Add the line "⚠️ Automatic backups not enabled: your Neon API key is missing. Run `/start` to configure it, then `/add-backup-db` to enable backups on this project." |
-| `skipped:cloudflare-missing` (no CF token) | Add the line "⚠️ Automatic backups not enabled: Cloudflare is not configured on your machine. Run `/start` then `/add-backup-db` when you're ready." |
-| `error:*` | Add the line "⚠️ Automatic backups not enabled (technical error). You can retry with `/add-backup-db`." + do not block the overall summary |
-
-**NEVER block the `/add-db` flow** on a backup-activation failure. The DB is in place, that's the main topic - the step must have run, but its result (success or failure) must not crash the skill.
-
-### Step 7 - Mandatory self-check
-
-🛑 **Before moving to Step 8**, programmatically verify that step 6 actually took effect. This is the safety net that catches cases where the `add-backup-db` invocation was forgotten, executed wrong, or silently failed.
-
-```bash
-# Get the Neon project ID of the current project (look it up via the Neon API by matching the project's DATABASE_URL)
-PROJECT_ID="<neon-project-id-of-the-project>"
-
-# Check that this project ID appears in the shared clock's registry (unified
-# hypervibe-jobs worker), with a legacy fallback for machines not yet migrated
-# from the old standalone db-backup worker.
-if [ -f ~/.hypervibe-jobs/jobs.js ] && grep -q "\"$PROJECT_ID\"" ~/.hypervibe-jobs/jobs.js; then
-  echo "OK:backup-registered"
-elif [ -f ~/.db-backup-worker/wrangler.toml ] && grep -q "\"$PROJECT_ID\"" ~/.db-backup-worker/wrangler.toml; then
-  echo "OK:backup-registered-legacy"
-elif [ -f ~/.hypervibe-jobs/jobs.js ] || [ -f ~/.db-backup-worker/wrangler.toml ]; then
-  echo "FAIL:backup-not-registered"
-else
-  echo "FAIL:worker-config-missing"
-fi
-```
-
-**Interpretation**:
-
-- `OK:backup-registered` then all good, go to Step 8.
-- `OK:backup-registered-legacy` then the backup runs on the old standalone worker: fine for now, `add-backup-db` proposes the migration to the unified worker next time it runs interactively.
-- `FAIL:backup-not-registered` then step 6 failed to register the project. **Re-invoke** `add-backup-db --quiet` one more time. If it fails again, capture the returned status (Step 6 table above) and add the matching warning to the final summary.
-- `FAIL:worker-config-missing` then either the project is the very first one on this machine (in which case `add-backup-db` should have provisioned the shared worker), or the step 6 status was `skipped:cloudflare-missing` or `error:*`. The warning in the summary is enough, don't retry in a loop.
-
-The goal: we accept that there are cases where the backup can't be enabled (no Neon key, no Cloudflare token), but we don't accept **forgetting to enable it** when all the ingredients are there.
+**On-demand RESTORE does exist**, from an already-taken backup, but only through the Scaleway console (not through this skill or any script in this harness): the same documentation page describes restoring a database to a previous state, creating a new database from a specific backup, or exporting a backup as a `.pg_dump` file. If a user needs this, tell them plainly that it's a manual action in the console (link: https://console.scaleway.com) - do not attempt to script or automate it.
 
 ---
 
 ## RGPD - Privacy policy
 
-Add Neon to the project's RGPD subprocessor registry:
+Add Scaleway Serverless SQL Database to the project's RGPD subprocessor registry:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/update-privacy-policy.mjs" --add neon
+node "${CLAUDE_SKILL_DIR}/../../scripts/update-privacy-policy.mjs" --add scaleway-sdb
 ```
 
 The helper is idempotent. If the `politique-de-confidentialite/page.tsx` page exists (created by `/bootstrap`), it updates automatically from the registry. If the page doesn't exist (pre-bootstrap project), only the registry is created - `/rgpd-audit` can generate the page retroactively.
 
 ---
 
-## Step 8 - Summary
+## Step 5 - Nothing runs against the database from here
+
+Before the summary: double-check that nothing you (or a prior step) did in this run opened a connection. If `check-deps db` was re-run after provisioning and you're tempted to "just verify it works" with a quick `psql` or `drizzle-kit studio` - don't. The only verification that matters is the migration Job succeeding on the next `/deploy`; that's the sole place a connection is allowed to happen (CONTRACT.md §1, §4).
+
+---
+
+## Step 6 - Summary
 
 Tell the user:
-- Neon database `<project-name>` is provisioned and connected (host: `<host>`)
-- Drizzle ORM is wired onto the Neon serverless driver (edge-compatible)
-- The schema is pushed and the connection verified
-- `DATABASE_URL` is in the local `.env` and on Vercel (production / preview / development)
-- Commands: `pnpm db:push` to push schema changes, `pnpm db:studio` to browse the data
-- Neon free tier: 0.5 GB storage/project, 100 CU-hours/month, automatic scale-to-zero
-- **Backup line** (based on the status captured in Step 6):
-  - If active: *"✅ Automatic backups enabled - a new one every 2 weeks, we keep the 2 latest + 3 historical ones spread over the last 9 months."*
-  - If not enableable: see the Step 6 table
+- The database is provisioned and connected (region: France - `fr-par`)
+- It autoscales between **0 and 5 vCPU**: it sleeps and costs nothing when idle, and 5 vCPU caps what a traffic spike can cost. `/scale` can change both bounds later (up to Scaleway's maximum of 15).
+- Drizzle ORM is wired onto `pg` (`drizzle-orm/node-postgres`)
+- The connection string is stored securely (Scaleway Secret Manager) - never on this computer, never in a file you could accidentally commit
+- Commands: `pnpm db:generate` after changing the schema (safe, no connection); the change goes live on the next deploy
+- **Automatic backups**: *"✅ Automatic daily backups, 7-day retention, included at no extra cost - nothing to configure."*
 
-If any warnings were raised by the script (`NEON_QUOTA_NEAR_LIMIT`, `NEON_PROJECT_NAME_CONFLICT`, etc.), mention them here.
+If any warnings were raised by the script, mention them here.

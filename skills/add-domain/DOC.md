@@ -1,64 +1,64 @@
 # /add-domain
 
-Connects a **custom domain name** to your app: `mysite.com` instead of `mysite.vercel.app`.
+Connects a **custom domain name** to your app: `mysite.com` instead of the default Scaleway container URL.
 
 ## When to use it
 
 - You want your site to be accessible at **your own address** (more professional, better ranked, more credible)
-- You just bought a domain and you want to connect it to your project
-- You also want to receive emails on your domain (`contact@mysite.com`) without creating a real mailbox
+- You already own a domain name and want to connect it to your project
+
+## What this does NOT do
+
+{{callout:warning|External domains only - no registrar automation}}
+This harness does **not** sell or register domain names, and does **not** automate any registrar (no Hostinger, OVH, Namecheap, GoDaddy, etc.). You must already own the domain. If it isn't delegated to Scaleway DNS yet, `/add-domain` stops and gives you the exact nameserver values to hand to whoever manages the domain - it never tries to change them for you.
+{{/callout}}
+
+{{callout:warning|No inbound email}}
+Scaleway has **no equivalent to an email-forwarding service**. Connecting a domain here only enables **sending** email from it (via a separate `/add-email` run) - it does **not** let you receive email at `contact@mysite.com`. If you need a real mailbox on this domain, you need a separate email hosting provider; this harness does not set that up.
+{{/callout}}
 
 ## How it works
 
-The target architecture: **your registrar → Cloudflare (DNS + Email Routing) → Vercel (hosting)**. Cloudflare in the middle provides fast DNS, free DDoS protection, and email routing (receiving at `contact@mysite.com` redirected to your Gmail).
+The target architecture: **your domain (bought anywhere) → Scaleway DNS (delegated zone) → Scaleway Serverless Containers (hosting)**.
 
-1. **Domain bought or not?** If you don't have one yet, Hypervibe recommends Hostinger (French UI/support, .fr supported, easy automation). You buy it in a few minutes.
+1. **Domain name**: you give Baudrier the exact domain, e.g. `mysite.com`.
 
-2. **Identifying the registrar**: where is the domain registered? Hypervibe handles Hostinger, Cloudflare, OVH, Namecheap, GoDaddy (manual for the latter, their API does not allow automation).
+2. **Delegation check**: Baudrier checks whether the domain's nameservers already point at Scaleway (`ns0.dom.scw.cloud` / `ns1.dom.scw.cloud`) and whether a DNS zone exists for it in your Scaleway account. If not, it stops and gives you the exact values to set at your registrar - it never attempts this automatically.
 
-3. **Cloudflare check**: Hypervibe checks that your Cloudflare token is valid. Otherwise, it sends you back to `/start`.
+3. **DNS record**: once delegated, Baudrier adds a DNS record pointing your domain at your container's address.
 
-4. **Creating the Cloudflare zone**: Hypervibe adds your domain to your Cloudflare account and retrieves the **2 assigned nameservers**.
+4. **Wait for propagation**: Baudrier actively waits (up to 3 minutes, matching Scaleway's certificate-issuance window) until that DNS record is visible on the public internet - **before** touching anything else. This ordering matters: attaching the domain too early can put it in a broken state that can only be fixed by starting over.
 
-5. **Changing the nameservers at the registrar**: depending on your registrar, Hypervibe calls its API directly (Hostinger, OVH, Namecheap, Gandi, Porkbun…) with your access key stored in your vault, and pushes the new nameservers. For registrars without a public API (GoDaddy, IONOS…), you'll do it by hand (clear instructions provided).
+5. **Attach + certificate**: Baudrier attaches the domain to your container, which triggers automatic, free HTTPS certificate issuance.
 
-6. **Configuring the DNS records**: Hypervibe deletes the old records and adds the Vercel ones (`A` apex → 76.76.21.21, `CNAME` www → `cname.vercel-dns.com`).
-
-7. **Connecting to Vercel**: Hypervibe adds the domain on the Vercel side (via `vercel domains add`).
-
-8. **Updating the URL in the code**: `NEXT_PUBLIC_APP_URL` is updated everywhere, and all references to `*.vercel.app` in the code (sitemap, metadata, JSON-LD, robots.txt, legal pages) are replaced by your new domain, crucial for SEO.
-
-9. **Email Routing (optional)**: Hypervibe offers to set up receiving emails on your domain. If yes, it delegates to `/new-email-address` to create a first address (for example `contact@mysite.com` → your Gmail).
-
-10. **Resend (optional)**: if Resend is already configured on the project, Hypervibe also offers to switch the email sending to your new domain (`contact@mysite.com` instead of `onboarding@resend.dev`).
-
-11. **Commit + deploy**: the code changes are committed and pushed to redeploy.
+6. **Cleanup**: any leftover references to the old default Scaleway URL in your code (sitemap, metadata, robots.txt) are replaced by your new domain - important for search engine ranking.
 
 ## What it creates for you
 
-- A **Cloudflare zone** for your domain, with the registrar's nameservers pointing to it
-- The **Vercel DNS records** (A apex + CNAME www) configured in Cloudflare
-- The domain **added to your Vercel project** with an automatic HTTPS certificate
-- The `NEXT_PUBLIC_APP_URL` variable updated everywhere (Vercel + `.env` + source code)
-- If you want: **receiving emails** on your domain (via Cloudflare Email Routing)
-- If you want: **sending emails** with Resend from your domain
+- A DNS record on your domain, pointing at your app's container
+- The domain **attached to your Scaleway container** with an automatic, auto-renewing HTTPS certificate
+- The `APP_URL` variable updated everywhere (`.env`, Scaleway Secret Manager, source code)
 
 ## Prerequisites
 
-- A Next.js project deployed on Vercel (typically via `/bootstrap`)
-- Cloudflare connected to your computer (`/start` handles it)
-- A domain name (bought now or already existing)
+- An app already deployed on a Scaleway Serverless Container (typically via `/bootstrap` then `/deploy`)
+- A domain name you already own, with access to change its nameservers at your registrar (or someone on your team who does)
+- Your Scaleway account connected (`/start` handles it)
 
 ## Tips
 
-{{callout:tip|DNS propagation = between 5 min and 24h}}
-After the nameserver change, DNS can take **5 to 30 minutes** (and rarely up to 24h) to propagate everywhere in the world. Don't panic if your site isn't immediately accessible, be patient. It happens. The HTTPS certificate is set up automatically by Vercel as soon as the DNS is in place.
+{{callout:tip|DNS propagation timing}}
+Nameserver changes can take anywhere from a few minutes to 24-48h to propagate worldwide. Baudrier actively checks rather than guessing, and will tell you clearly if it's still waiting.
 {{/callout}}
 
-{{callout:warning|Don't forget your OAuth after a domain change}}
-If you have already configured Google or GitHub OAuth, you must **add** the new callback URL (`https://your-domain/api/auth/callback/google` or `/github`) in the corresponding consoles. Otherwise the login crashes in production with `redirect_uri_mismatch`. Hypervibe reminds you of this at the end of the process.
+{{callout:info|Why the wait matters}}
+Scaleway's HTTPS certificate issuance uses a challenge with a hard **3-minute window**. If the DNS record isn't visible yet when that challenge runs, the domain can end up in a state that serves **neither HTTP nor HTTPS**, with no automatic retry - the only fix is deleting and re-adding it. That's why Baudrier always confirms propagation first, even if it means waiting or asking you to try again later.
 {{/callout}}
 
-{{callout:info|Email Routing = free, unlimited, no real mailbox}}
-Cloudflare Email Routing lets you receive emails at `contact@mysite.com` (or `support@`, `hello@`, etc.) and redirect them to an existing mailbox (Gmail, Outlook, etc.). It's **free, unlimited**, and there's no need to create a real mailbox. You just reply from your usual mailbox.
+{{callout:info|Org-wide limit}}
+A Scaleway Organization can have at most **10 external domains** connected. If you hit that limit, remove an unused one from the Scaleway console first.
+{{/callout}}
+
+{{callout:info|Keep the ACME exemption in proxy.ts}}
+Your app ships with an IP allowlist by default. Its `proxy.ts` always exempts `/.well-known/acme-challenge/*` from that filter, specifically so Scaleway can keep issuing and renewing your HTTPS certificate. Never remove that exemption - doing so would silently break certificate renewal and eventually take your site offline over HTTPS.
 {{/callout}}

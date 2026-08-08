@@ -1,18 +1,33 @@
 #!/usr/bin/env node
-// build-snapshot.mjs - Build a complete snapshot ZIP of a Hypervibe project.
+// build-snapshot.mjs - Build a complete snapshot ZIP of a Baudrier project.
 //
 // Usage:
 //   node build-snapshot.mjs --project <name> [--project-dir <path>] [--out <dir>]
-//                           [--skip-storage] [--skip-memory] [--skip-db]
+//                           [--skip-storage] [--skip-memory] [--skip-env]
 //
 // Produces <out>/<project>-snapshot-<YYYYMMDD-HHMMSS>.zip containing:
-//   code/      - git bundle (--all) + package.json + CLAUDE.md + working-changes.patch (if dirty)
-//   db/        - schema.json + per-table data .json
-//   env/       - .env files pulled from Vercel (production / preview / development)
-//   storage/   - R2 bucket contents (global + EU jurisdictions)
-//   memory/    - Claude memory files for this project
-//   config/    - Vercel project link, wrangler.toml, Stripe webhook metadata (no secrets)
+//   code/      - git bundle (--all) + package.json + working-changes.patch (if dirty)
+//   env/       - values pulled from Scaleway Secret Manager + a copy of the local .env(.local)
+//   db/        - NOTE.md explaining why there is no data dump (see below) - never silent
+//   storage/   - Object Storage bucket content (if configured)
+//   memory/    - Claude Code memory/transcripts for this project
+//   config/    - Scaleway resource linkage, resolved live by name (not a secret)
 //   MANIFEST.md - human-readable description + restore notes
+//
+// ─────────────────────────────────────────────────────────────────────────
+// Why there is no database dump (see also CONTRACT.md §4 and DOC.md):
+// the operator's machine has NO DATABASE_URL and never connects to a
+// Serverless SQL Database directly - only the migration Serverless Job does,
+// and only inside Scaleway's network. There is also no on-demand backup API
+// to trigger from here. Faking a "database" section by silently omitting the
+// data would be worse than not having one: db/NOTE.md says so explicitly and
+// loudly, every time - and it does NOT assert an unverified figure (e.g. a
+// specific backup frequency/retention window) as if it were a guaranteed
+// Scaleway behaviour. Scaleway's general docs state it performs automatic
+// database backups, but the exact frequency/retention for Serverless SQL
+// Database has not been verified here, so the note hedges accordingly and
+// tells the user to trigger their own export if the data actually matters.
+// ─────────────────────────────────────────────────────────────────────────
 //
 // Final stdout = JSON report. Exit 0 on success, 1 on fatal error.
 
@@ -24,6 +39,10 @@ import { spawnSync } from "node:child_process";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isRemoteSandbox } from "../_platform.mjs";
+import { REGION, api, sdkCall, slugify, loadCredentials, resolveProjectId } from "../scaleway/_scw-auth.mjs";
+import { listSecrets, getSecret, secretExists } from "../scaleway/secrets.mjs";
+import { findContainerByName } from "../scaleway/container.mjs";
 
 const SCRIPT_DIR = fileURLToPath(new URL(".", import.meta.url));
 
@@ -39,15 +58,26 @@ function flag(name) {
 
 const PROJECT = arg("--project");
 const PROJECT_DIR = resolve(arg("--project-dir") || process.cwd());
-const OUT_DIR = resolve(arg("--out") || join(homedir(), "Dropbox", "Download"));
+// On a Claude Code web sandbox, the default Downloads folder is nothing the
+// user can retrieve (CONTRACT.md §7: no persistence outside /tmp, and the
+// sandbox has no browser download path anyway) - default to a tmpdir
+// subdirectory there instead and say so plainly.
+const DEFAULT_OUT_DIR = isRemoteSandbox() ? join(tmpdir(), "baudrier-snapshots") : join(homedir(), "Downloads");
+const OUT_DIR = resolve(arg("--out") || DEFAULT_OUT_DIR);
 const SKIP_STORAGE = flag("--skip-storage");
 const SKIP_MEMORY = flag("--skip-memory");
-const SKIP_DB = flag("--skip-db");
 const SKIP_ENV = flag("--skip-env");
 
 if (!PROJECT) {
-  console.error("Usage: node build-snapshot.mjs --project <name> [--project-dir <path>] [--out <dir>] [--skip-storage] [--skip-memory] [--skip-db] [--skip-env]");
+  console.error("Usage: node build-snapshot.mjs --project <name> [--project-dir <path>] [--out <dir>] [--skip-storage] [--skip-memory] [--skip-env]");
   process.exit(1);
+}
+
+if (isRemoteSandbox() && !arg("--out")) {
+  console.error(
+    "Remarque : cette session est temporaire, le zip ne peut pas être téléchargé depuis un navigateur. " +
+      `Il sera écrit dans ${OUT_DIR}, à l'intérieur de la même session.`,
+  );
 }
 
 if (!existsSync(PROJECT_DIR)) {
@@ -58,7 +88,7 @@ if (!existsSync(PROJECT_DIR)) {
 const NOW = new Date();
 const TS = `${NOW.getFullYear()}${String(NOW.getMonth() + 1).padStart(2, "0")}${String(NOW.getDate()).padStart(2, "0")}-${String(NOW.getHours()).padStart(2, "0")}${String(NOW.getMinutes()).padStart(2, "0")}${String(NOW.getSeconds()).padStart(2, "0")}`;
 const SNAP_NAME = `${PROJECT}-snapshot-${TS}`;
-const WORK_DIR = join(tmpdir(), `hypervibe-snapshot-${Date.now()}`);
+const WORK_DIR = join(tmpdir(), `baudrier-snapshot-${Date.now()}`);
 const SNAP_DIR = join(WORK_DIR, SNAP_NAME);
 
 mkdirSync(SNAP_DIR, { recursive: true });
@@ -90,6 +120,21 @@ function humanSize(bytes) {
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
+
+// Resolve this app's own Scaleway Project id by name (CONTRACT.md §2, §7 -
+// app repos carry no Scaleway metadata at all) so every Secret Manager call
+// below is explicitly scoped, rather than trusting whatever
+// SCW_DEFAULT_PROJECT_ID happens to be set to on the operator's machine.
+// Best-effort: a snapshot with no Scaleway access at all still produces the
+// code/memory sections, just without the env/ secrets.
+async function resolveScwProjectId() {
+  try {
+    return await resolveProjectId({ appName: PROJECT });
+  } catch {
+    return null;
+  }
+}
+const SCW_PROJECT_ID = await resolveScwProjectId();
 
 // ============================================================
 // Step 1: git bundle (code + history + working changes)
@@ -135,108 +180,120 @@ function stepGitBundle() {
 }
 
 // ============================================================
-// Step 2: env vars (vercel env pull × 3 environments)
+// Step 2: env vars - Secret Manager (canonical) + local .env copy
 // ============================================================
-function stepEnvVars() {
+async function stepEnvVars() {
   if (SKIP_ENV) { logStep("env-vars", "skipped", { reason: "--skip-env" }); return; }
 
   const envDir = join(SNAP_DIR, "env");
   mkdirSync(envDir, { recursive: true });
 
-  const vCheck = run("vercel", ["--version"]);
-  if (vCheck.status !== 0) {
-    logStep("env-vars", "skipped", { reason: "vercel CLI not installed" });
-    return;
-  }
-
-  const linkPath = join(PROJECT_DIR, ".vercel", "project.json");
-  if (!existsSync(linkPath)) {
-    logStep("env-vars", "skipped", { reason: "project not linked (.vercel/project.json missing)" });
-    return;
-  }
-
-  const envs = ["production", "preview", "development"];
-  const results = [];
-  for (const env of envs) {
-    const outPath = join(envDir, `${env}.env`);
-    if (existsSync(outPath)) { try { unlinkSync(outPath); } catch {} }
-    const r = run("vercel", ["env", "pull", outPath, `--environment=${env}`, "--yes"], { cwd: PROJECT_DIR });
-    if (r.status === 0 && existsSync(outPath)) {
-      const lines = readFileSync(outPath, "utf8").split("\n").filter(l => l.trim() && !l.startsWith("#")).length;
-      results.push({ env, ok: true, vars: lines });
-    } else {
-      results.push({ env, ok: false, error: (r.stderr || r.stdout || "").slice(0, 200) });
+  let secretsWritten = 0;
+  const creds = loadCredentials();
+  if (creds.accessKey && creds.secretKey) {
+    try {
+      const opts = SCW_PROJECT_ID ? { projectId: SCW_PROJECT_ID } : {};
+      const list = await listSecrets(opts);
+      const lines = [];
+      for (const s of list) {
+        try {
+          const value = await getSecret(s.name, opts);
+          lines.push(`${s.name}=${value}`);
+          secretsWritten++;
+        } catch (e) {
+          lines.push(`# ${s.name} - could not be read: ${e.message}`);
+        }
+      }
+      writeFileSync(join(envDir, "secret-manager.env"), lines.join("\n") + "\n");
+    } catch (e) {
+      logStep("env-vars", "error", { error: `Secret Manager read failed: ${e.message}` });
+      return;
     }
   }
-  const anyOk = results.some(r => r.ok);
-  logStep("env-vars", anyOk ? "ok" : "error", { envs: results });
+
+  let localCopied = 0;
+  for (const file of [".env", ".env.local"]) {
+    const src = join(PROJECT_DIR, file);
+    if (existsSync(src)) {
+      try { cpSync(src, join(envDir, file)); localCopied++; } catch {}
+    }
+  }
+
+  if (secretsWritten === 0 && localCopied === 0) {
+    logStep("env-vars", "skipped", { reason: "no Scaleway credentials and no local .env/.env.local found" });
+    return;
+  }
+  logStep("env-vars", "ok", { secretsWritten, localFilesCopied: localCopied });
 }
 
 // ============================================================
-// Step 3: DB dump
+// Step 3: database - NOTE.md only, see file header for why
 // ============================================================
-function stepDbDump() {
-  if (SKIP_DB) { logStep("db-dump", "skipped", { reason: "--skip-db" }); return; }
-
+async function stepDatabaseNote() {
   const dbDir = join(SNAP_DIR, "db");
   mkdirSync(dbDir, { recursive: true });
 
-  // Find DATABASE_URL: prefer .env, fall back to env file we just pulled
-  let connString = null;
-  for (const envFile of [".env.local", ".env", "env/production.env"]) {
-    const p = envFile.startsWith("env/") ? join(SNAP_DIR, envFile) : join(PROJECT_DIR, envFile);
-    if (existsSync(p)) {
-      const content = readFileSync(p, "utf8");
-      const m = content.match(/^DATABASE_URL\s*=\s*"?(postgres[^"\r\n]+)"?/m);
-      if (m) { connString = m[1].replace(/["']$/, ""); break; }
+  const creds = loadCredentials();
+  let hasDatabase = false;
+  if (creds.accessKey && creds.secretKey) {
+    try {
+      hasDatabase = await secretExists("DATABASE_URL", SCW_PROJECT_ID ? { projectId: SCW_PROJECT_ID } : {});
+    } catch {
+      hasDatabase = existsSync(join(PROJECT_DIR, ".env")) && /^DATABASE_URL=/m.test(readFileSync(join(PROJECT_DIR, ".env"), "utf8"));
     }
   }
-  if (!connString) {
-    logStep("db-dump", "skipped", { reason: "DATABASE_URL not found in .env / .env.local / env/production.env" });
-    return;
-  }
 
-  const r = run("node", [
-    join(SCRIPT_DIR, "dump-db.mjs"),
-    "--conn-string", connString,
-    "--out-dir", dbDir,
-    "--project-dir", PROJECT_DIR,
-  ]);
-  let payload = {};
-  try {
-    const lastLine = (r.stdout || "").trim().split("\n").pop();
-    payload = JSON.parse(lastLine);
-  } catch {
-    payload = { status: "error", reason: "could not parse dump-db output" };
-  }
-  if (r.status !== 0 || payload.status === "error") {
-    logStep("db-dump", "error", { error: payload.reason || (r.stderr || "").slice(0, 200) });
-    return;
-  }
-  // Loud failure: a DATABASE_URL was found, so finding no table means the dump
-  // silently produced nothing. Never report that as a success.
-  if ((payload.tableCount ?? 0) === 0) {
-    logStep("db-dump", "error", {
-      error: "database reachable but 0 table found - the snapshot would contain no data",
-    });
-    return;
-  }
-  logStep("db-dump", "ok", { driver: payload.driver, tableCount: payload.tableCount, totalRows: payload.totalRows });
+  const note = hasDatabase
+    ? `# Base de données - PAS incluse dans ce snapshot
+
+Ce projet a une base de données (Serverless SQL Database Scaleway), mais **ses
+données ne sont pas dans ce zip**. Concrètement : aucune de vos données
+métier (clients, commandes, contenus, comptes...) ne se trouve dans cette
+sauvegarde.
+
+## Pourquoi
+
+La machine de l'opérateur n'a jamais accès direct à la base (CONTRACT.md §4) :
+seule la Job de migration s'y connecte, depuis le réseau interne de Scaleway.
+Il n'existe pas non plus d'API Scaleway pour déclencher une sauvegarde à la
+demande. Plutôt que de produire un snapshot qui a l'air complet mais ne
+contient pas les données, cette note existe pour le dire clairement.
+
+## Ce qui protège (peut-être) vos données - et ce qui n'est PAS garanti
+
+Scaleway indique dans sa documentation générale effectuer des sauvegardes
+automatiques des bases de données. **Nous n'avons pas vérifié précisément la
+fréquence ni la durée de rétention pour Serverless SQL Database** - ne
+considérez donc pas ceci comme un filet de sécurité garanti pour vos
+données, et ne vous fiez pas à un chiffre non confirmé.
+
+⚠️ Que ces sauvegardes automatiques existent ou non, elles ne survivraient de
+toute façon pas à une suppression de la base elle-même. Si vous avez besoin
+d'un export réel des données (avant une suppression, ou pour toute autre
+raison), c'est à vous de le déclencher vous-même : un \`pg_dump\` depuis un
+poste ayant un accès réseau à la base, ou un outil dédié dans la console
+Scaleway - jamais un chiffre annoncé sans vérification.
+`
+    : `# Base de données
+
+Aucune base de données détectée pour ce projet (pas de secret DATABASE_URL en
+Secret Manager, ni dans le .env local). Rien à documenter ici.
+`;
+
+  writeFileSync(join(dbDir, "NOTE.md"), note);
+  logStep("db-note", "ok", { hasDatabase });
 }
 
 // ============================================================
-// Step 4: R2 download
+// Step 4: Object Storage download
 // ============================================================
-function stepR2Download() {
-  if (SKIP_STORAGE) { logStep("r2-download", "skipped", { reason: "--skip-storage" }); return; }
+function stepStorageDownload() {
+  if (SKIP_STORAGE) { logStep("storage-download", "skipped", { reason: "--skip-storage" }); return; }
 
-  // No wrangler pre-check: download-r2 works from the .env R2 credentials via
-  // the S3 API and only falls back to wrangler, so requiring the CLI here would
-  // wrongly skip projects that have R2 but no wrangler.
   const storageDir = join(SNAP_DIR, "storage");
   mkdirSync(storageDir, { recursive: true });
   const r = run("node", [
-    join(SCRIPT_DIR, "download-r2.mjs"),
+    join(SCRIPT_DIR, "download-storage.mjs"),
     "--project", PROJECT,
     "--out-dir", storageDir,
     "--project-dir", PROJECT_DIR,
@@ -246,19 +303,18 @@ function stepR2Download() {
     const lastLine = (r.stdout || "").trim().split("\n").pop();
     payload = JSON.parse(lastLine);
   } catch {
-    payload = { status: "error", reason: "could not parse download-r2 output" };
+    payload = { status: "error", reason: "could not parse download-storage output" };
   }
-  // "skipped" = this project genuinely has no R2 storage configured.
+  // "skipped" = this project genuinely has no Object Storage configured.
   if (payload.status === "skipped") {
-    logStep("r2-download", "skipped", { reason: payload.reason });
+    logStep("storage-download", "skipped", { reason: payload.reason });
     return;
   }
   if (r.status !== 0 || payload.status === "error") {
-    logStep("r2-download", "error", { error: payload.reason || (r.stderr || "").slice(0, 200) });
+    logStep("storage-download", "error", { error: payload.reason || (r.stderr || "").slice(0, 200) });
     return;
   }
-  logStep("r2-download", "ok", {
-    mode: payload.mode,
+  logStep("storage-download", "ok", {
     bucketsScanned: payload.bucketsScanned,
     totalObjects: payload.totalObjects,
     totalSize: humanSize(payload.totalBytes || 0),
@@ -282,22 +338,18 @@ function stepMemory() {
 
   // Claude Code convention: ~/.claude/projects/<encoded-path>/ where the
   // absolute project path has its separators (/, \, :) AND dots replaced by
-  // dashes. E.g. "C:\Code\my-project" -> "C--Code-my-project".
-  // We normalize both sides the same way so a project like "my-project"
-  // matches the encoded dir "C--Code-my-project".
+  // dashes. We normalize both sides the same way so a project like
+  // "my-project" matches the encoded dir "C--Code-my-project".
   const normalize = (s) => s.toLowerCase().replace(/[.\\/:]/g, "-");
   const needle = normalize(PROJECT);
 
-  // Note: modern Claude Code stores transcripts (.jsonl) and session metadata
-  // directly in the project dir - not in a legacy "memory/" subdir. We copy
-  // the whole project dir to capture everything that's there (transcripts,
-  // memory files if they exist, session indexes, etc.).
+  // Transcripts (.jsonl) and session metadata live directly in the project
+  // dir, not in a legacy "memory/" subdir - copy the whole thing.
   const dirs = readdirSync(claudeProjects);
   const matches = [];
   for (const d of dirs) {
     if (normalize(d).includes(needle)) {
-      const projDir = join(claudeProjects, d);
-      matches.push({ projectDir: d, srcDir: projDir });
+      matches.push({ projectDir: d, srcDir: join(claudeProjects, d) });
     }
   }
 
@@ -317,64 +369,40 @@ function stepMemory() {
 }
 
 // ============================================================
-// Step 6: Configs (Vercel project, wrangler.toml, Stripe webhooks metadata)
+// Step 6: Config - Scaleway resource linkage (resolved live by name, not a
+// secret; CONTRACT.md §2, §7 - there is no repo-local linkage file anymore)
 // ============================================================
-function stepConfigs() {
+async function stepConfigs() {
   const configDir = join(SNAP_DIR, "config");
   mkdirSync(configDir, { recursive: true });
   const captured = {};
 
-  // Vercel project link
-  const vercelLink = join(PROJECT_DIR, ".vercel", "project.json");
-  if (existsSync(vercelLink)) {
-    cpSync(vercelLink, join(configDir, "vercel-project.json"));
-    captured.vercelLink = true;
-  }
-
-  // wrangler.toml at root or apps/worker
-  for (const candidate of ["wrangler.toml", "apps/worker/wrangler.toml", "wrangler.jsonc"]) {
-    const src = join(PROJECT_DIR, candidate);
-    if (existsSync(src)) {
-      const destName = candidate.replace(/\//g, "_");
-      cpSync(src, join(configDir, destName));
-      captured.wrangler = (captured.wrangler || []).concat(candidate);
-    }
-  }
-
-  // render.yaml if present
-  const renderYaml = join(PROJECT_DIR, "render.yaml");
-  if (existsSync(renderYaml)) {
-    cpSync(renderYaml, join(configDir, "render.yaml"));
-    captured.render = true;
-  }
-
-  // Stripe webhooks (URLs + events only - NO secrets)
-  const stripeCheck = run("stripe", ["--version"]);
-  if (stripeCheck.status === 0) {
-    const r = run("stripe", ["webhook_endpoints", "list", "--limit", "100"]);
-    if (r.status === 0) {
-      // The CLI outputs JSON when stdout is piped
-      try {
-        const out = r.stdout || "";
-        // Some versions wrap output. Try parse line by line if not direct JSON.
-        let endpoints = [];
-        try {
-          const parsed = JSON.parse(out);
-          endpoints = parsed.data || parsed;
-        } catch {
-          // ignore
-        }
-        const sanitized = (Array.isArray(endpoints) ? endpoints : []).map(e => ({
-          id: e.id,
-          url: e.url,
-          enabled_events: e.enabled_events,
-          status: e.status,
-          description: e.description,
-          metadata: e.metadata,
-        }));
-        writeFileSync(join(configDir, "stripe-webhooks.json"), JSON.stringify(sanitized, null, 2));
-        captured.stripeWebhooks = sanitized.length;
-      } catch {}
+  if (SCW_PROJECT_ID) {
+    try {
+      const slug = slugify(PROJECT);
+      const containersApi = await api("Container", "v1");
+      const namespaces = await sdkCall(() =>
+        containersApi.listNamespaces({ region: REGION, projectId: SCW_PROJECT_ID, name: slug }).all(),
+      );
+      const ns = namespaces.find((n) => n.name === slug) || null;
+      const production = ns ? await findContainerByName(ns.id, PROJECT) : null;
+      writeFileSync(
+        join(configDir, "scaleway-link.json"),
+        JSON.stringify(
+          {
+            projectId: SCW_PROJECT_ID,
+            region: REGION,
+            namespaceId: ns?.id ?? null,
+            namespaceName: ns?.name ?? null,
+            productionContainerId: production?.id ?? null,
+          },
+          null,
+          2,
+        ) + "\n",
+      );
+      captured.scalewayLink = true;
+    } catch (e) {
+      captured.scalewayLinkError = e.message;
     }
   }
 
@@ -394,18 +422,18 @@ function writeManifest() {
 
 **Date** : ${new Date().toISOString()}
 **Source** : ${PROJECT_DIR}
-**Outil** : Hypervibe / save-project
+**Outil** : Baudrier / save-project
 
 ## Contenu
 
 | Sous-dossier | Taille | Description |
 |---|---|---|
 | \`code/\` | ${sizes.code} | Git bundle complet (toute l'history) + package.json + working-changes.patch si modifs non commitées |
-| \`db/\` | ${sizes.db} | Schema (\`schema.json\`) + données JSON par table |
-| \`env/\` | ${sizes.env} | Variables d'environnement pullées depuis Vercel (production / preview / development) |
-| \`storage/\` | ${sizes.storage} | Contenu des buckets Cloudflare R2 (global + EU si présents) |
-| \`memory/\` | ${sizes.memory} | Fichiers mémoire Claude du projet |
-| \`config/\` | ${sizes.config} | Snapshots Vercel/Wrangler/Render/Stripe (les webhook secrets NE sont PAS inclus) |
+| \`db/\` | ${sizes.db} | **PAS de données** - voir \`db/NOTE.md\` pour pourquoi et ce qui protège réellement votre base |
+| \`env/\` | ${sizes.env} | Valeurs lues depuis Scaleway Secret Manager (\`secret-manager.env\`) + copie du \`.env\`/\`.env.local\` local |
+| \`storage/\` | ${sizes.storage} | Contenu du bucket Object Storage Scaleway (si configuré) |
+| \`memory/\` | ${sizes.memory} | Fichiers mémoire/transcripts Claude Code du projet |
+| \`config/\` | ${sizes.config} | \`scaleway-link.json\` (liaison namespace/container résolue par nom - pas un secret) |
 
 ## Rapport d'exécution
 
@@ -415,24 +443,23 @@ ${JSON.stringify(steps, null, 2)}
 
 ## ⚠️ Sécurité
 
-Ce snapshot contient des **secrets en clair** (clés API dans les fichiers \`env/*.env\`).
-À traiter comme un fichier sensible :
+Ce snapshot contient des **secrets en clair** (clés API dans \`env/secret-manager.env\`
+et les copies de \`.env\`/\`.env.local\`). À traiter comme un fichier sensible :
 - Pas de partage sur un canal non chiffré
 - Pas de stockage sur un service public
-- À déchiffrer / supprimer dès qu'il n'est plus utile
+- À supprimer dès qu'il n'est plus utile
 
 ## Restauration
 
 La restauration n'est pas automatisée. Pour reconstruire le projet manuellement :
 
-1. **Code** : \`git clone code/repo.bundle <new-dir>\` puis \`pnpm install\`. Si \`working-changes.patch\` est présent, \`cd <new-dir> && git apply ../code/working-changes.patch\`.
-2. **Variables d'env** : \`cp env/production.env <new-dir>/.env\`. Pour Vercel : \`vercel env add\` pour chaque variable, ou utiliser la skill \`/_push-env-vars\` d'Hypervibe.
-3. **DB** : créer une nouvelle base Neon, puis demander à Claude Code de générer un script de restauration qui lit \`db/schema.json\` et insère depuis les fichiers \`*.json\`.
-4. **R2** : recréer les buckets via \`wrangler r2 bucket create\`, puis \`wrangler r2 object put\` pour chaque fichier de \`storage/\`.
-5. **Webhooks Stripe** : recréer chaque webhook depuis \`config/stripe-webhooks.json\` via le dashboard Stripe (les secrets \`whsec_...\` sont nécessairement régénérés à la création).
+1. **Code** : \`git clone code/repo.bundle <nouveau-dossier>\` puis \`pnpm install\`. Si \`working-changes.patch\` est présent, \`cd <nouveau-dossier> && git apply ../code/working-changes.patch\`.
+2. **Variables d'env** : copiez \`env/secret-manager.env\` vers \`.env\` dans le nouveau dossier, ou réinjectez chaque valeur dans Secret Manager avec la skill \`/rotate-secret\` de Baudrier.
+3. **Base de données** : voir \`db/NOTE.md\` - il n'y a pas de données à restaurer depuis ce zip. Relancez \`/add-db\` pour provisionner une base neuve et vide, ou vérifiez dans la console Scaleway si une sauvegarde automatique de l'ancienne base est encore disponible (fréquence et rétention non garanties - à vérifier au cas par cas dans la console, pas en se fiant à un chiffre supposé).
+4. **Stockage** : recréez le bucket via la skill \`/add-storage\`, puis réuploadez le contenu de \`storage/\`.
 
-En cas de doute, ouvrir Claude Code dans le dossier du snapshot et demander :
-> *"Voici un snapshot Hypervibe d'un projet à restaurer. Lis le MANIFEST.md et guide-moi pas à pas."*
+En cas de doute, ouvrez Claude Code dans le dossier du snapshot et demandez :
+> *"Voici un snapshot Baudrier d’un projet à restaurer. Lis le MANIFEST.md et guide-moi pas à pas."*
 `;
 
   writeFileSync(join(SNAP_DIR, "MANIFEST.md"), md);
@@ -445,11 +472,10 @@ function buildZip() {
   mkdirSync(OUT_DIR, { recursive: true });
   const zipPath = join(OUT_DIR, `${SNAP_NAME}.zip`);
 
-  // Use Python zipfile (consistent with export-plugin convention, cross-platform).
-  // We write the script to a temp file rather than pass it via `python -c` -
-  // on Windows, multi-line scripts piped through `cmd.exe -c` get mangled
-  // ("Argument expected for the -c option"). Calling python with a file path
-  // avoids any shell quoting issues entirely.
+  // Use Python zipfile (no npm dependency needed). We write the script to a
+  // temp file rather than pass it via `python -c`: this harness spawns with
+  // argv arrays only, never a shell, so a multi-line script has nowhere to
+  // go except a real file.
   const pyScript = `
 import zipfile, os, sys
 src = sys.argv[1]
@@ -477,11 +503,11 @@ with zipfile.ZipFile(dst, 'w', zipfile.ZIP_DEFLATED) as zf:
 // ============================================================
 try {
   stepGitBundle();
-  stepEnvVars();
-  stepDbDump();
-  stepR2Download();
+  await stepEnvVars();
+  await stepDatabaseNote();
+  stepStorageDownload();
   stepMemory();
-  stepConfigs();
+  await stepConfigs();
   writeManifest();
 
   const zipInfo = buildZip();

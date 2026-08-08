@@ -1,16 +1,24 @@
 import { createHmac, timingSafeEqual } from "crypto";
 import { cookies } from "next/headers";
 import { TOTP, Secret } from "otpauth";
+import { and, eq, gt, isNull } from "drizzle-orm";
+import { db } from "~/server/db";
+import { trustedDevices, loginProofs } from "~/server/db/schema";
 
 /**
- * Briques 2FA (sans dépendance DB) :
- * - vérification du code TOTP (appli d'authentification)
- * - cookie "appareil de confiance" (2FA demandé 1×/24h par navigateur)
- * - preuve de connexion signée (le serveur d'auth fait confiance à la server
- *   action qui a déjà vérifié mot de passe + 2FA - voir loginAction).
+ * Briques 2FA :
+ * - vérification du code TOTP (appli d’authentification)
+ * - cookie "appareil de confiance" (2FA demandé 1×/24h par navigateur),
+ *   signé ET vérifié en base (table trusted_device) - un cookie rejoué après
+ *   révocation ou expiration en base est refusé même si sa signature reste
+ *   valide.
+ * - preuve de connexion à usage unique (nonce en base, table login_proof) :
+ *   le serveur d’auth fait confiance à la server action qui a déjà vérifié
+ *   mot de passe + 2FA (voir loginAction), mais la preuve ne peut être
+ *   consommée qu’une seule fois.
  */
 
-const TRUST_COOKIE = "{{COOKIE_NAME}}";
+const TRUST_COOKIE = "__Host-{{COOKIE_NAME}}";
 const TRUST_TTL_MS = 24 * 60 * 60 * 1000; // 24h
 const PROOF_TTL_MS = 90_000; // 90s
 
@@ -48,43 +56,95 @@ export function verifyTotp(token: string): boolean {
     period: 30,
     secret: Secret.fromBase32(secret),
   });
-  // window:1 tolère un décalage d'horloge d'un cran (±30s).
+  // window:1 tolère un décalage d’horloge d’un cran (±30s).
   return totp.validate({ token: clean, window: 1 }) !== null;
 }
 
-/* ── Appareil de confiance (cookie 24h) ──────────────────────────────── */
+/* ── Appareil de confiance (cookie 24h + table trusted_device) ──────────── */
 
-export async function setTrustedDevice(): Promise<void> {
-  const exp = String(Date.now() + TRUST_TTL_MS);
-  const value = `${exp}.${sign(exp)}`;
+export async function setTrustedDevice(username: string): Promise<void> {
+  const deviceId = crypto.randomUUID();
+  const exp = Date.now() + TRUST_TTL_MS;
+  await db.insert(trustedDevices).values({
+    id: deviceId,
+    username,
+    expiresAt: new Date(exp),
+  });
+
+  const value = `${deviceId}.${exp}.${sign(`${username}|${deviceId}|${exp}`)}`;
   (await cookies()).set(TRUST_COOKIE, value, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    // __Host- requires Secure - unconditional, not NODE_ENV-gated. Serverless
+    // Containers always serve HTTPS in production; browsers treat localhost
+    // as a secure context too, so `next dev` still works.
+    secure: true,
     sameSite: "lax",
     path: "/",
     maxAge: TRUST_TTL_MS / 1000,
   });
 }
 
-export async function isTrustedDevice(): Promise<boolean> {
+export async function isTrustedDevice(username: string): Promise<boolean> {
   const raw = (await cookies()).get(TRUST_COOKIE)?.value;
   if (!raw) return false;
-  const [exp, mac] = raw.split(".");
-  if (!exp || !mac) return false;
-  if (!safeEqualHex(mac, sign(exp))) return false;
-  return Number(exp) > Date.now();
+  const [deviceId, exp, mac] = raw.split(".");
+  if (!deviceId || !exp || !mac) return false;
+  if (!safeEqualHex(mac, sign(`${username}|${deviceId}|${exp}`))) return false;
+  if (Number(exp) <= Date.now()) return false;
+
+  // The signature only proves the cookie hasn't been tampered with - it says
+  // nothing about revocation. The device row is the actual source of truth:
+  // sign-out marks it revoked, and that must take effect immediately even
+  // though the cookie itself is still validly signed and unexpired.
+  const device = await db.query.trustedDevices.findFirst({ where: eq(trustedDevices.id, deviceId) });
+  if (!device || device.username !== username || device.revokedAt) return false;
+  return device.expiresAt.getTime() > Date.now();
 }
 
-/* ── Preuve de connexion (server action → NextAuth authorize) ─────────── */
-
-export function createLoginProof(username: string): string {
-  const ts = String(Date.now());
-  return `${ts}.${sign(`${username}.${ts}`)}`;
+/** Revokes the current browser's trusted-device grant (DB row + cookie).
+ * Called on sign-out - staying signed out should mean staying 2FA-challenged
+ * next time, not just ending the current session. */
+export async function revokeTrustedDevice(): Promise<void> {
+  const jar = await cookies();
+  const deviceId = jar.get(TRUST_COOKIE)?.value.split(".")[0];
+  jar.delete(TRUST_COOKIE);
+  if (!deviceId) return;
+  await db.update(trustedDevices).set({ revokedAt: new Date() }).where(eq(trustedDevices.id, deviceId));
 }
 
-export function verifyLoginProof(username: string, proof: string): boolean {
-  const [ts, mac] = proof.split(".");
-  if (!ts || !mac) return false;
-  if (!safeEqualHex(mac, sign(`${username}.${ts}`))) return false;
-  return Date.now() - Number(ts) < PROOF_TTL_MS;
+/* ── Preuve de connexion à usage unique (server action → NextAuth authorize) ── */
+
+export async function createLoginProof(username: string): Promise<string> {
+  const id = crypto.randomUUID();
+  const exp = Date.now() + PROOF_TTL_MS;
+  await db.insert(loginProofs).values({
+    id,
+    username,
+    expiresAt: new Date(exp),
+  });
+  return `${id}.${exp}.${sign(`${username}|${id}|${exp}`)}`;
+}
+
+export async function verifyLoginProof(username: string, proof: string): Promise<boolean> {
+  const [id, exp, mac] = proof.split(".");
+  if (!id || !exp || !mac) return false;
+  if (!safeEqualHex(mac, sign(`${username}|${id}|${exp}`))) return false;
+  if (Number(exp) <= Date.now()) return false;
+
+  // Atomic single-use: the UPDATE only matches a row that is still
+  // unconsumed, unexpired, and for this username. A rowCount of 0 means it
+  // was already burned (or never existed) - replaying the same proof string
+  // a second time must fail even though its signature still checks out.
+  const result = await db
+    .update(loginProofs)
+    .set({ consumedAt: new Date() })
+    .where(
+      and(
+        eq(loginProofs.id, id),
+        eq(loginProofs.username, username),
+        isNull(loginProofs.consumedAt),
+        gt(loginProofs.expiresAt, new Date()),
+      ),
+    );
+  return (result.rowCount ?? 0) > 0;
 }

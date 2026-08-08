@@ -11,13 +11,13 @@ Ajoute un **système de rôles utilisateurs** pour différencier les droits d'ac
 
 ## Comment ça se passe
 
-1. **Vérifications** : Hypervibe vérifie que vous avez bien une base de données et un système de comptes utilisateurs (`/add-auth` en mode users). Si l'auth admin manque, elle la pose en amont automatiquement pour que la page de gestion soit protégée.
+1. **Vérifications** : Baudrier vérifie que vous avez bien une base de données et un système de comptes utilisateurs (`/add-auth` en mode users). Si l'auth admin manque, elle la pose en amont automatiquement pour que la page de gestion soit protégée.
 
-2. **Choix des rôles** : Hypervibe vous propose une liste adaptée à votre projet (par exemple `membre, editeur, moderateur` pour un site éditorial, `acheteur, vendeur, moderateur` pour une marketplace). Vous acceptez ou vous donnez la vôtre.
+2. **Choix des rôles** : Baudrier vous propose une liste adaptée à votre projet (par exemple `membre, editeur, moderateur` pour un site éditorial, `acheteur, vendeur, moderateur` pour une marketplace). Vous acceptez ou vous donnez la vôtre.
 
-3. **Rôle par défaut** : Hypervibe vous demande quel rôle recevra chaque nouveau visiteur qui s'inscrit (typiquement le plus restreint, par exemple `membre`).
+3. **Rôle par défaut** : Baudrier vous demande quel rôle recevra chaque nouveau visiteur qui s'inscrit (typiquement le plus restreint, par exemple `membre`).
 
-4. **Migration des utilisateurs existants** (s'il y en a) : Hypervibe vous demande quel rôle attribuer à vos utilisateurs déjà inscrits.
+4. **Migration des utilisateurs existants** (s'il y en a) : Baudrier vous demande quel rôle attribuer à vos utilisateurs déjà inscrits.
 
 5. **Mise en place automatique** :
   - Ajout du type "rôle" en base (Postgres `enum`)
@@ -41,12 +41,12 @@ Ajoute un **système de rôles utilisateurs** pour différencier les droits d'ac
 
 - Le projet doit avoir `/add-auth` en mode **users** (comptes utilisateurs en base)
 - La base de données doit être branchée (`/add-db` lancé)
-- Si vous voulez la page de gestion (la plupart du temps oui), `/add-auth` en mode admin sera lancé en amont par Hypervibe si manquant
+- Si vous voulez la page de gestion (la plupart du temps oui), `/add-auth` en mode admin sera lancé en amont par Baudrier si manquant
 
 ## Astuces
 
 {{callout:tip|Le rôle `admin` est volontairement réservé}}
-Le nom `admin` est réservé au login admin global de votre app (configuré par `/add-auth` en mode admin, stocké en variable d'environnement, pas en base). Hypervibe refuse de l'ajouter à la liste des rôles utilisateurs. Pour un rôle DB équivalent en pouvoir, utilisez `moderateur`, `manager`, ou `superviseur`. Ça garantit qu'il n'y aura jamais de confusion entre les deux notions.
+Le nom `admin` est réservé au login admin global de votre app (configuré par `/add-auth` en mode admin, stocké en variable d'environnement, pas en base). Baudrier refuse de l'ajouter à la liste des rôles utilisateurs. Pour un rôle DB équivalent en pouvoir, utilisez `moderateur`, `manager`, ou `superviseur`. Ça garantit qu'il n'y aura jamais de confusion entre les deux notions.
 {{/callout}}
 
 {{callout:tip|Un seul rôle au début, multi-rôle plus tard si besoin}}
@@ -54,9 +54,9 @@ Par défaut la page admin propose un menu déroulant simple (un seul rôle par u
 {{/callout}}
 
 {{callout:info|Faire évoluer vos rôles plus tard}}
-Vous pouvez relancer `/add-role` à tout moment pour ajouter un nouveau rôle, en supprimer un, renommer, ou changer le rôle par défaut. Hypervibe détecte la configuration existante et vous propose un menu adapté. Pour les opérations destructives (suppression d'un rôle), elle vous demande toujours vers quel autre rôle réassigner les utilisateurs concernés.
+Vous pouvez relancer `/add-role` à tout moment pour ajouter un nouveau rôle, en supprimer un, renommer, ou changer le rôle par défaut. Baudrier détecte la configuration existante et vous propose un menu adapté. Pour les opérations destructives (suppression d'un rôle), elle vous demande toujours vers quel autre rôle réassigner les utilisateurs concernés.
 {{/callout}}
 
 {{callout:info|Pour protéger une page ou une action par rôle}}
-Vous n'avez pas à manipuler les helpers vous-même. Dites simplement à Hypervibe : *"protège la page X pour les modérateurs uniquement"*, ou *"seuls les utilisateurs `pro` peuvent appeler cette fonction"*. Le pattern à suivre est documenté dans le `CLAUDE.md` du projet, donc Claude l'applique tout seul à chaque nouvelle page que vous lui demandez.
+Vous n'avez pas à manipuler les helpers vous-même. Dites simplement à Baudrier : *"protège la page X pour les modérateurs uniquement"*, ou *"seuls les utilisateurs `pro` peuvent appeler cette fonction"*. Le pattern à suivre est documenté dans le `CLAUDE.md` du projet, donc Claude l'applique tout seul à chaque nouvelle page que vous lui demandez.
 {{/callout}}

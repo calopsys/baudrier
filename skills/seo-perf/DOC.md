@@ -10,9 +10,9 @@ Measures your site's real speed with PageSpeed Insights, Google's official tool.
 
 ## How it works
 
-1. **Checks**: the site must be deployed (we measure the live site, not the local code). On first use, Hypervibe guides you through creating a free Google key (2 minutes, just once for all your projects, stored in your vault).
+1. **Checks**: the site must be **public** first - every app ships restricted to the office VPN by default, and Google cannot reach a restricted site, so Baudrier checks this and asks for `/publish` if needed. It must also be deployed (we measure the live site, not the local code). On first use, Baudrier guides you through creating a free Google key (2 minutes, just once for all your projects, stored in the Scaleway secrets vault).
 
-2. **Choosing representative pages**: we don't audit the whole site. Pages of the same type (template) have the same performance, so Hypervibe selects 3 to 5 sample pages (home, listing, form...) and measures on mobile first (that's what Google looks at).
+2. **Choosing representative pages**: we don't audit the whole site. Pages of the same type (template) have the same performance, so Baudrier selects 3 to 5 sample pages (home, listing, form...) and measures on mobile first (that's what Google looks at).
 
 3. **Measurement**: each page is loaded by Google's servers (15 to 30 seconds per page), after a "wake-up" of the site so we don't measure a false cold start.
 
@@ -26,10 +26,11 @@ Measures your site's real speed with PageSpeed Insights, Google's official tool.
 
 - A performance report with figures per page (scores + Core Web Vitals)
 - The validated fixes applied to the code
-- A reusable PageSpeed Insights key in your vault (first time only)
+- A reusable PageSpeed Insights key in the Scaleway secrets vault (first time only)
 
 ## Prerequisites
 
+- A **public** site (`/publish`): every app ships restricted to the office VPN by default, and Google cannot reach a restricted site
 - A **deployed** site (the audit measures the live site)
 - A free Google PageSpeed key (guided creation on first use)
 

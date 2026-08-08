@@ -1,9 +1,12 @@
-// hypervibe:push
-// Notifications push (Web Push). Helper d'envoi côté serveur. Le marker ci-dessus
+// baudrier:push
+// Notifications push (Web Push). Helper d’envoi côté serveur. Le marker ci-dessus
 // sert à la détection par /add-push-notification (re-run) et /add-notification-center
 // (câblage de notifyUser) : ne pas le retirer.
-// VAPID lu depuis l'environnement (NEXT_PUBLIC_VAPID_PUBLIC_KEY,
-// VAPID_PRIVATE_KEY, VAPID_SUBJECT) configuré par /add-push-notification.
+// VAPID lu depuis l’environnement (VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY,
+// VAPID_SUBJECT) configuré par /add-push-notification. Noms canoniques sans
+// préfixe NEXT_PUBLIC_ : ce fichier est server-only, et le préfixe NEXT_PUBLIC_
+// est réservé à ce qui doit être inliné côté client au build (voir
+// push-router.ts pour comment la clé publique atteint quand même le navigateur).
 import webpush from "web-push";
 import { eq } from "drizzle-orm";
 import type { db as dbClient } from "~/server/db";
@@ -12,7 +15,7 @@ import { pushSubscriptions } from "~/server/db/schema";
 let configured = false;
 function ensureConfigured(): boolean {
   if (configured) return true;
-  const pub = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+  const pub = process.env.VAPID_PUBLIC_KEY;
   const priv = process.env.VAPID_PRIVATE_KEY;
   // Must be a valid mailto: or https: URL or web-push throws. Safe default if
   // unset (set VAPID_SUBJECT to your contact email).
@@ -29,7 +32,7 @@ export type PushPayload = {
   url?: string;
 };
 
-/** Envoie une notification à tous les appareils d'un utilisateur. Nettoie les abonnements morts (404/410). */
+/** Envoie une notification à tous les appareils d’un utilisateur. Nettoie les abonnements morts (404/410). */
 export async function sendPushToUser(
   db: typeof dbClient,
   userId: string,

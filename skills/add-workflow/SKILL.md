@@ -1,6 +1,6 @@
 ---
 name: add-workflow
-description: "Add an agentic workflow to the project: a finite, event-triggered pipeline of typed steps (some intelligent via the Claude API) that runs INSIDE the Next.js app, within serverless limits - no dedicated worker, no 24/7 agent, no extra infrastructure. The sweet spot between /add-cron (a scheduled task) and /add-agent (an autonomous product agent): 'when X happens, do A then B then C, one of which needs to understand/decide/write'. Scaffolds a shared step-runner with per-step retry and run logging, the workflow module, and the chosen trigger (user action, webhook, or schedule via /add-cron). Invoked directly or routed from /add-automation."
+description: "Add an agentic workflow to the project: a finite, event-triggered pipeline of typed steps (some intelligent via Scaleway Generative APIs) that runs INSIDE the Next.js app's Scaleway Serverless Container by default - no dedicated worker, no 24/7 agent, no extra infrastructure for the common case. The sweet spot between /add-cron (a scheduled task) and /add-agent (an autonomous product agent): 'when X happens, do A then B then C, one of which needs to understand/decide/write'. Scaffolds a shared step-runner with per-step retry and run logging, the workflow module, and the chosen trigger (user action, webhook, or schedule via /add-cron). A pipeline that genuinely can't fit one request escalates to a dedicated Scaleway Serverless Job (same primitive /add-agent uses), never a bespoke worker. Invoked directly or routed from /add-automation."
 compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js and pnpm; the project must be a Next.js app (typically from /bootstrap)."
 ---
 
@@ -14,7 +14,7 @@ compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js a
 
 ## What a workflow is (and is not)
 
-A workflow is **a finite sequence of steps that the app itself executes when something happens**: a user clicks, a file lands, a payment arrives, a schedule fires. Some steps are plain code (call an API, write to the database, send an email); some steps are **intelligent** (a Claude API call that reads, classifies, extracts, or writes). The whole run finishes in seconds to a couple of minutes, inside a normal serverless function.
+A workflow is **a finite sequence of steps that the app itself executes when something happens**: a user clicks, a file lands, a payment arrives, a schedule fires. Some steps are plain code (call an API, write to the database, send an email); some steps are **intelligent** (a Scaleway Generative APIs call that reads, classifies, extracts, or writes). The whole run finishes in seconds to a couple of minutes, inside the app's own Scaleway Serverless Container - or, for the rare pipeline that needs real headroom, as a dedicated Scaleway Serverless Job (see Step 2).
 
 Most people who ask for "an agent" actually want this. The test:
 
@@ -23,7 +23,7 @@ Most people who ask for "an agent" actually want this. The test:
 | The sequence is finite and known in advance (2-8 steps) | The AI decides its own next actions in a loop with tools → `/add-agent` |
 | Triggered by an event, then it ENDS | Runs continuously, 24/7, polls or listens → `/add-automation` (worker) |
 | State lives in the database between runs | Needs in-memory state across runs, queues, websockets → `/add-automation` (worker) |
-| Fits within the serverless time budget (see Step 2) | Minutes of CPU, transcoding, huge files → `/add-automation` (worker) |
+| Fits within the request/Job time budget (see Step 2) | Minutes of CPU, transcoding, huge files → `/add-automation` (worker) |
 | Output serves the app or its users | Output is a brief/report for the operator themselves → `/add-routine` |
 
 If during discovery the need clearly falls in the right column, say so in one honest sentence and hand off to the right command. Do not force a workflow.
@@ -31,8 +31,10 @@ If during discovery the need clearly falls in the right column, say so in one ho
 ## Step 0 - Preflight
 
 1. Invoke **`_detect-project-root`** → `PROJECT_NAME`, `IS_MONOREPO`, `WEB_DIR`, `IS_NEXTJS`. If not a Next.js project, stop: workflows live inside the app.
-2. Invoke **`_check-deps`** for the database. A real DB (Neon wired by `/add-db`) enables run logging in a table; without it the runner degrades to console logging (say so, and continue - do not force `/add-db`).
-3. **Anthropic key, ONLY if the pipeline will have intelligent steps** (checked again after discovery): look for `ANTHROPIC_API_KEY` in the project `.env`. If missing, guide the user: open https://console.anthropic.com/settings/keys with `_open-and-paste`, have them create a key, then push it with `_push-env-vars` (`ANTHROPIC_API_KEY=<value>`, local + Vercel). Never echo the value.
+2. Invoke **`_check-deps`** for the database. A real DB (Scaleway Serverless SQL Database wired by `/add-db`) enables run logging in a table; without it the runner degrades to console logging (say so, and continue - do not force `/add-db`).
+3. **Scaleway Generative APIs key, ONLY if the pipeline will have intelligent steps** (checked again after discovery): check whether `SCW_GENERATIVE_API_KEY` already exists in Secret Manager (`node scripts/scaleway/secrets.mjs exists SCW_GENERATIVE_API_KEY`) - if `/add-agent` has already run in this project, it's already there and gets reused, nothing to do. Otherwise mint a narrowly-scoped one yourself the same way `setup-agent.mjs` does: `ensureApplication` + `ensurePolicy({ permissionSetNames: ["GenerativeApisModelAccess"] })` + `createApiKey` from `scripts/scaleway/iam.mjs`, then `putSecret("SCW_GENERATIVE_API_KEY", ...)`. No key to paste, nothing to ask the user for.
+
+   **If minting fails with `"type":"permission_denied"`** (the operator's key lacks `IAMManager`): do not relay a French message to an administrator here - that no longer happens at this stage. The mint falls back to the operator's own personal Scaleway key for `SCW_GENERATIVE_API_KEY`, silently, the same delegated-secret-then-personal-key chain `/add-db` uses for `DATABASE_URL` (CONTRACT.md §1, §2): the fallback is recorded so `/publish` can find and swap it later, `SCW_GENERATIVE_API_KEY` is stored in Secret Manager as usual, and this step continues with no user-visible interruption. No administrator action happens at this point - the admin is asked once, later, when the user runs `/publish`, which refuses to proceed while any secret is still dev-backed and prints one consolidated request covering every addon at once.
 
 ## Step 1 - Discovery
 
@@ -50,16 +52,21 @@ Ask at most 2 clarifying questions if something is genuinely ambiguous. Typical:
 
 ## Step 2 - The duration budget (the honest gate)
 
-A workflow runs inside a Vercel serverless function, and functions have a **maximum duration that depends on the plan and configuration**. Do not recite numbers from memory:
+By default a workflow runs inside the app's own Scaleway Serverless Container, handling the trigger's HTTP request directly - fine for the vast majority of pipelines (seconds to a couple of minutes). Do not recite a hard number from memory - Scaleway's own request-duration limits depend on the container's configuration:
 
-1. Check `vercel.json` / route `maxDuration` exports in the project for an explicit setting.
-2. Estimate the pipeline: each plain API step ~1-3s, each Claude step ~5-30s depending on input size, file processing depends on size.
-3. Rule of thumb to say out loud: **under a minute is always safe; a few minutes needs the right plan configuration; beyond that, a workflow is the wrong shape**.
+1. Estimate the pipeline: each plain API step ~1-3s, each Generative APIs step ~2-20s depending on input size and model, file processing depends on size.
+2. Rule of thumb to say out loud: **under a minute is always safe; beyond a couple of minutes, don't fight the request timeout - move the step execution to a Job.**
 
-If the estimate clearly exceeds the budget, be honest and reroute:
-> Your pipeline as described would run ~X. That is beyond what the app can safely do in one shot. Two good options: split it (the trigger records the request, a scheduled tick processes the queue step by step), or a dedicated worker via `/add-automation`. Want me to set up the split version?
+If the estimate clearly exceeds a couple of minutes, be honest and offer the escalation - NOT a bespoke in-app queue-and-cron trick, but the same primitive `/add-agent` already uses:
 
-The split version stays a workflow (trigger enqueues → cron-triggered runs process), so it usually keeps everything self-contained.
+> Ton pipeline tel que décrit tournerait ~X. C'est trop long pour une seule requête HTTP. Je peux le faire tourner comme un **Job Scaleway dédié** à la place : le déclencheur enregistre la demande en base, un Job réveillé toutes les quelques minutes la traite avec tout le temps voulu (jusqu'à 24h), puis se rendort. Ça ajoute quelques minutes de latence, en échange d'une vraie marge de manœuvre et d'une facturation quasi nulle entre les exécutions. Je le mets en place ?
+
+If the user agrees, scaffold the escalated version by mirroring `/add-agent`'s Job pattern (read `templates/agent/entry.ts`, `templates/agent/job-definition.json` and `templates/agent/Dockerfile` for the exact shape - do not duplicate that machinery blindly, adapt it):
+- `apps/<workflow-name>-job/` with its own `entry.ts` (a short script that pops the oldest `queued` row from `workflow_run`, calls the same step-array through `runWorkflow()`, marks it `done`/`failed`, then exits - no tool-calling loop needed, workflows aren't agentic), `Dockerfile`, `package.json`, and `job-definition.json` (cron-triggered every few minutes, same `secretRefs` pattern for `DATABASE_URL` and, if there are intelligent steps, `SCW_GENERATIVE_API_KEY`).
+- The trigger (tRPC mutation / webhook route) INSERTS a `workflow_run` row with `status: "queued"` and returns immediately - it does NOT call the workflow function directly, and it does NOT call the Scaleway Jobs API itself (the deployed app never holds Job-management credentials; only the operator's `/deploy` does, via `scripts/scaleway/jobs.mjs`).
+- `/deploy` creates/updates this Job exactly like it does for an agent's Job, from the `job-definition.json` found under `apps/<workflow-name>-job/`.
+
+This escalation path exists for the rare case; most workflows never need it, and it never grows into a webhook/queue custom worker like `/add-automation`'s.
 
 ## Step 3 - Scaffold
 
@@ -205,12 +212,15 @@ Create `src/server/workflows/<kebab-name>.ts`. Template, to be tailored to the d
 
 ```ts
 // src/server/workflows/analyze-upload.ts
-import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
 import { env } from "~/env";
 import { runWorkflow, type Step } from "./_runner";
 
-// Latest balanced model; use claude-haiku-4-5 for cheap high-volume steps.
-const MODEL = "claude-sonnet-5";
+// Scaleway Generative APIs, OpenAI-compatible. Balanced default; use a
+// larger model (e.g. llama-3.3-70b-instruct) only if quality demands it -
+// see https://www.scaleway.com/en/docs/generative-apis/reference-content/supported-models/
+// for the current catalog and pricing.
+const MODEL = env.SCW_GENERATIVE_MODEL ?? "mistral-small-3.2-24b-instruct-2506";
 
 type Input = { documentUrl: string; userEmail: string };
 type Extracted = Input & { text: string };
@@ -230,17 +240,17 @@ const analyze: Step<Extracted, Analyzed> = {
   name: "analyze",
   retryable: true,
   run: async (input) => {
-    const anthropic = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
-    const msg = await anthropic.messages.create({
+    const client = new OpenAI({ apiKey: env.SCW_GENERATIVE_API_KEY, baseURL: env.SCW_GENERATIVE_BASE_URL });
+    const completion = await client.chat.completions.create({
       model: MODEL,
       max_tokens: 1024,
+      response_format: { type: "json_object" },
       messages: [{
         role: "user",
         content: `Summarize this document in 3 sentences, then classify it as one of: invoice, contract, report, other.\nRespond as JSON: {"summary": "...", "category": "..."}\n\n${input.text.slice(0, 50_000)}`,
       }],
     });
-    const block = msg.content[0];
-    const parsed = JSON.parse(block?.type === "text" ? block.text : "{}") as { summary?: string; category?: string };
+    const parsed = JSON.parse(completion.choices[0]?.message?.content ?? "{}") as { summary?: string; category?: string };
     return { ...input, summary: parsed.summary ?? "", category: parsed.category ?? "other" };
   },
 };
@@ -263,7 +273,7 @@ export function analyzeUpload(input: Input, idempotencyKey?: string) {
 }
 ```
 
-Install the SDK if missing: `pnpm add @anthropic-ai/sdk`. Add `ANTHROPIC_API_KEY` to `src/env.js` (server section) following the file's existing pattern.
+Install the SDK if missing: `pnpm add openai`. Add `SCW_GENERATIVE_API_KEY`, `SCW_GENERATIVE_BASE_URL` and `SCW_GENERATIVE_MODEL` to `src/env.js` (server section) following the file's existing pattern - these are the same canonical names CONTRACT.md §2 defines for `/add-agent`, so if an agent already exists in this project they're already wired and nothing new is needed.
 
 ### 3.d The trigger
 
@@ -278,8 +288,6 @@ import { type NextRequest, NextResponse } from "next/server";
 import { env } from "~/env";
 import { analyzeUpload } from "~/server/workflows/analyze-upload";
 
-export const maxDuration = 60;
-
 export async function POST(req: NextRequest) {
   if (req.headers.get("x-webhook-secret") !== env.ANALYZE_UPLOAD_WEBHOOK_SECRET) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -292,7 +300,7 @@ export async function POST(req: NextRequest) {
 
 - **Schedule** → do NOT reimplement a clock: invoke **`add-cron`** and have the generated `/api/cron/<name>` route call the workflow function. One mechanism, composed.
 
-Set `export const maxDuration` on the trigger route to the budget agreed in Step 2.
+Note: Next.js's `export const maxDuration` route config is meant for platforms with per-route function timeouts and does nothing on Scaleway Serverless Containers (they run standalone Next.js in a plain Node server) - don't add it. The real budget is Step 2's request-duration estimate; if a pipeline needs more room than a single request safely allows, escalate to a Job as described there instead of trying to extend a request timeout that isn't configurable per-route here.
 
 ## Step 4 - Implement the real logic now, or later
 
@@ -318,13 +326,7 @@ Invoke `_update-claude-md` with:
 
 ## Step 7 - RGPD (conditional)
 
-If the workflow sends END-USER data to the Claude API (intelligent steps processing user documents, messages, personal data), add Anthropic to the subprocessor registry:
-
-```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/update-privacy-policy.mjs" --add anthropic
-```
-
-Skip when the intelligent steps only touch the operator's own data or public content.
+Scaleway Generative APIs runs on the same Scaleway infrastructure already declared as the project's host - no separate subprocessor entry needed for the workflow's intelligent steps.
 
 ## Step 8 - Final summary
 
@@ -332,7 +334,7 @@ Skip when the intelligent steps only touch the operator's own data or public con
 >
 > **<kebab-name>**: <trigger> → <steps in plain words> → <result>
 > **Logged**: every run and step in your database (table `workflow_run`)<if no DB> in the server logs</if>
-> **Cost note**<if AI steps>: each run makes <N> Claude call(s); at your expected volume that is roughly <order of magnitude> per month. The `workflow_run` timings let you watch it.</if>
+> **Cost note**<if AI steps>: each run makes <N> Generative APIs call(s); at your expected volume that is roughly <order of magnitude> EUR/month. The `workflow_run` timings let you watch it.</if>
 >
 > To evolve it, just describe the change ("add a step that...", "make it also..."). To see activity: "show me the last workflow runs".
 

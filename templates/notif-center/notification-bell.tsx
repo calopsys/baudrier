@@ -5,7 +5,7 @@
 // dans le header / la barre de navigation. /add-notification-center adapte les
 // couleurs à la palette du projet.
 //
-// UI optimiste : la pastille et l'état lu/non-lu se mettent à jour immédiatement,
+// UI optimiste : la pastille et l’état lu/non-lu se mettent à jour immédiatement,
 // la persistance part en arrière-plan (rollback si erreur).
 import { useState } from "react";
 import { api } from "~/trpc/react";
@@ -68,13 +68,13 @@ export function NotificationBell() {
 
   // Clic sur une notification : on garantit la persistance du "lu" AVANT de
   // naviguer (une navigation immédiate annulerait la requête en cours), puis on
-  // ouvre le lien. L'UI, elle, est déjà à jour (optimiste).
+  // ouvre le lien. L’UI, elle, est déjà à jour (optimiste).
   const openNotification = async (n: { id: string; url: string | null; read: boolean }) => {
     if (!n.read) {
       try {
         await markOne.mutateAsync({ id: n.id });
       } catch {
-        // l'optimiste a déjà été rollback par onError ; on navigue quand même
+        // l’optimiste a déjà été rollback par onError ; on navigue quand même
       }
     }
     if (n.url) window.location.assign(n.url);

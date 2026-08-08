@@ -8,11 +8,12 @@
 // resolve it from the cwd via createRequire (a bare ESM import would resolve
 // relative to the plugin folder and fail).
 //
-// The keys are then pushed to .env + Vercel via _push-env-vars :
-//   NEXT_PUBLIC_VAPID_PUBLIC_KEY=<publicKey>
+// The keys are then stored via scripts/scaleway/secrets.mjs (putSecret) and
+// written to .env locally :
+//   VAPID_PUBLIC_KEY=<publicKey>
 //   VAPID_PRIVATE_KEY=<privateKey>
-// These are project-SPECIFIC secrets (like AUTH_SECRET) : .env / Vercel, never
-// the global vault.
+// These are project-SPECIFIC secrets (like AUTH_SECRET) : Scaleway Secret
+// Manager for the app's own Project, never a shared baudrier vault.
 
 import { createRequire } from "node:module";
 import path from "node:path";

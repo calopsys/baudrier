@@ -1,9 +1,9 @@
 ---
 name: _setup-auth-users
-description: Internal helper - sets up NextAuth in user-credentials mode (DB-backed email+password auth with signup, signin, account page with delete, and optional forgot/reset password if email is configured). Invoked by add-auth when the user chose the "system for users" option. Also offers OAuth add-ons (Google, GitHub) after the baseline is in place. Not meant to be invoked directly by users.
+description: Internal helper - sets up NextAuth in user-credentials mode (DB-backed email+password auth with signup, signin, account page with delete, and optional forgot/reset password if email is configured). Invoked by add-auth when the user chose the "system for users" option. Credentials-only, no OAuth add-ons. Not meant to be invoked directly by users.
 user-invocable: false
 allowed-tools: Bash, Read, Write, Edit, Glob, Grep
-compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (vercel, gh)."
+compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (scw, gh)."
 ---
 
 # Setup Auth - User-credentials mode
@@ -32,7 +32,7 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/setup-auth-users.mjs" \
   --web-dir "<WEB_DIR>"
 ```
 
-The script runs 15 sub-steps: preflight (refuses if `auth.ts` exists), email detection (via `_check-deps email`), install `next-auth@beta` + `@auth/drizzle-adapter`, AUTH_SECRET generation, schema patch (imports `text/integer/primaryKey/index` + `AdapterAccount` type, append 4 NextAuth tables + optional `password_reset_tokens` if email), drizzle-kit push, write `password.ts`, write `auth.ts` (marker `// hypervibe:auth-modes users`, `Session.user.id` non-nullable via module augmentation), creation of `rate-limit.ts` + `rateLimitedProcedure` if missing (standalone case), adding `protectedProcedure` to `trpc.ts` if missing, write tRPC router (variant chosen based on `emailOk` × provider: `auth-router.ts` / `auth-router-with-reset-resend.ts` / `auth-router-with-reset-brevo.ts`), register `authRouter` in `root.ts`, write API route with rate limiting, write pages (signin/signup/dashboard/account + forgot-password/reset-password if email), push AUTH_SECRET.
+The script runs 15 sub-steps: preflight (refuses if `auth.ts` exists), email detection (via `_check-deps email`), install `next-auth@beta` + `@auth/drizzle-adapter`, AUTH_SECRET generation, schema patch (imports `text/integer/primaryKey/index` + `AdapterAccount` type, append 4 NextAuth tables + optional `password_reset_tokens` if email), drizzle-kit push, write `password.ts`, write `auth.ts` (marker `// baudrier:auth-modes users`, `Session.user.id` non-nullable via module augmentation), creation of `rate-limit.ts` + `rateLimitedProcedure` if missing (standalone case), adding `protectedProcedure` to `trpc.ts` if missing, write tRPC router (variant chosen based on `emailOk`: `auth-router.ts` or `auth-router-with-reset.ts`, the latter sending via Scaleway Transactional Email), register `authRouter` in `root.ts`, write API route with rate limiting, write pages (signin/signup/dashboard/account + forgot-password/reset-password if email), push AUTH_SECRET.
 
 ### During execution
 
@@ -41,7 +41,7 @@ The script prints live:
 - At the end, a structured **handoff banner** (15/15 sub-steps expected)
 - On the last line on success, a parseable JSON object:
   ```json
-  {"success":true,"authMode":"users","emailReset":bool,"emailProvider":"resend|brevo|none","envVars":["AUTH_SECRET"]}
+  {"success":true,"authMode":"users","emailReset":bool,"emailProvider":"tem|none","envVars":["AUTH_SECRET"]}
   ```
 
 ### On success
@@ -56,7 +56,7 @@ Capture `emailReset` and `emailProvider` from the JSON for the summary. Move on 
    - `preflight` failed → `auth.ts` exists (re-config) → go back to the Step 0 menu of `add-auth`. Or a collision on a UI file / `password.ts` (delete manually if you want).
    - `installDeps` failed → pnpm/network error → manual retry: `cd <WEB_DIR> && pnpm add next-auth@beta @auth/drizzle-adapter`.
    - `patchSchema` failed → T3 reorganized the schema or `createTable` not found → fix manually and rerun.
-   - `pushSchema` failed → DATABASE_URL placeholder or Neon down → fix `.env` then `cd <WEB_DIR> && npx drizzle-kit push --force` by hand.
+   - `pushSchema` failed → `DATABASE_URL` placeholder or the Scaleway Serverless SQL Database unreachable → fix `.env` then `cd <WEB_DIR> && npx drizzle-kit push --force` by hand.
    - `writeAuthRouter` / `writeAuthTs` / other `write*` failed → filesystem permission (rare).
    - `pushEnvVars` failed → all the code is in place, only AUTH_SECRET didn't land → rerun manually with the value visible in the logs.
 4. Continue manually.
@@ -67,7 +67,7 @@ Capture `emailReset` and `emailProvider` from the JSON for the summary. Move on 
 
 The script generates 4 functional auth pages (`/signin`, `/signup`, `/dashboard`, `/account`) but CANNOT infer where in the layout to show a user menu (avatar + dashboard link / sign out) - the structure of the `<header>` or `<nav>` varies from project to project.
 
-Read `<WEB_DIR>/src/app/layout.tsx` (or `<WEB_DIR>/src/app/[locale]/layout.tsx` if i18n). Look for a `<header>`, `<nav>`, or a dedicated `Header.tsx` component. If you find a clear spot:
+Read `<WEB_DIR>/src/app/layout.tsx`. Look for a `<header>`, `<nav>`, or a dedicated `Header.tsx` component. If you find a clear spot:
 
 1. **Read the existing code** to understand the style (server vs client component, Tailwind classes used, structure).
 2. **Add** a block in the top-right corner that shows, based on `useSession()`:
@@ -83,7 +83,7 @@ If the layout has no `<header>` or if the structure is not obvious, do NOT force
 
 Invoke `_update-claude-md` with:
 
-- `stack`: `- **Auth**: NextAuth v5 (users mode - email+pwd accounts hashed with scrypt in DB<{{LIST_OAUTH}}>)` (add `, OAuth: Google` or `, OAuth: GitHub` if applied later via `add-google-auth` / `add-github-auth`; otherwise leave without the suffix)
+- `stack`: `- **Auth**: NextAuth v5 (users mode - email+pwd accounts hashed with scrypt in DB, credentials-only)`
 - `conventions`:
   - `- Auth users: \`await auth()\` from \`~/server/auth\` for the session. \`protectedProcedure\` in tRPC for routes that require a logged-in user. \`session.user.id\` is guaranteed non-null thanks to the module augmentation in \`auth.ts\`.`
 - `custom`:
@@ -137,18 +137,4 @@ Show (adapting based on `emailReset`):
 
 If the script reported any warnings (e.g. `rate-limit.ts` created in standalone), mention them here.
 
----
-
-## Step 5 - OAuth (optional offer)
-
-Now that the credentials baseline is in place, offer the user to add Google and/or GitHub OAuth as additional methods. The Drizzle adapter is already wired, so adding an OAuth provider no longer requires a schema migration.
-
-> ## 🔌 Want to add a Google or GitHub login on top?
->
-> Your users will be able to choose between signing in with email/password or via their Google/GitHub account. It's very widely used and it reduces friction at signup.
->
-> - **Google** - the most universal. Ask me *"add Google OAuth"* (or run `/add-google-auth`).
-> - **GitHub** - rather for technical apps (devs). *"add GitHub OAuth"* (or `/add-github-auth`).
-> - **None for now** - no problem, you can add it later.
-
-Don't invoke the OAuth skills yourself - let the user decide explicitly.
+This harness is credentials-only (no OAuth providers) - there is no follow-up offer to make once the summary is shown.

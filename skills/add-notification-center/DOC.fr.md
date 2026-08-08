@@ -17,7 +17,7 @@ Les deux se complètent et s'installent **dans n'importe quel ordre** : dès que
 
 ## Comment ça se passe
 
-1. **Vérification** : si le centre est déjà en place, Hypervibe propose un menu (réinstaller la cloche, régénérer, re-câbler le push).
+1. **Vérification** : si le centre est déjà en place, Baudrier propose un menu (réinstaller la cloche, régénérer, re-câbler le push).
 
 2. **Prérequis** : une base de données (`/add-db`) pour stocker les notifications, et des comptes utilisateurs (`/add-auth`) pour savoir à qui chaque notification appartient.
 

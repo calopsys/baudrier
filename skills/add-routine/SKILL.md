@@ -42,4 +42,4 @@ Relay the engine's result:
 > ✅ Your routine **<id>** is active: <mission in 1 sentence>, <schedule in plain words>, next run <date/time>.
 > To manage it, just tell me: *"pause my routine"*, *"change the schedule"*, *"show me its last run"*, *"delete it"*.
 
-If the routine touches a Hypervibe project (e.g. "analyze MY PROJECT's errors weekly"), also invoke `_update-claude-md` on that project with the `## Routines (opérateur)` section, same format as `/add-automation` Branch D.
+If the routine touches a Baudrier project (e.g. "analyze MY PROJECT's errors weekly"), also invoke `_update-claude-md` on that project with the `## Routines (opérateur)` section, same format as `/add-automation` Branch D.

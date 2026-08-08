@@ -10,21 +10,21 @@ Optimizes your site to be **cited by AI** (ChatGPT, Claude, Perplexity, Google A
 
 ## How it works
 
-1. **SEO preflight**: Hypervibe first checks that the classic SEO foundations are in place (metadata, sitemap, robots.txt, JSON-LD WebSite, semantic HTML structure). A page that Google cannot index properly will not be viewed favorably by AI either. If something is missing, Hypervibe suggests running `/seo` first.
+1. **SEO preflight**: Baudrier first checks that the classic SEO foundations are in place (metadata, sitemap, robots.txt, JSON-LD WebSite, semantic HTML structure). A page that Google cannot index properly will not be viewed favorably by AI either. If something is missing, Baudrier suggests running `/seo` first.
 
 2. **Full GEO audit**:
   - **`llms.txt`**: a file at the root of your site (like robots.txt, but specific to AI) that tells AI engines what they can use and how
   - **AI crawler policy**: checks `robots.txt` for AI User-Agents (GPTBot, ClaudeBot, Perplexity, etc.). You can allow, restrict, or block them depending on your strategy.
   - **FAQPage schema**: for your question/answer pages, adds the `FAQPage` structured data that AI spots easily
-  - **Q&A format and chunking**: Hypervibe checks that your content is broken into self-contained blocks (clear questions, short paragraphs, explicit subheadings)
+  - **Q&A format and chunking**: Baudrier checks that your content is broken into self-contained blocks (clear questions, short paragraphs, explicit subheadings)
   - **Citability signals**: precise dates (publication, update), figures/stats with a source, named authors, links to external sources
   - **E-E-A-T signals**: Experience, Expertise, Authoritativeness, Trustworthiness, the 4 criteria AI evaluates to decide whether your content is reliable
 
-3. **IndexNow submission (optional)**: Hypervibe offers to set up IndexNow, a protocol that notifies Bing and Yandex (and indirectly ChatGPT, which relies on Bing) on every new publication.
+3. **IndexNow submission (optional)**: Baudrier offers to set up IndexNow, a protocol that notifies Bing and Yandex (and indirectly ChatGPT, which relies on Bing) on every new publication.
 
 4. **Plain-language report**: each finding is explained in simple language, with the **concrete consequence** (for example, "your FAQ page does not have the FAQPage markup. Consequence: when someone asks ChatGPT 'how do I do X', your content is less likely to be cited as a source").
 
-5. **Proposed and applied fixes**: Hypervibe adds the `llms.txt`, configures the FAQPage schemas, updates robots.txt for AI crawlers, and proposes content improvements (which you approve).
+5. **Proposed and applied fixes**: Baudrier adds the `llms.txt`, configures the FAQPage schemas, updates robots.txt for AI crawlers, and proposes content improvements (which you approve).
 
 ## What it creates for you
 
@@ -47,9 +47,9 @@ Classic SEO gets you to appear in Google results (the blue list). GEO aims to **
 {{/callout}}
 
 {{callout:info|llms.txt = an emerging standard}}
-The `llms.txt` file is not (yet) an official standard, but it is **adopted by Anthropic, OpenAI, and several other players**. It lets you tell AI "here is my content in plain text, here is how to use it". For you, it is zero cost (Hypervibe generates it), and it is aligned with the direction the standards are heading.
+The `llms.txt` file is not (yet) an official standard, but it is **adopted by Anthropic, OpenAI, and several other players**. It lets you tell AI "here is my content in plain text, here is how to use it". For you, it is zero cost (Baudrier generates it), and it is aligned with the direction the standards are heading.
 {{/callout}}
 
 {{callout:warning|Citability = figures + dates + sources}}
-For an AI to cite you, it must **trust** your content. The key signals: precise figures (not "lots of users" but "12% of users"), explicit dates (not "recently" but "in March 2026"), and links to the external sources you cite. Hypervibe can suggest these enrichments page by page.
+For an AI to cite you, it must **trust** your content. The key signals: precise figures (not "lots of users" but "12% of users"), explicit dates (not "recently" but "in March 2026"), and links to the external sources you cite. Baudrier can suggest these enrichments page by page.
 {{/callout}}

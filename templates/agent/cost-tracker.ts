@@ -1,44 +1,52 @@
 // agent/cost-tracker.ts - Cost tracking + circuit breaker for agents.
 //
 // Two budgets enforced:
-//   - DAILY (USD per day)   - protects against runaway loops
-//   - MONTHLY (USD per month) - protects against slow drift
+//   - DAILY (EUR per day)   - protects against runaway loops
+//   - MONTHLY (EUR per month) - protects against slow drift
 //
 // Whichever fires first trips the breaker. The agent loop calls
 // checkCircuitBreaker() at the start of every invocation and skips the run
 // if tripped. trackCost() is called at the end to accumulate.
 //
-// All amounts in USD (the Anthropic API bills in USD). The dashboard / email
-// templates can convert to EUR locally if you want - keep one currency
-// internally for simplicity.
+// All amounts are EUR natively - Scaleway Generative APIs bills in EUR (see
+// https://www.scaleway.com/en/generative-apis/ pricing table), so there is no
+// USD/EUR conversion step anywhere in this file.
+//
+// Default caps (1 EUR/day, 10 EUR/month) were derived from Scaleway's own
+// serverless model pricing, roughly an order of magnitude cheaper per token
+// than a frontier hosted-LLM provider. Assumptions behind these numbers:
+//   - TEMPLATE_MAX_ITERATIONS = 10, TEMPLATE_MAX_TOKENS_PER_CALL = 4096 (loop.ts)
+//   - worst-case default model tier: llama-3.3-70b-instruct at ~EUR 0.90 / M
+//     tokens (both input and output - the more expensive of the two models
+//     offered at scaffold time)
+//   - ~8 000 input tokens/turn on average by mid-conversation (growing context)
+//   - => one fully-runaway invocation (10 turns, always hitting max tokens)
+//     costs roughly EUR 0.11
+//   - 1 EUR/day leaves ~9x headroom over that single worst-case run, a similar
+//     safety margin to the old 5 USD/~0.61 USD (~8x) ratio
+// Override via AGENT_DAILY_BUDGET_EUR / AGENT_MONTHLY_BUDGET_EUR if your
+// agent's real usage pattern needs more (or less) room.
 
 import { db } from "./db.js";
 import { agentInvocations } from "./schema.js";
 import { and, eq, gte, sql } from "drizzle-orm";
 
 // ─── Default budgets (override per agent if needed) ───────────────────
-// Set via env vars at deploy time, with sensible defaults baked in.
-const DAILY_BUDGET_USD = Number(process.env.AGENT_DAILY_BUDGET_USD ?? "5");
-const MONTHLY_BUDGET_USD = Number(process.env.AGENT_MONTHLY_BUDGET_USD ?? "50");
-
-// USD/EUR rough conversion (only for the human-readable email).
-// This is a soft signal, not a billing reference.
-const USD_TO_EUR = 0.92;
+const DAILY_BUDGET_EUR = Number(process.env.AGENT_DAILY_BUDGET_EUR ?? "1");
+const MONTHLY_BUDGET_EUR = Number(process.env.AGENT_MONTHLY_BUDGET_EUR ?? "10");
 
 // ─── Types ────────────────────────────────────────────────────────────
 export interface CostBreakdown {
   inputTokens: number;
   outputTokens: number;
-  cacheCreationTokens: number;
-  cacheReadTokens: number;
-  usd: number;
+  eur: number;
 }
 
 export interface BreakerStatus {
   tripped: boolean;
   reason?: string;
-  spentTodayUsd: number;
-  spentThisMonthUsd: number;
+  spentTodayEur: number;
+  spentThisMonthEur: number;
   dailyLimit: number;
   monthlyLimit: number;
 }
@@ -51,50 +59,45 @@ export interface BreakerStatus {
 export async function checkCircuitBreaker(agentName: string): Promise<BreakerStatus> {
   const { spentToday, spentThisMonth } = await getSpend(agentName);
 
-  if (spentToday >= DAILY_BUDGET_USD) {
+  if (spentToday >= DAILY_BUDGET_EUR) {
     return {
       tripped: true,
-      reason: `Plafond journalier atteint : ${spentToday.toFixed(2)} USD / ${DAILY_BUDGET_USD} USD (≈ ${(spentToday * USD_TO_EUR).toFixed(2)} EUR / ${(DAILY_BUDGET_USD * USD_TO_EUR).toFixed(2)} EUR)`,
-      spentTodayUsd: spentToday,
-      spentThisMonthUsd: spentThisMonth,
-      dailyLimit: DAILY_BUDGET_USD,
-      monthlyLimit: MONTHLY_BUDGET_USD,
+      reason: `Plafond journalier atteint : ${spentToday.toFixed(2)} EUR / ${DAILY_BUDGET_EUR} EUR`,
+      spentTodayEur: spentToday,
+      spentThisMonthEur: spentThisMonth,
+      dailyLimit: DAILY_BUDGET_EUR,
+      monthlyLimit: MONTHLY_BUDGET_EUR,
     };
   }
-  if (spentThisMonth >= MONTHLY_BUDGET_USD) {
+  if (spentThisMonth >= MONTHLY_BUDGET_EUR) {
     return {
       tripped: true,
-      reason: `Plafond mensuel atteint : ${spentThisMonth.toFixed(2)} USD / ${MONTHLY_BUDGET_USD} USD (≈ ${(spentThisMonth * USD_TO_EUR).toFixed(2)} EUR / ${(MONTHLY_BUDGET_USD * USD_TO_EUR).toFixed(2)} EUR)`,
-      spentTodayUsd: spentToday,
-      spentThisMonthUsd: spentThisMonth,
-      dailyLimit: DAILY_BUDGET_USD,
-      monthlyLimit: MONTHLY_BUDGET_USD,
+      reason: `Plafond mensuel atteint : ${spentThisMonth.toFixed(2)} EUR / ${MONTHLY_BUDGET_EUR} EUR`,
+      spentTodayEur: spentToday,
+      spentThisMonthEur: spentThisMonth,
+      dailyLimit: DAILY_BUDGET_EUR,
+      monthlyLimit: MONTHLY_BUDGET_EUR,
     };
   }
 
   return {
     tripped: false,
-    spentTodayUsd: spentToday,
-    spentThisMonthUsd: spentThisMonth,
-    dailyLimit: DAILY_BUDGET_USD,
-    monthlyLimit: MONTHLY_BUDGET_USD,
+    spentTodayEur: spentToday,
+    spentThisMonthEur: spentThisMonth,
+    dailyLimit: DAILY_BUDGET_EUR,
+    monthlyLimit: MONTHLY_BUDGET_EUR,
   };
 }
 
 /**
- * Records that this agent just spent `usd` (in USD). The actual recording
- * is done via the agentInvocations row's totalCostUsd column (already
- * persisted by the loop). This function is kept for future expansion (e.g.,
- * pushing to an external metrics service) and as an explicit "after-spend"
- * hook for symmetry with the breaker check.
+ * Records that this agent just spent `eur` (in EUR). The actual recording is
+ * done via the agentInvocations row's totalCostEur column (already persisted
+ * by the loop). Kept for symmetry with the breaker check and as a future hook
+ * (e.g. pushing to Cockpit metrics / alerting on threshold crossings).
  */
-export async function trackCost(agentName: string, usd: number): Promise<void> {
-  // No-op for now: spending is captured in agent_invocations.total_cost_usd
-  // when the loop calls finalizeInvocation(). This function exists as the
-  // canonical "I spent money, react if needed" hook - useful if you later
-  // want to push to PostHog / Datadog / Slack alerts on threshold crossings.
+export async function trackCost(agentName: string, eur: number): Promise<void> {
   void agentName;
-  void usd;
+  void eur;
 }
 
 // ─── Spend aggregation (sums recent invocations) ─────────────────────
@@ -105,14 +108,14 @@ async function getSpend(agentName: string): Promise<{ spentToday: number; spentT
 
   const [todayRow] = await db
     .select({
-      total: sql<string>`COALESCE(SUM(${agentInvocations.totalCostUsd}::numeric), 0)`,
+      total: sql<string>`COALESCE(SUM(${agentInvocations.totalCostEur}::numeric), 0)`,
     })
     .from(agentInvocations)
     .where(and(eq(agentInvocations.agentName, agentName), gte(agentInvocations.startedAt, dayStart)));
 
   const [monthRow] = await db
     .select({
-      total: sql<string>`COALESCE(SUM(${agentInvocations.totalCostUsd}::numeric), 0)`,
+      total: sql<string>`COALESCE(SUM(${agentInvocations.totalCostEur}::numeric), 0)`,
     })
     .from(agentInvocations)
     .where(and(eq(agentInvocations.agentName, agentName), gte(agentInvocations.startedAt, monthStart)));

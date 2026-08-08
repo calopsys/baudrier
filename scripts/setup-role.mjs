@@ -39,9 +39,6 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync } from "node
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { render } from "./_render.mjs";
-import { ensureToolsInPath } from "./_ensure-tools-path.mjs";
-
-ensureToolsInPath();
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -214,10 +211,10 @@ async function preflight() {
   const authPath = join(WEB_DIR, "src/server/auth.ts");
   if (!existsSync(authPath)) fail("src/server/auth.ts not found : run /add-auth first.");
   const auth = readFileSync(authPath, "utf8");
-  const markerMatch = auth.match(/^\/\/\s*hypervibe:auth-modes\s+(.+)$/m);
+  const markerMatch = auth.match(/^\/\/\s*baudrier:auth-modes\s+(.+)$/m);
   if (!markerMatch) {
     fail(
-      "auth.ts has no `// hypervibe:auth-modes` marker. /add-role requires the users mode of /add-auth. " +
+      "auth.ts has no `// baudrier:auth-modes` marker. /add-role requires the users mode of /add-auth. " +
         "Run /add-auth first.",
     );
   }
@@ -337,7 +334,7 @@ const out = await db.execute(sql\`
 \`);
 console.log(JSON.stringify({ rowsAffected: out.rowsAffected ?? out.rowCount ?? null }));
 `.trim();
-  const tmpFile = join(WEB_DIR, ".hypervibe-backfill-roles.mts");
+  const tmpFile = join(WEB_DIR, ".baudrier-backfill-roles.mts");
   writeFileSync(tmpFile, script);
   try {
     const res = capture(`npx tsx "${tmpFile}"`, WEB_DIR);
@@ -518,27 +515,7 @@ async function writeAdminPage() {
     return;
   }
   log("Writing src/app/admin/(protected)/users/page.tsx");
-  // Detect the right path: with i18n, app is under [locale]
-  const candidates = [
-    "src/app/admin/(protected)/users/page.tsx",
-    "src/app/[locale]/admin/(protected)/users/page.tsx",
-  ];
-  let chosenDest = null;
-  for (const rel of candidates) {
-    const adminDir = join(WEB_DIR, rel.replace(/\/users\/page\.tsx$/, ""));
-    if (existsSync(adminDir)) {
-      chosenDest = join(WEB_DIR, rel);
-      break;
-    }
-  }
-  if (!chosenDest) {
-    // Default to no-locale path, create the parent dir
-    chosenDest = join(WEB_DIR, candidates[0]);
-    warn(
-      "Could not find an existing admin/(protected)/ directory. Creating the page at " +
-        candidates[0] + ". If your project uses i18n, move it under [locale]/ manually.",
-    );
-  }
+  const chosenDest = join(WEB_DIR, "src/app/admin/(protected)/users/page.tsx");
   mkdirSync(dirname(chosenDest), { recursive: true });
   writeFileSync(chosenDest, render("role/pages/users-page.tsx", {}));
   ok(`Admin page written: ${chosenDest.replace(WEB_DIR + "/", "")}`);
@@ -622,7 +599,7 @@ console.log(`
    Backfilled to:     ${BACKFILL_ROLE} (only rows with empty/NULL roles)
    Helpers:           src/lib/roles.ts (ROLES, ROLE_LABELS, hasRole, getRoles)
    Admin page:        ${CREATE_ADMIN_PAGE ? "/admin/users (protected by isAdmin)" : "skipped"}
-   Marker:            // hypervibe:roles ${ROLES.join(", ")} (in src/lib/roles.ts)
+   Marker:            // baudrier:roles ${ROLES.join(", ")} (in src/lib/roles.ts)
 
 Next: Claude takes over for the CLAUDE.md update (via _update-claude-md), the user-facing
 summary, and (optionally) integrating the "Utilisateurs" link in the admin sidebar if

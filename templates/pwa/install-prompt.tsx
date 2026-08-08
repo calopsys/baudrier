@@ -1,10 +1,10 @@
 "use client";
 
-// Petite fenêtre invitant l'utilisateur à installer l'app (mobile/tablette).
+// Petite fenêtre invitant l’utilisateur à installer l’app (mobile/tablette).
 // - Android / Chrome : bouton "Installer" qui déclenche le prompt natif.
 // - iOS Safari : pas de prompt natif, on affiche les instructions "Ajouter à
-//   l'écran d'accueil" (icône Partager puis "Sur l'écran d'accueil").
-// Masquée si l'app est déjà installée, sur desktop, ou récemment fermée.
+//   l’écran d’accueil" (icône Partager puis "Sur l’écran d’accueil").
+// Masquée si l’app est déjà installée, sur desktop, ou récemment fermée.
 //
 // /add-pwa adapte les couleurs (bg-foreground/bg-background ci-dessous) à la
 // palette du projet et remplace __APP_NAME__ / __LOGO_LETTER__.
@@ -17,7 +17,7 @@ type BeforeInstallPromptEvent = Event & {
 };
 
 const DISMISS_KEY = "hv-install-dismissed-at";
-// Si l'utilisateur ferme le bandeau, on le ré-affiche après ce délai.
+// Si l’utilisateur ferme le bandeau, on le ré-affiche après ce délai.
 const REAPPEAR_AFTER_MS = 3 * 24 * 60 * 60 * 1000; // 3 jours
 
 export function InstallPrompt() {
@@ -35,7 +35,7 @@ export function InstallPrompt() {
       (window.navigator as Navigator & { standalone?: boolean }).standalone === true;
     if (standalone) return; // déjà installée
 
-    // Mobile / tablette uniquement : pas de bandeau d'installation sur desktop.
+    // Mobile / tablette uniquement : pas de bandeau d’installation sur desktop.
     if (!window.matchMedia("(pointer: coarse)").matches) return;
 
     // Android / Chrome : prompt natif

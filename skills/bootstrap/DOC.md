@@ -1,6 +1,6 @@
 # /bootstrap
 
-Creates a complete web project from your description in a few sentences. Code, hosting, database, payments: everything is set up to have an app online in 15 to 25 minutes.
+Creates a complete web project from your description in a few sentences. Code, hosting, database: everything is set up to have an app online in about 15 to 25 minutes.
 
 ## When to use it
 
@@ -10,45 +10,44 @@ To start a new project. It is the most powerful command in the plugin: you descr
 
 The bootstrap unfolds in **8 steps**, with two fully autonomous phases and a discussion phase in the middle:
 
-**Phase 1: Automatic construction** (~5 minutes, no intervention)
+**Phase 1: Automatic construction** (~5-10 minutes, no intervention)
 1. You give the **project name** and a **short description**.
-2. Hypervibe builds the skeleton of the app: code structure, GitHub repo, Vercel configuration, first page online, security checks. You watch the steps scroll by; at the end, your site already responds with a minimal page and the automatic deployment is validated.
+2. Baudrier builds the skeleton of the app: code structure, GitHub repo, Scaleway resources (a dedicated Project, a container registry, a Serverless Container), first page online, security checks. You watch the steps scroll by; at the end, your site already responds with a minimal page and the first deployment has been verified to actually look right (not just to return a 200).
 
 **Phase 2: Spec** (variable duration, discussion)
-3. Hypervibe asks you **how you want to define the project**:
+3. Baudrier asks you **how you want to define the project**:
   - **Option A**: build a spec together, question by question (recommended for a first project)
   - **Option B**: you already have a `.md` file, it reads it
   - **Option C**: no spec, just the initial description (the app will be simpler, you will enrich it with vibe coding)
-4. Hypervibe presents you a **summary** of the inferred features (database, authentication, emails, payments, etc.) and waits for your validation. You can change the list as much as you want before validating.
+4. Baudrier presents you a **summary** of the inferred features (database, authentication, emails, storage, etc.) and waits for your validation. You can change the list as much as you want before validating.
 
 **Phase 3: Building the app** (~10-15 minutes, no intervention)
-5. **Module configuration** (one by one): database, authentication, emails, payments, multilingual, storage... according to your validation.
+5. **Module configuration** (one by one): database, authentication, emails, storage, analytics, map... according to your validation.
 6. **Building the application**: pages, forms, admin area if needed, design, responsive layout.
 7. **Legal pages** automatically created (legal notice, GDPR-compliant privacy policy).
-8. **Security audit + final push + summary**: dependency check, deployment, and a complete summary of what was done and what may remain to be done on your side (create an account on a given service, configure a domain, etc.).
+8. **Security audit + final deploy + summary**: dependency check, deployment, and a complete summary of what was done and what may remain to be done on your side (create an account on a given service, configure a domain, etc.).
 
 At the end, you have an online, functional site, with all the technical building blocks in place.
 
 ## What it creates for you
 
-- A complete **Next.js 15** project (structure, dependencies, configuration)
-- A **private GitHub repo** with all the code versioned
-- A **Vercel project** with automatic deployment (each change deploys on its own)
-- An **online URL** where your app is accessible immediately
-- According to what you chose: database, authentication, emails, payments, multilingual, storage, analytics
+- A complete **Next.js 16** project (structure, dependencies, configuration)
+- A **private GitHub repo** with all the code versioned, and a GitHub Actions workflow that builds the app's image on every push
+- A dedicated **Scaleway Project**, with a Container Registry namespace and a Serverless Container running your app
+- An **online URL** where your app is accessible immediately, protected by an IP allowlist by default (to build this allowlist, Baudrier detects this computer's own public IP address - never a visitor's - via the ipify.org service, a US company)
+- According to what you chose: database, authentication, emails, storage, analytics, interactive map
 - The **legal pages** (legal notice + GDPR-friendly privacy policy)
 - A `CLAUDE.md` file that serves as memory for Claude on this project
-- All of it **hosted in Europe** (Frankfurt) for latency and GDPR compliance
+- All of it **hosted in Europe** (Paris, `fr-par`) for latency and GDPR compliance
 
 ## Prerequisites
 
-- `/start` must have been run once on your machine (tools installed + accounts connected)
-- If you plan to add a database, a Neon API key must be in your vault (Hypervibe guides you to add it if needed)
+- `/start` must have been run once on your machine (tools installed + Scaleway credentials configured)
 
 ## Tips
 
 {{callout:tip|If the session is interrupted}}
-The bootstrap is long. If the Claude conversation is interrupted along the way (context limit, error, accidental close), no panic: just say **"continue"** in the same chat. Hypervibe re-reads its own thread and resumes where it left off. No work is lost.
+The bootstrap is long. If the Claude conversation is interrupted along the way (context limit, error, accidental close), no panic: just say **"continue"** in the same chat. Baudrier re-reads its own thread and resumes where it left off. No work is lost.
 {{/callout}}
 
 {{callout:info|You do not write a single line of code}}
@@ -56,5 +55,5 @@ You describe your project in natural language, you validate the choices proposed
 {{/callout}}
 
 {{callout:warning|Name choice = final}}
-The project name you give at Step 1 becomes the name of the GitHub repo and the Vercel project. These two names are hard to change afterward. Choose well (in kebab-case, for example: `my-great-app`).
+The project name you give at Step 1 becomes the name of the GitHub repo and of the Scaleway Project. These two names are hard to change afterward. Choose well (in kebab-case, for example: `my-great-app`).
 {{/callout}}

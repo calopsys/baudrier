@@ -1,47 +1,42 @@
 #!/usr/bin/env node
-// execute-deletions.mjs - Phase 3 of /delete-project, all deletions in
-// parallel where safe.
+// execute-deletions.mjs - Phase 3 of /delete-project: deletes exactly what
+// discover-resources.mjs found, scoped to the categories the user approved.
 //
 // Usage:
 //   node execute-deletions.mjs --inventory <path.json> --scope <json-array>
 //
-// Where:
-//   --inventory  : path to the JSON file produced by discover-resources.mjs
-//   --scope      : JSON array of categories to delete. Subset of:
-//                  ["vercel","neon","r2","workers","dns","db-backup",
-//                   "cron-jobs","render","stripe-webhooks","upstash",
-//                   "email-routing","memory"]
-//                  Pass ["all"] as a shortcut to delete everything.
+// --scope is a subset of:
+//   ["container","registry","jobs","secrets","iam","tem","dns","memory","github"]
+// Pass ["all"] as a shortcut for every category.
 //
-// Outputs a JSON report to stdout:
-//   {
-//     deleted: { vercel: {...}, neon: {...}, ... },
-//     failed:  { ... },
-//     skipped: { ... }
-//   }
+// ─────────────────────────────────────────────────────────────────────────
+// HARD GUARANTEE - this script NEVER deletes a database, a bucket, or the
+// Scaleway Project itself. Per direct user requirement, /delete-project must
+// never be capable of destroying data. This is not a runtime check you could
+// bypass with a crafted --scope: there is no code path in this file that
+// calls sdb.mjs's deleteDatabase or object-storage.mjs's deleteBucket, and
+// there never was a code path that could empty a bucket's object history -
+// those imports simply do not exist here. "database" and "storage" are
+// intentionally ABSENT from ALL_CATEGORIES below; if a caller still passes
+// them in --scope (or "project"), the orchestration below records them under
+// report.refused with an explicit reason, rather than silently ignoring
+// them, so the gap is never mistaken for a bug. The Scaleway Project itself is never deleted
+// either, deliberately: deleting a Project cascades to everything still
+// inside it, including the database and bucket this script leaves behind on
+// purpose. See skills/delete-project/SKILL.md Phase 4 for the mandatory
+// French handoff that tells the user exactly what was left and why.
+// ─────────────────────────────────────────────────────────────────────────
 //
-// Design:
-// - Parallel where safe (3.1-3.5 + 3.7-3.10 all independent).
-// - Sequential where needed: db-backup AFTER neon (since the db-backup
-//   removal references the Neon projectId), cron-jobs AFTER db-backup (both
-//   commit + redeploy the same ~/.hypervibe-jobs registry, never in
-//   parallel), memory AT THE END.
-// - Each operation is fault-tolerant: one failure doesn't abort the whole
-//   batch. The user can re-run with a narrower scope to retry.
-// - NEVER touches the local project dir (sandbox blocks it). The LLM
-//   reports the path in the final summary instead.
+// Each deletion is fault-tolerant: one category failing does not abort the
+// others. Re-running with a narrower --scope retries only what is left.
 
-import { existsSync, readFileSync, writeFileSync, unlinkSync, statSync, readdirSync, rmSync, rmdirSync } from "node:fs";
-import { spawnSync } from "node:child_process";
-import { homedir } from "node:os";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-import { getSecret } from "../vault/vault.mjs";
-import { tokenMatches, moreSpecificOwner } from "../_match.mjs";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const PLUGIN_ROOT = join(__dirname, "..", "..");
+import { existsSync, readFileSync, rmSync } from "node:fs";
+import { REGION, api, sdkCall } from "../scaleway/_scw-auth.mjs";
+import { listCustomDomains, deleteCustomDomain } from "../scaleway/container.mjs";
+import { deleteJobDefinition } from "../scaleway/jobs.mjs";
+import { deleteSecret } from "../scaleway/secrets.mjs";
+import { listApiKeys, deleteApiKey } from "../scaleway/iam.mjs";
+import { deleteRecords } from "../scaleway/dns.mjs";
 
 // ─── args ──────────────────────────────────────────────────────────────────
 const args = process.argv.slice(2);
@@ -59,7 +54,13 @@ if (!existsSync(INVENTORY_PATH)) {
   console.error(`Inventory file not found: ${INVENTORY_PATH}`);
   process.exit(1);
 }
-const inventory = JSON.parse(readFileSync(INVENTORY_PATH, "utf8"));
+let inventory;
+try {
+  inventory = JSON.parse(readFileSync(INVENTORY_PATH, "utf8"));
+} catch {
+  console.error(`Invalid inventory JSON: ${INVENTORY_PATH}`);
+  process.exit(1);
+}
 let scope;
 try {
   scope = JSON.parse(SCOPE_JSON);
@@ -67,424 +68,268 @@ try {
   console.error(`Invalid --scope JSON: ${SCOPE_JSON}`);
   process.exit(1);
 }
-const ALL_CATEGORIES = ["vercel", "neon", "r2", "workers", "dns", "db-backup", "cron-jobs", "render", "stripe-webhooks", "upstash", "email-routing", "memory"];
+const ALL_CATEGORIES = ["container", "registry", "jobs", "secrets", "iam", "tem", "dns", "memory", "github"];
+// Categories this script will NEVER execute, no matter what --scope says -
+// see the header comment. Kept as an explicit list (rather than just
+// omitting them from ALL_CATEGORIES) so a caller passing one of these gets a
+// clear "refused" entry in the report instead of a silent no-op that could
+// be mistaken for "forgot to implement it".
+const NEVER_DELETE = new Set(["database", "storage", "project"]);
 if (scope.length === 1 && scope[0] === "all") scope = ALL_CATEGORIES;
 const scopeSet = new Set(scope);
+const refusedCategories = scope.filter((c) => NEVER_DELETE.has(c));
 
-const PROJECT = inventory.project;
-const CF_ACCOUNT_ID = inventory.cloudflareAccountId;
-// Sibling project names computed at discovery time (disambiguation of shared
-// prefixes, e.g. "street" vs "street-cool").
-const OWNER_CANDIDATES = Array.isArray(inventory.ownerCandidates) ? inventory.ownerCandidates : [];
+const PROJECT_ID = inventory.scwProject?.id || null;
 
-// ─── env ───────────────────────────────────────────────────────────────────
-function readUserEnvSync(name) {
-  const helper = join(PLUGIN_ROOT, "scripts", "_read-user-env.mjs");
-  if (!existsSync(helper)) return process.env[name] || "";
-  const r = spawnSync("node", [helper, name], { encoding: "utf8" });
-  if (r.status !== 0) return process.env[name] || "";
-  return (r.stdout || "").trim();
-}
-const CLOUDFLARE_API_TOKEN = (() => { try { return getSecret("CLOUDFLARE", "api_token"); } catch { return readUserEnvSync("CLOUDFLARE_API_TOKEN") || readUserEnvSync("CF_API_TOKEN") || process.env.CLOUDFLARE_API_TOKEN || ""; } })();
-const NEON_API_KEY = (() => { try { return getSecret("NEON", "api_key"); } catch { return readUserEnvSync("NEON_API_KEY") || process.env.NEON_API_KEY || ""; } })();
-const RENDER_API_KEY = readUserEnvSync("RENDER_API_KEY") || process.env.RENDER_API_KEY || "";
-const STRIPE_SECRET_KEY = readUserEnvSync("STRIPE_SECRET_KEY") || process.env.STRIPE_SECRET_KEY || "";
+// ─── SDK namespaces not wrapped by a scripts/scaleway/*.mjs export ─────────
+// (same reasoning as discover-resources.mjs's header - CONTRACT.md's module
+// list documents the primary find-or-create helpers, not every DELETE.)
+// Container uses **v1** (v1beta1 was deprecated 2026-07-09).
 
-// ─── helpers ───────────────────────────────────────────────────────────────
-async function httpDelete(url, headers = {}) {
-  try {
-    const res = await fetch(url, { method: "DELETE", headers });
-    const text = await res.text().catch(() => "");
-    return { ok: res.ok, status: res.status, body: text };
-  } catch (e) {
-    return { ok: false, status: -1, body: String(e) };
-  }
-}
-
-function runCmdSync(cmd, args, opts = {}) {
-  const r = spawnSync(cmd, args, { shell: true, encoding: "utf8", ...opts });
-  return { code: r.status, stdout: r.stdout || "", stderr: r.stderr || "" };
-}
-
-// ─── deletion functions ────────────────────────────────────────────────────
-
-async function deleteVercel() {
-  if (!inventory.vercel?.found) return { status: "skipped", reason: "not found in inventory" };
-  // `vercel project rm` has no --yes flag; pipe "y" via stdin
-  const r = spawnSync("sh", ["-c", `echo y | vercel project rm "${PROJECT}"`], { encoding: "utf8" });
-  if (r.status === 0) return { status: "deleted", name: PROJECT };
-  // On Windows fall back to powershell
-  const r2 = spawnSync(`echo y | vercel project rm "${PROJECT}"`, { shell: true, encoding: "utf8" });
-  if (r2.status === 0) return { status: "deleted", name: PROJECT };
-  return { status: "failed", error: (r2.stderr || r.stderr || "").slice(0, 500) };
-}
-
-async function deleteNeon() {
-  if (!inventory.neon?.found) return { status: "skipped", reason: "not found in inventory" };
-  if (!NEON_API_KEY) return { status: "failed", error: "NEON_API_KEY missing" };
+// ─── Serverless Containers: custom domains -> containers -> namespace ──
+async function deleteContainerNamespaces() {
+  if (!inventory.container?.found) return { status: "skipped", reason: "aucun namespace trouvé" };
+  const containersApi = await api("Container", "v1");
   const results = [];
-  for (const p of inventory.neon.projects) {
-    const r = await fetch(`https://console.neon.tech/api/v2/projects/${p.id}`, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${NEON_API_KEY}` },
-    });
-    if (r.ok) {
-      results.push({ id: p.id, name: p.name, status: "deleted" });
-    } else {
-      results.push({ id: p.id, name: p.name, status: "failed", error: await r.text().catch(() => `HTTP ${r.status}`) });
-    }
-  }
-  const anyFail = results.some((r) => r.status === "failed");
-  return { status: anyFail ? "partial" : "deleted", results };
-}
-
-async function deleteR2() {
-  if (!inventory.r2?.found) return { status: "skipped", reason: "not found in inventory" };
-  const results = [];
-  for (const bucket of inventory.r2.buckets) {
-    const cmdArgs = ["r2", "bucket", "delete", bucket.name];
-    if (bucket.jurisdiction === "eu") cmdArgs.push("-J", "eu");
-    const r = runCmdSync("wrangler", cmdArgs);
-    if (r.code === 0) {
-      results.push({ ...bucket, status: "deleted" });
-    } else {
-      results.push({ ...bucket, status: "failed", error: r.stderr.slice(0, 300) });
-    }
-  }
-  const anyFail = results.some((r) => r.status === "failed");
-  return { status: anyFail ? "partial" : "deleted", results };
-}
-
-async function deleteWorkers() {
-  if (!inventory.workers?.found) return { status: "skipped", reason: "not found in inventory" };
-  if (!CLOUDFLARE_API_TOKEN) return { status: "failed", error: "CLOUDFLARE_API_TOKEN missing" };
-  const results = [];
-  for (const w of inventory.workers.workers) {
-    const r = await httpDelete(
-      `https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/scripts/${w.id}`,
-      { Authorization: `Bearer ${CLOUDFLARE_API_TOKEN}` },
-    );
-    results.push({ id: w.id, status: r.ok ? "deleted" : "failed", ...(r.ok ? {} : { error: r.body.slice(0, 300) }) });
-  }
-  const anyFail = results.some((r) => r.status === "failed");
-  return { status: anyFail ? "partial" : "deleted", results };
-}
-
-async function deleteDns() {
-  if (!inventory.dns?.found) return { status: "skipped", reason: "not found in inventory" };
-  if (!CLOUDFLARE_API_TOKEN) return { status: "failed", error: "CLOUDFLARE_API_TOKEN missing" };
-  const results = [];
-  for (const rec of inventory.dns.records) {
-    const r = await httpDelete(
-      `https://api.cloudflare.com/client/v4/zones/${rec.zoneId}/dns_records/${rec.recordId}`,
-      { Authorization: `Bearer ${CLOUDFLARE_API_TOKEN}` },
-    );
-    results.push({ recordId: rec.recordId, name: rec.name, status: r.ok ? "deleted" : "failed", ...(r.ok ? {} : { error: r.body.slice(0, 300) }) });
-  }
-  const anyFail = results.some((r) => r.status === "failed");
-  return { status: anyFail ? "partial" : "deleted", results };
-}
-
-async function deleteDbBackup() {
-  if (!inventory.dbBackup?.isTarget) return { status: "skipped", reason: "not a backup target" };
-  // Delegate to the dedicated script
-  const r = runCmdSync("node", [
-    join(__dirname, "db-backup-remove-target.mjs"),
-    "--project",
-    PROJECT,
-  ]);
-  if (r.code !== 0) {
-    return { status: "failed", error: (r.stderr || r.stdout).slice(0, 500) };
-  }
-  try {
-    return { status: "deleted", ...JSON.parse(r.stdout) };
-  } catch {
-    return { status: "deleted", raw: r.stdout.slice(0, 500) };
-  }
-}
-
-// Re-read the shared-worker registry from disk (post-removal guard for the
-// per-project secret). Returns the jobs array, or null when unreadable.
-function readRegistryJobs() {
-  const jobsPath = join(homedir(), ".hypervibe-jobs", "jobs.js");
-  if (!existsSync(jobsPath)) return null;
-  try {
-    const raw = readFileSync(jobsPath, "utf8");
-    const m = raw.match(/export default\s*([\s\S]*?);?\s*$/);
-    if (!m) return null;
-    const registry = JSON.parse(m[1]);
-    return Array.isArray(registry.jobs) ? registry.jobs : null;
-  } catch {
-    return null;
-  }
-}
-
-function readSharedWorkerName() {
-  try {
-    const toml = readFileSync(join(homedir(), ".hypervibe-jobs", "wrangler.toml"), "utf8");
-    const m = toml.match(/^\s*name\s*=\s*"([^"]+)"/m);
-    if (m) return m[1];
-  } catch {}
-  return "hypervibe-jobs";
-}
-
-async function deleteCronJobs() {
-  if (!inventory.cronJobs?.found) return { status: "skipped", reason: "no cron jobs on the shared worker" };
-  const registerPath = join(PLUGIN_ROOT, "scripts", "shared-worker", "register.mjs");
-  // Make the Cloudflare token visible to register.mjs even when this process
-  // resolved it from the vault (readUserEnv checks process.env first).
-  const spawnEnv = { ...process.env };
-  if (CLOUDFLARE_API_TOKEN) {
-    spawnEnv.CLOUDFLARE_API_TOKEN = CLOUDFLARE_API_TOKEN;
-    spawnEnv.CF_API_TOKEN = CLOUDFLARE_API_TOKEN;
-  }
-
-  const results = [];
-  for (const job of inventory.cronJobs.jobs) {
-    // Remove by REGISTRY name (composite <project>-<task> since 2026-07-05);
-    // the jobs were matched by their `project` field at discovery time.
-    const r = spawnSync("node", [registerPath, "--remove", "--name", job.name], {
-      encoding: "utf8",
-      env: spawnEnv,
-    });
-    let rep = null;
-    try {
-      const line = (r.stdout || "").trim().split("\n").filter(Boolean).pop();
-      rep = line ? JSON.parse(line) : null;
-    } catch {
-      rep = null;
-    }
-    if (r.status === 0 && rep && rep.ok) {
-      results.push({ name: job.name, url: job.url, status: "deleted", workerDeployed: rep.deployed === true });
-    } else if (rep && /No job named/i.test(rep.error || "")) {
-      // Registry changed between discovery and execution: already gone.
-      results.push({ name: job.name, url: job.url, status: "deleted", note: "already absent from the registry" });
-    } else {
-      results.push({
-        name: job.name,
-        url: job.url,
-        status: "failed",
-        error: ((rep && rep.error) || r.stderr || r.stdout || "").slice(0, 300),
-      });
-    }
-  }
-
-  // Drop the per-project worker secret (CRON_SECRET_<PROJECT>) once NO
-  // registry job of the project remains. Re-read from disk: a failed removal
-  // above (or a concurrent registration) must keep the secret alive.
-  const secretName = inventory.cronJobs.secretName;
-  let secret = null;
-  if (secretName) {
-    const remaining = readRegistryJobs();
-    const stillUsed = remaining === null
-      ? true // cannot verify the registry: do not touch the secret
-      : remaining.some(
-          (j) =>
-            j.secretName === secretName ||
-            (j.kind === "ping" && (j.project || "").toLowerCase() === PROJECT.toLowerCase()),
-        );
-    if (stillUsed) {
-      secret = {
-        name: secretName,
-        status: "kept",
-        reason: remaining === null ? "registry unreadable, not verified" : "still referenced by a registry job",
-      };
-    } else if (!CLOUDFLARE_API_TOKEN || !CF_ACCOUNT_ID) {
-      secret = { name: secretName, status: "kept", reason: "Cloudflare token or account id missing" };
-    } else {
-      const workerName = readSharedWorkerName();
-      const r = await httpDelete(
-        `https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/scripts/${workerName}/secrets/${secretName}`,
-        { Authorization: `Bearer ${CLOUDFLARE_API_TOKEN}` },
-      );
-      if (r.ok) secret = { name: secretName, status: "deleted", worker: workerName };
-      else if (r.status === 404) secret = { name: secretName, status: "absent", worker: workerName };
-      else secret = { name: secretName, status: "failed", error: r.body.slice(0, 300) };
-    }
-  }
-
-  const anyFail = results.some((x) => x.status === "failed") || secret?.status === "failed";
-  return { status: anyFail ? "partial" : "deleted", results, secret };
-}
-
-async function deleteRender() {
-  if (!inventory.render?.found) return { status: "skipped", reason: "not found in inventory" };
-  if (!RENDER_API_KEY) return { status: "failed", error: "RENDER_API_KEY missing" };
-  const results = [];
-  for (const s of inventory.render.services) {
-    const r = await httpDelete(`https://api.render.com/v1/services/${s.id}`, {
-      Authorization: `Bearer ${RENDER_API_KEY}`,
-    });
-    results.push({ id: s.id, name: s.name, status: r.ok ? "deleted" : "failed", ...(r.ok ? {} : { error: r.body.slice(0, 300) }) });
-  }
-  const anyFail = results.some((r) => r.status === "failed");
-  return { status: anyFail ? "partial" : "deleted", results };
-}
-
-async function deleteStripeWebhooks() {
-  if (!inventory.stripe?.webhooksFound) return { status: "skipped", reason: "no webhooks found" };
-  if (!STRIPE_SECRET_KEY) return { status: "failed", error: "STRIPE_SECRET_KEY missing" };
-  const auth = Buffer.from(`${STRIPE_SECRET_KEY}:`).toString("base64");
-  const results = [];
-  for (const w of inventory.stripe.webhooks) {
-    const r = await httpDelete(`https://api.stripe.com/v1/webhook_endpoints/${w.id}`, {
-      Authorization: `Basic ${auth}`,
-    });
-    results.push({ id: w.id, url: w.url, status: r.ok ? "deleted" : "failed", ...(r.ok ? {} : { error: r.body.slice(0, 300) }) });
-  }
-  const anyFail = results.some((r) => r.status === "failed");
-  return { status: anyFail ? "partial" : "deleted", results };
-}
-
-async function deleteUpstash() {
-  if (!inventory.upstash?.found) return { status: "skipped", reason: "not found in inventory" };
-  const credsPath = join(homedir(), ".upstash.json");
-  if (!existsSync(credsPath)) return { status: "failed", error: "~/.upstash.json missing" };
-  let creds;
-  try {
-    creds = JSON.parse(readFileSync(credsPath, "utf8"));
-  } catch (e) {
-    return { status: "failed", error: `~/.upstash.json invalid: ${e.message}` };
-  }
-  const auth = Buffer.from(`${creds.email}:${creds.apiKey}`).toString("base64");
-  const results = [];
-  for (const db of inventory.upstash.databases) {
-    const r = await httpDelete(`https://api.upstash.com/v2/redis/database/${db.id}`, {
-      Authorization: `Basic ${auth}`,
-    });
-    results.push({ id: db.id, name: db.name, status: r.ok ? "deleted" : "failed", ...(r.ok ? {} : { error: r.body.slice(0, 300) }) });
-  }
-  const anyFail = results.some((r) => r.status === "failed");
-  return { status: anyFail ? "partial" : "deleted", results };
-}
-
-async function deleteEmailRouting() {
-  if (!inventory.emailRouting?.found) return { status: "skipped", reason: "not found in inventory" };
-  if (!CLOUDFLARE_API_TOKEN) return { status: "failed", error: "CLOUDFLARE_API_TOKEN missing" };
-  const results = [];
-  for (const rule of inventory.emailRouting.rules) {
-    const r = await httpDelete(
-      `https://api.cloudflare.com/client/v4/zones/${rule.zoneId}/email/routing/rules/${rule.tag}`,
-      { Authorization: `Bearer ${CLOUDFLARE_API_TOKEN}` },
-    );
-    results.push({ tag: rule.tag, name: rule.name, status: r.ok ? "deleted" : "failed", ...(r.ok ? {} : { error: r.body.slice(0, 300) }) });
-  }
-  const anyFail = results.some((r) => r.status === "failed");
-  return { status: anyFail ? "partial" : "deleted", results };
-}
-
-async function deleteMemory() {
-  if (!inventory.memory?.files || inventory.memory.files.length === 0) {
-    return { status: "skipped", reason: "no memory files found" };
-  }
-  const results = [];
-  const dirs = new Set();
-  // Delete project-specific files only (those whose filename contains the project).
-  // Paths come from the inventory (discover-resources scans every project memory
-  // dir), so no hardcoded workspace slug and fully cross-platform.
-  for (const f of inventory.memory.files) {
-    const fpath = f.path || (f.dir ? join(f.dir, f.filename) : null);
-    if (f.dir) dirs.add(f.dir);
-    if (f.isProjectSpecific && fpath) {
-      try {
-        rmSync(fpath);
-        results.push({ file: f.filename, status: "deleted" });
-      } catch (e) {
-        results.push({ file: f.filename, status: "failed", error: String(e) });
+  for (const ns of inventory.container.namespaces) {
+    for (const c of ns.containers) {
+      for (const d of c.customDomains) {
+        try {
+          await deleteCustomDomain(d.id);
+          results.push({ type: "domain", id: d.id, hostname: d.hostname, status: "deleted" });
+        } catch (e) {
+          results.push({ type: "domain", id: d.id, hostname: d.hostname, status: "failed", error: e.message });
+        }
       }
-    } else {
-      // File mentions project but isn't named after it - flag for LLM review
-      results.push({ file: f.filename, status: "kept", reason: "not project-specific, references may be incidental - LLM should review" });
+      try {
+        await sdkCall(() => containersApi.deleteContainer({ containerId: c.id, region: REGION }));
+        results.push({ type: "container", id: c.id, name: c.name, status: "deleted" });
+      } catch (e) {
+        results.push({ type: "container", id: c.id, name: c.name, status: "failed", error: e.message });
+      }
+    }
+    try {
+      await sdkCall(() => containersApi.deleteNamespace({ namespaceId: ns.id, region: REGION }));
+      results.push({ type: "namespace", id: ns.id, name: ns.name, status: "deleted" });
+    } catch (e) {
+      results.push({ type: "namespace", id: ns.id, name: ns.name, status: "failed", error: e.message });
     }
   }
-  // Trim each MEMORY.md index that references this project (surgical)
-  for (const dir of dirs) {
-    const indexPath = join(dir, "MEMORY.md");
-    if (!existsSync(indexPath)) continue;
+  const anyFail = results.some((r) => r.status === "failed");
+  return { status: anyFail ? "partial" : "deleted", results };
+}
+
+// ─── 2. Container Registry: namespace deletion cascades to its images/tags ─
+async function deleteRegistryNamespaces() {
+  if (!inventory.registry?.found) return { status: "skipped", reason: "aucun namespace trouvé" };
+  const registryApi = await api("Registry", "v1");
+  const results = [];
+  for (const ns of inventory.registry.namespaces) {
     try {
-      const original = readFileSync(indexPath, "utf8");
-      const lines = original.split("\n");
-      // Word-boundary match + ownership check: deleting "street" must not trim
-      // index lines that actually reference "street-cool".
-      const filtered = lines.filter(
-        (l) => !(tokenMatches(PROJECT, l) && !moreSpecificOwner(PROJECT, l, OWNER_CANDIDATES)),
-      );
-      const removed = lines.length - filtered.length;
-      if (removed > 0) {
-        writeFileSync(indexPath, filtered.join("\n"));
-        results.push({ file: "MEMORY.md (index)", status: "trimmed", linesRemoved: removed });
+      await sdkCall(() => registryApi.deleteNamespace({ namespaceId: ns.id, region: REGION }));
+      results.push({ id: ns.id, name: ns.name, imageCount: ns.imageCount, status: "deleted" });
+    } catch (e) {
+      results.push({ id: ns.id, name: ns.name, status: "failed", error: e.message });
+    }
+  }
+  const anyFail = results.some((r) => r.status === "failed");
+  return { status: anyFail ? "partial" : "deleted", results };
+}
+
+// ─── 3. Serverless Jobs ─────────────────────────────────────────────────────
+async function deleteJobs() {
+  if (!inventory.jobs?.found) return { status: "skipped", reason: "aucune définition de job trouvée" };
+  const results = [];
+  for (const def of inventory.jobs.definitions) {
+    try {
+      await deleteJobDefinition(def.id);
+      results.push({ id: def.id, name: def.name, status: "deleted" });
+    } catch (e) {
+      results.push({ id: def.id, name: def.name, status: "failed", error: e.message });
+    }
+  }
+  const anyFail = results.some((r) => r.status === "failed");
+  return { status: anyFail ? "partial" : "deleted", results };
+}
+
+// ─── Secret Manager ───────────────────────────────────────────────────────
+async function deleteSecrets() {
+  if (!inventory.secrets?.found) return { status: "skipped", reason: "aucun secret trouvé" };
+  const results = [];
+  for (const name of inventory.secrets.names) {
+    try {
+      await deleteSecret(name, { projectId: PROJECT_ID });
+      results.push({ name, status: "deleted" });
+    } catch (e) {
+      results.push({ name, status: "failed", error: e.message });
+    }
+  }
+  const anyFail = results.some((r) => r.status === "failed");
+  return { status: anyFail ? "partial" : "deleted", results };
+}
+
+// ─── IAM: keys -> policy -> application, for every application discovered
+async function deleteIam() {
+  if (!inventory.iam?.found) return { status: "skipped", reason: "aucune application IAM trouvée" };
+  const iamApi = await api("Iam", "v1alpha1");
+  const results = [];
+  for (const appEntry of inventory.iam.applications) {
+    const appResult = { id: appEntry.id, name: appEntry.name, keys: [] };
+    try {
+      // listApiKeys/deleteApiKey are iam.mjs's own frozen exports - reused as-is
+      // rather than reimplemented, per this file's ownership boundary.
+      const keys = await listApiKeys(appEntry.id);
+      for (const k of keys) {
+        try {
+          await deleteApiKey(k.accessKey);
+          appResult.keys.push({ accessKey: k.accessKey, status: "deleted" });
+        } catch (e) {
+          appResult.keys.push({ accessKey: k.accessKey, status: "failed", error: e.message });
+        }
       }
     } catch (e) {
-      results.push({ file: "MEMORY.md (index)", status: "failed", error: String(e) });
+      appResult.keysError = e.message;
+    }
+
+    try {
+      const policies = await sdkCall(() => iamApi.listPolicies({ applicationIds: [appEntry.id] }).all());
+      appResult.policies = [];
+      for (const p of policies) {
+        try {
+          await sdkCall(() => iamApi.deletePolicy({ policyId: p.id }));
+          appResult.policies.push({ id: p.id, name: p.name, status: "deleted" });
+        } catch (e) {
+          appResult.policies.push({ id: p.id, name: p.name, status: "failed", error: e.message });
+        }
+      }
+    } catch (e) {
+      appResult.policiesError = e.message;
+    }
+
+    try {
+      await sdkCall(() => iamApi.deleteApplication({ applicationId: appEntry.id }));
+      appResult.status = "deleted";
+    } catch (e) {
+      appResult.status = "failed";
+      appResult.error = e.message;
+    }
+    results.push(appResult);
+  }
+  const anyFail = results.some((r) => r.status === "failed" || r.keys.some((k) => k.status === "failed"));
+  return { status: anyFail ? "partial" : "deleted", results };
+}
+
+// ─── TEM domain(s) ────────────────────────────────────────────────────────
+async function deleteTem() {
+  if (!inventory.tem?.found) return { status: "skipped", reason: "aucun domaine TEM trouvé" };
+  const temApi = await api("Tem", "v1alpha1");
+  const results = [];
+  for (const d of inventory.tem.domains) {
+    try {
+      // The SDK's delete-equivalent for a TEM domain is `revokeDomain` - there
+      // is no separate `deleteDomain` method.
+      await sdkCall(() => temApi.revokeDomain({ domainId: d.id, region: REGION }));
+      results.push({ id: d.id, name: d.name, status: "deleted" });
+    } catch (e) {
+      results.push({ id: d.id, name: d.name, status: "failed", error: e.message });
     }
   }
-  return { status: results.some((r) => r.status === "failed") ? "partial" : "deleted", results };
+  const anyFail = results.some((r) => r.status === "failed");
+  return { status: anyFail ? "partial" : "deleted", results };
 }
 
-// ─── orchestration ─────────────────────────────────────────────────────────
-// Parallel batch 1: independent operations (vercel, r2, workers, dns,
-// render, stripe-webhooks, upstash, email-routing).
-// Sequential after: neon (needed for db-backup), then db-backup, then
-// cron-jobs (same shared-worker registry as db-backup), then memory.
+// ─── DNS: only the exact records discovery attributed to this app ──────
+async function deleteDns() {
+  if (!inventory.dns?.found) return { status: "skipped", reason: "aucun enregistrement DNS attribué à cette app" };
+  const results = [];
+  for (const zoneEntry of inventory.dns.zones) {
+    if (zoneEntry.records.length === 0) continue;
+    try {
+      await deleteRecords(
+        zoneEntry.zone,
+        zoneEntry.records.map((r) => ({ name: r.name, type: r.type })),
+      );
+      results.push({ zone: zoneEntry.zone, recordCount: zoneEntry.records.length, status: "deleted" });
+    } catch (e) {
+      results.push({ zone: zoneEntry.zone, recordCount: zoneEntry.records.length, status: "failed", error: e.message });
+    }
+  }
+  const anyFail = results.some((r) => r.status === "failed");
+  return { status: anyFail ? "partial" : "deleted", results };
+}
 
+// ─── Claude Code project memory/transcripts ─────────────────────────────
+async function deleteMemory() {
+  if (!inventory.memory?.found) return { status: "skipped", reason: "aucun dossier mémoire trouvé" };
+  const results = [];
+  for (const d of inventory.memory.dirs) {
+    try {
+      rmSync(d.path, { recursive: true, force: true });
+      results.push({ name: d.name, status: "deleted" });
+    } catch (e) {
+      results.push({ name: d.name, status: "failed", error: e.message });
+    }
+  }
+  const anyFail = results.some((r) => r.status === "failed");
+  return { status: anyFail ? "partial" : "deleted", results };
+}
+
+// ─── GitHub repo ─────────────────────────────────────────────────────────────
+// `gh` is no longer part of the toolchain (CONTRACT.md §7), and the shell git
+// credential 403s on ref DELETE, let alone repo deletion (live-verified) -
+// there is no code path left here that can delete a GitHub repo. Report it
+// as skipped with the console URL instead of silently dropping the category.
+async function deleteGitHub() {
+  if (!inventory.github?.exists) return { status: "skipped", reason: "aucun dépôt GitHub trouvé" };
+  const fullName = `${inventory.github.owner}/${inventory.project}`;
+  return {
+    status: "skipped",
+    repo: fullName,
+    reason:
+      "Baudrier ne peut plus supprimer un dépôt GitHub lui-même (gh n’est plus utilisé, et l’identifiant git ne " +
+      `permet pas de supprimer un dépôt). Supprimez-le vous-même si besoin : https://github.com/${fullName}/settings`,
+  };
+}
+
+// ─── orchestration ───────────────────────────────────────────────────────
 const startedAt = Date.now();
-const report = {
-  project: PROJECT,
-  startedAt: new Date().toISOString(),
-  scope,
-  deleted: {},
-  failed: {},
-  skipped: {},
-};
+const report = { project: inventory.project, startedAt: new Date().toISOString(), scope, deleted: {}, failed: {}, skipped: {}, refused: {} };
+
+// database/storage/project: never executed, always reported as an explicit
+// refusal (not silently dropped) so the report - and therefore the French
+// handoff in Phase 4 of the skill - always surfaces them. See the header
+// comment for why this is a hard guarantee, not a --scope-dependent choice.
+for (const cat of refusedCategories) {
+  report.refused[cat] = {
+    status: "refused",
+    reason:
+      "cette catégorie ne peut jamais être supprimée par /delete-project (garde-fou permanent : les bases de données, les buckets et le Project Scaleway ne sont jamais détruits automatiquement)",
+  };
+}
 
 function record(category, result) {
-  if (result.status === "deleted" || result.status === "partial") {
-    report.deleted[category] = result;
-  } else if (result.status === "failed") {
-    report.failed[category] = result;
-  } else {
-    report.skipped[category] = result;
-  }
+  if (result.status === "deleted" || result.status === "partial") report.deleted[category] = result;
+  else if (result.status === "failed") report.failed[category] = result;
+  else report.skipped[category] = result;
 }
 
-// Parallel batch
 const parallelTasks = [];
-if (scopeSet.has("vercel")) parallelTasks.push(deleteVercel().then((r) => ["vercel", r]));
-if (scopeSet.has("r2")) parallelTasks.push(deleteR2().then((r) => ["r2", r]));
-if (scopeSet.has("workers")) parallelTasks.push(deleteWorkers().then((r) => ["workers", r]));
+if (scopeSet.has("container")) parallelTasks.push(deleteContainerNamespaces().then((r) => ["container", r]));
+if (scopeSet.has("registry")) parallelTasks.push(deleteRegistryNamespaces().then((r) => ["registry", r]));
+if (scopeSet.has("jobs")) parallelTasks.push(deleteJobs().then((r) => ["jobs", r]));
+if (scopeSet.has("secrets")) parallelTasks.push(deleteSecrets().then((r) => ["secrets", r]));
+if (scopeSet.has("iam")) parallelTasks.push(deleteIam().then((r) => ["iam", r]));
+if (scopeSet.has("tem")) parallelTasks.push(deleteTem().then((r) => ["tem", r]));
 if (scopeSet.has("dns")) parallelTasks.push(deleteDns().then((r) => ["dns", r]));
-if (scopeSet.has("render")) parallelTasks.push(deleteRender().then((r) => ["render", r]));
-if (scopeSet.has("stripe-webhooks")) parallelTasks.push(deleteStripeWebhooks().then((r) => ["stripe-webhooks", r]));
-if (scopeSet.has("upstash")) parallelTasks.push(deleteUpstash().then((r) => ["upstash", r]));
-if (scopeSet.has("email-routing")) parallelTasks.push(deleteEmailRouting().then((r) => ["email-routing", r]));
+if (scopeSet.has("memory")) parallelTasks.push(deleteMemory().then((r) => ["memory", r]));
+if (scopeSet.has("github")) parallelTasks.push(deleteGitHub().then((r) => ["github", r]));
 
 const parallelResults = await Promise.all(parallelTasks);
 for (const [cat, res] of parallelResults) record(cat, res);
 
-// Sequential: neon → db-backup → cron-jobs → memory
-if (scopeSet.has("neon")) {
-  const r = await deleteNeon();
-  record("neon", r);
-}
-if (scopeSet.has("db-backup")) {
-  const r = await deleteDbBackup();
-  record("db-backup", r);
-}
-if (scopeSet.has("cron-jobs")) {
-  // After db-backup: both mutate + commit + redeploy the same
-  // ~/.hypervibe-jobs registry, so they must never run concurrently.
-  const r = await deleteCronJobs();
-  record("cron-jobs", r);
-}
-if (scopeSet.has("memory")) {
-  const r = await deleteMemory();
-  record("memory", r);
-}
-
-// Categories explicitly skipped because not in scope
 for (const cat of ALL_CATEGORIES) {
   if (!scopeSet.has(cat) && !report.deleted[cat] && !report.failed[cat] && !report.skipped[cat]) {
-    report.skipped[cat] = { status: "skipped", reason: "not in scope" };
+    report.skipped[cat] = { status: "skipped", reason: "hors du périmètre choisi" };
   }
 }
 

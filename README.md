@@ -1,169 +1,262 @@
-# Hypervibe
+# Baudrier
 
-> 🇫🇷 [Lire en français](README.fr.md)
+Baudrier est un plugin Claude Code conçu pour fonctionner sur **Claude Code web** (claude.ai/code). Vous décrivez votre application web en français courant. Baudrier la construit et la déploie sur **Scaleway**, pour que votre infrastructure et vos données restent en France/UE.
 
-A Claude Code plugin that bootstraps full-stack T3 projects with modular addons. Built for non-technical users who want to create and deploy web apps by describing what they want in plain language.
+Aucune installation locale n’est nécessaire. Un navigateur, un compte GitHub et un compte Scaleway suffisent.
 
-> 📘 **First time? Follow the [step-by-step installation guide](https://hypervibe.fr/plugin/installation).** It walks you through the prerequisites, the accounts to create, and your first project, end to end.
+Baudrier est un fork de [Hypervibe Harness](https://github.com/flavien-ia/hypervibe-harness) de Flavien Chervet, réorienté vers une stack 100 % Scaleway et souveraine. Voir [Attribution](#attribution) pour l’historique du fork.
+
+Les applications générées sont exclusivement en français et sont déployées **restreintes à votre IP par défaut** ; une skill dédiée (`/publish`) les ouvre ensuite au public quand vous êtes prêt.
+
+## État du projet
+
+La conversion est terminée : toutes les skills de ce plugin ciblent désormais
+Scaleway. Les skills qui provisionnaient les fournisseurs abandonnés (Vercel,
+Neon, Cloudflare, Render, Bitwarden, Resend/Brevo, Stripe, OAuth Google/GitHub,
+i18n) ont été **supprimées**, et toutes les skills restantes ou nouvellement
+ajoutées (base de données, auth, stockage, email, domaine, cron, agents,
+déploiement, instantanés de projet, etc.) ciblent Scaleway. La colonne « Ce
+que ça fait » des tableaux ci-dessous reflète le comportement réel actuel de
+chaque skill.
+
+Voir [CHANGELOG.md](CHANGELOG.md) pour l’historique détaillé du fork.
+
+Quelques propriétés opérationnelles à connaître avant de vous fier à cet outil :
+
+- Les apps sont déployées **restreintes à votre IP par
+  défaut** ; `/publish` les ouvre au public, et `/unpublish` rétablit la
+  restriction.
+- Les Serverless Containers **passent à zéro instance** en cas d’inactivité
+  pour éviter de payer du calcul inutilisé : le premier visiteur après une
+  période d’inactivité attend donc un démarrage à froid.
+- Le harness **ne supprime jamais les bases de données ni les buckets Object
+  Storage**, même via `/delete-project` ou `/clean`. C’est une propriété de
+  sécurité délibérée, pas un oubli.
+- Les buckets Object Storage ont le **versioning activé**, qui constitue
+  actuellement le seul mécanisme de sauvegarde des fichiers.
 
 ## Installation
 
-You need [Claude Code](https://claude.com/claude-code) first. It is included with a **Claude Pro** plan or higher (the free plan is not enough), and ships with the Claude desktop app (Mac and Windows) or as a CLI. New to Claude? [Create your account and subscribe here](https://claude.ai/referral/BtZlSHizAA). Then, inside Claude Code, run:
+Baudrier fonctionne sur **Claude Code web** (claude.ai/code). Aucune installation locale n’est nécessaire.
+
+### Ce dont vous avez besoin
+
+- **Un compte GitHub.** Baudrier y sauvegarde le code de votre application.
+- **Un compte Scaleway.** Cet hébergeur français fait tourner vos applications.
+- **Un abonnement Claude payant** (Pro, Max, Team ou Enterprise). Le plan gratuit de Claude ne donne pas accès à Claude Code.
+- **Environ 15 minutes.**
+
+### Mise en place, une seule fois
+
+Ces quatre étapes ne se font qu’une fois. Elles préparent l’environnement partagé par toutes vos futures applications.
+
+#### Étape 1 - Créer vos comptes
+
+Créez votre compte Claude : https://claude.ai et commandez un abonnement Max minimum.
+
+Créez votre compte GitHub : https://github.com/signup et votre compte Scaleway https://console.scaleway.com.
+
+#### Étape 2 - Connecter claude.ai/code à GitHub
+
+Sur https://claude.ai/code, connectez votre compte GitHub. Rendez-vous ensuite sur https://github.com/apps/claude puis autorisez Claude à effectuer des modifications sur votre compte.
+
+#### Étape 3 - Créer une clé d’API Scaleway
+
+Rendez-vous sur https://console.scaleway.com/iam/api-keys et créez une nouvelle clé d’API.
+
+**Cas A - Vous êtes l’administrateur de l’organisation Scaleway.** Créez la clé avec la permission `ProjectManager`, à l’échelle de l’organisation entière, pas d’un seul projet. `/bootstrap` crée un Projet Scaleway séparé pour chaque application, et cette action exige ce droit. Une clé limitée à un seul projet échoue avec une erreur 403 dès la première tentative, et Baudrier vous l’indique clairement.
+
+**Cas B - Vous êtes membre de l’organisation, pas administrateur.** Demandez à votre administrateur de suivre [docs/ADMIN-SCALEWAY.md](docs/ADMIN-SCALEWAY.md). Votre administrateur crée un Projet Scaleway pour chaque application et vous transmet son identifiant. Ajoutez chaque identifiant à la variable `BAUDRIER_SCW_PROJECTS_IDS` de l’environnement cloud (étape 4 ci-dessous), sous la forme `nom-du-depot:identifiant`, avec une virgule entre les entrées. Un seul environnement cloud sert ainsi toutes vos applications : à chaque nouvelle application, complétez la liste via « Edit environment » puis ouvrez une nouvelle session. Pour une seule application, la variable `SCW_DEFAULT_PROJECT_ID=<identifiant>` fonctionne aussi. Vous pouvez aussi régler `BAUDRIER_SCW_MODE=poc` pour commencer avec votre propre clé ; rendre l’application publique demande ensuite des clés déléguées par votre administrateur.
+
+Notez la **clé d’accès** et la **clé secrète**. La clé secrète ne s’affiche qu’une fois, à la création.
+
+#### Étape 4 - Créer l’environnement cloud « Baudrier »
+
+De retour sur https://claude.ai/code, créez un nouvel environnement cloud et nommez-le **Baudrier**. Remplissez trois blocs, exactement comme indiqué ci-dessous.
+
+**1. Accès réseau : Complet**
+
+Choisissez **Complet**. C’est le réglage recommandé. La construction d’une application touche beaucoup de domaines difficiles à prévoir à l’avance (dépôts de paquets Alpine et npm, registres Docker, polices, API Scaleway, et d’autres au fil des fonctionnalités), et chaque domaine oublié casse une étape avec une erreur difficile à comprendre.
+
+**2. Variables d’environnement**
 
 ```
-/plugin marketplace add flavien-ia/hypervibe-harness
-/plugin install hypervibe@hypervibe-harness
+SCW_ACCESS_KEY=<votre clé d’accès Scaleway>
+SCW_SECRET_KEY=<votre clé secrète Scaleway>
+SCW_DEFAULT_ORGANIZATION_ID=<l’identifiant de votre organisation Scaleway>
+SCW_DEFAULT_REGION=fr-par
+BAUDRIER_SCW_MODE=full
 ```
 
-Updating from a version older than 2.5? After updating the plugin, just re-run `/start` in Claude Code: it detects your old background mechanisms and consolidates them into the new unified one for you, safely and with your consent at each step (nothing happens if you have nothing to migrate). More context in [MIGRATION.md](MIGRATION.md).
+Si vous suivez le **Cas B**, ajoutez `BAUDRIER_SCW_PROJECTS_IDS=<nom-du-depot>:<l’identifiant de projet transmis par votre administrateur>` (une entrée par application, avec une virgule entre les entrées), et réglez `BAUDRIER_SCW_MODE=poc` au lieu de `full`.
 
-Then type `/start`: it installs everything else for you (Node.js, pnpm, Git, and each service's CLI) and checks that all your connections work.
+Ces valeurs sont visibles par toute personne qui utilise cet environnement cloud. Sur un environnement personnel, cela veut dire vous seul(e). Claude Code ne propose aucun autre coffre-fort de secrets pour cet usage : c’est le mécanisme prévu.
 
-Prefer a guided, click-by-click version? See the full walkthrough at **[hypervibe.fr/plugin/installation](https://hypervibe.fr/plugin/installation)**.
+**3. Script de configuration**
 
-## Getting started
+Ouvrez [scripts/setup-clis-web.sh](scripts/setup-clis-web.sh) et copiez tout son contenu dans le champ « Setup script » de l’environnement.
 
-| New to this? | Already comfortable? |
+Ce script installe le plugin Baudrier lui-même. Contrairement à un plugin ordinaire, il ne s’installe pas seul dans un environnement web (limitation connue de Claude Code). Le script s’en charge une seule fois, au moment où l’environnement se construit, pas au début de chaque conversation.
+
+Toute modification de ce script force une reconstruction de l’environnement, qui réinstalle le plugin à partir de zéro. C’est voulu : c’est le seul moyen de forcer une mise à jour du plugin avant l’expiration naturelle du cache (environ 7 jours). Si une nouvelle version de Baudrier sort et que vous voulez la récupérer tout de suite, rouvrez ce fichier, ajoutez un espace ou un commentaire, et resauvegardez le script.
+
+### Créer une application
+
+Une fois l’environnement « Baudrier » en place, chaque nouvelle application se crée en trois étapes :
+
+1. Allez sur le dépôt `baudrier-template` et cliquez sur **"Use this template"**. Choisissez un nom en kebab-case (des mots en minuscules séparés par des tirets, par exemple `site-vitrine-kine`) : ce nom devient le nom de votre application.
+2. Ouvrez une conversation Claude Code sur ce nouveau dépôt, avec l’environnement **Baudrier**.
+3. Tapez `/start`, puis `/bootstrap`. Décrivez en français ce que vous voulez, Baudrier s’occupe du reste.
+
+### En cas de problème
+
+| Symptôme | Cause probable | Solution |
+|---|---|---|
+| L’application répond 403 alors qu’elle n’est pas encore publiée | C’est le comportement normal : elle est restreinte à votre IP, et votre IP a changé | Ouvrez https://ip.me, copiez l’adresse affichée, donnez-la à Claude. Baudrier met à jour `ACCESS_ALLOWED_IPS`. |
+| Une variable Scaleway manque, ou le plugin n’est pas installé | L’environnement n’a pas encore le bon réglage, ou vous êtes dans une conversation ouverte avant la correction | Corrigez l’environnement (variables ou script), puis **ouvrez une nouvelle conversation**. Une conversation en cours ne peut pas rafraîchir sa propre liste de commandes. |
+| `/start` signale une clé Scaleway qui échoue avec une erreur 403 sur la liste des projets | La clé n’a pas la permission `ProjectManager` au niveau de l’organisation | Recréez une clé avec cette permission (étape 3 ci-dessus), et mettez à jour la variable `SCW_SECRET_KEY` de l’environnement |
+| Le réseau bloque un domaine dont vous ne comprenez pas le rôle | L’environnement est en accès réseau **Custom** et un domaine manque à la liste | Passez l’accès réseau en **Complet** (le réglage recommandé, étape 4), puis ouvrez une nouvelle conversation |
+
+**Après tout changement de l’environnement cloud, démarrez une NOUVELLE conversation.** Une conversation en cours ne voit pas le changement.
+
+Tapez ensuite `/start` : il vérifie vos prérequis et vous présente le plugin.
+
+## Par où commencer
+
+| Première fois ? | Déjà à l’aise ? |
 |---|---|
-| `/start` - checks your setup and shows you around | `/bootstrap` - jump straight in |
-| `/prof` - explains how everything works | `/spec` - build a detailed spec first |
+| `/start` - vérifie votre config et présente le plugin | `/bootstrap` - lancez-vous directement |
+| `/prof` - explique comment tout fonctionne | `/spec` - construisez un cahier des charges d’abord |
 
-## How it works
+## Comment ça marche
 
-Just describe what you want to build. Claude analyzes your description and infers which addons are needed (database, auth, payments, etc.), then presents the plan for your approval before building.
+Décrivez ce que vous voulez construire. Claude analyse votre description et déduit les addons nécessaires (base de données, auth, stockage, etc.), puis vous présente le plan pour validation avant de construire.
 
 ```
-/bootstrap My photographer portfolio website
-/bootstrap My lead management dashboard with user accounts
-/bootstrap My online invoicing SaaS with Stripe payments
+/bootstrap Mon site vitrine
+/bootstrap Mon outil de gestion de leads avec comptes utilisateurs
 ```
 
-### Three ways to define your project
+### Trois façons de définir votre projet
 
-When you launch `/bootstrap`, you choose how to describe your app:
+Quand vous lancez `/bootstrap`, vous choisissez comment décrire votre app :
 
-- **A - Build a spec together** (`/spec`): Claude guides you step by step through 5 blocks (project, pages, design, features, constraints) and produces a `cahier-des-charges.md`
-- **B - Provide an existing spec**: give Claude a `.md` file, he reads it and infers the infrastructure
-- **C - Short description only**: Claude asks the infrastructure questions in one go and builds a simple app
+- **A - Construire un cahier des charges ensemble** (`/spec`) : Claude vous guide étape par étape à travers 5 blocs (projet, pages, design, fonctionnalités, contraintes) et produit un `cahier-des-charges.md`
+- **B - Fournir un cahier des charges existant** : donnez à Claude un fichier `.md`, il le lit et en déduit l’infrastructure
+- **C - Description courte uniquement** : Claude pose les questions d’infrastructure en une fois et construit une app simple
 
-## All skills
+## Toutes les skills
 
-### Workflow skills
+Les tableaux ci-dessous sont établis en lisant chaque `skills/*/SKILL.md` présent dans ce dépôt (hors helpers internes préfixés `_`), ils reflètent donc ce qui existe réellement.
 
-| Skill | What it does |
+### Skills de workflow
+
+| Skill | Ce que ça fait |
 |---|---|
-| `/bootstrap` | Create a new project from scratch |
-| `/spec` | Build a detailed project specification, step by step |
-| `/start` | First-time onboarding: checks prerequisites, presents all commands |
-| `/prof` | Explains how everything works in plain language (pedagogical mode) |
-| `/seo` | Audit SEO and fix issues (metadata, sitemap, OG, structure, URLs/slugs, accessibility, readability, topical depth, freshness) |
-| `/geo` | Audit and optimize for AI answer engines (ChatGPT, Claude, Perplexity, Google AI Overviews) - llms.txt, AI crawler policy, FAQPage schema, citability signals, E-E-A-T, Q&A format. Complementary to `/seo`. |
-| `/gsc` | Connect the site to Google Search Console, verify DNS automatically, submit the sitemap, then audit what Google actually sees - indexing coverage, top queries, quick wins (positions 11-20), low CTR pages, zombie pages. Complementary to `/seo` (external Google data). |
-| `/security` | Security audit (secrets, auth, headers, dependencies, RGPD) |
-| `/rgpd-audit` | RGPD compliance audit - detects third-party services in use, updates the subprocessors registry, generates or refreshes the privacy policy page |
-| `/clean` | Find unused files, dead code, orphan env vars and DB tables - review + delete on a branch |
-| `/rotate-secret` | Rotate a secret (Stripe, Brevo, Google…) everywhere it lives - local + Vercel |
-| `/quotas` | Show your current usage against each service's free tier (Neon, Cloudflare, Brevo, Resend, Vercel) with verdicts per gauge |
+| `/bootstrap` | Créer un nouveau projet T3 de zéro |
+| `/spec` | Construire un cahier des charges détaillé, étape par étape |
+| `/start` | Premier lancement : vérifie les prérequis, présente toutes les commandes |
+| `/prof` | Explique comment tout fonctionne simplement (mode pédagogique) |
+| `/seo` | Audit SEO et corrections (métadonnées, sitemap, OG, structure, URLs/slugs, accessibilité, lisibilité, profondeur sémantique, fraîcheur du contenu) |
+| `/seo-perf` | Mesure la performance réelle via l’API PageSpeed Insights et propose des correctifs classés par impact mesuré ; auto-invoquée en fin de `/seo` |
+| `/geo` | Audit et optimisation pour les moteurs IA (ChatGPT, Claude, Perplexity, Google AI Overviews) - llms.txt, politique crawlers IA, schema FAQPage, signaux de citabilité, E-E-A-T. Complémentaire à `/seo` |
+| `/gsc` | Connecte le site à Google Search Console, vérifie le DNS, soumet le sitemap, puis audite la couverture d’indexation, les requêtes principales et les pages à faible CTR |
+| `/eco-audit` | Audit d’écoresponsabilité d’un site déployé (score EcoIndex A-G, estimation gCO2e/eau par visite), propose des correctifs, remesure après déploiement |
+| `/security` | Audit de sécurité (secrets, auth, headers, dépendances, RGPD) |
+| `/rgpd-audit` | Audit de conformité RGPD - détecte les services tiers utilisés, met à jour le registre des sous-traitants, génère ou rafraîchit la page de politique de confidentialité |
+| `/clean` | Trouve les fichiers inutilisés, le code mort, les env vars et tables DB orphelines - revue + suppression sur une branche |
+| `/rotate-secret` | Renouvelle une clé secrète partout où elle vit |
+| `/save-project` | Crée une sauvegarde complète et horodatée d’un projet (code, base de données, env vars, stockage de fichiers, configs) |
+| `/delete-project` | Décommissionne proprement un projet et son infrastructure cloud, avec double confirmation avant toute suppression |
 
-### Addon skills
+### Skills de déploiement & exploitation
 
-Each addon can be activated during `/bootstrap` or used standalone on an existing project.
-
-| Skill | What it adds |
+| Skill | Ce que ça fait |
 |---|---|
-| `/add-db` | Neon PostgreSQL + Drizzle ORM (DB provisioned in Frankfurt, `aws-eu-central-1`) |
-| `/add-auth` | NextAuth v5 - admin-only interface OR user accounts (email+password with signup, account, delete, and optional forgot-password if email is configured). Google/GitHub OAuth offered as optional add-ons in users mode. |
-| `/add-google-auth` | Add Google OAuth login (extends `/add-auth`) |
-| `/add-github-auth` | Add GitHub OAuth login (extends `/add-auth`) |
-| `/add-email` | Resend or Brevo transactional emails (auto-detected) |
-| `/add-stripe` | Stripe Checkout payments |
-| `/add-i18n` | next-intl internationalization |
-| `/add-storage` | Cloudflare R2 file storage |
-| `/add-analytics` | Google Analytics (GA4) with RGPD cookie consent |
-| `/add-map` | Interactive vector map (MapLibre + OpenFreeMap - free, no API key, EU). Single pin, multi-pin, route, or map-first layouts |
-| `/add-dark-mode` | Dark mode (light / dark / system) with a ready-to-use toggle |
-| `/add-domain` | Connect a custom domain name (guided setup) |
-| `/new-email-address` | Create a receiving address (`contact@yourdomain.com`) forwarded to your inbox (Cloudflare Email Routing) |
-| `/add-cron` | Scheduled task - Cloudflare Worker (precise) or GitHub Action (best-effort), chosen based on what the cron does |
-| `/add-automation` | Background processing - routes to cron, Cloudflare Worker, or Render Background Worker depending on the need. Hands off to `/add-agent` when you describe an AI agent. |
-| `/add-agent` | Autonomous AI agent (Anthropic Claude + tools + optional semantic memory + budget circuit breaker + full persistence) deployed on Render |
-| `/add-agent-dashboard` | Monitoring dashboard for agents under `/admin/agents` (cost, runs, turn-by-turn detail, run-now button) |
-| `/add-collab` | Add GitHub collaborators that can deploy (via GitHub Actions, without paying a Vercel seat) |
-| `/add-backup-db` | Automated Neon DB backups (shared Cloudflare Worker, rolling + aging snapshots) |
+| `/deploy` | Construit l’image du conteneur, la pousse vers Scaleway Container Registry, exécute les migrations, et la déploie sur Scaleway Serverless Containers - production ou preview |
+| `/publish` | Rend l’app accessible publiquement en désactivant la restriction VPN |
+| `/unpublish` | Rétablit la restriction par IP au VPN par défaut |
+| `/scale` | Affiche ou modifie la taille de calcul d’un conteneur déployé (S/M/L/XL) et son min-scale (scale-to-zero ou toujours actif) |
+| `/costs` | Affiche la consommation Scaleway réelle du projet (par service et au total), ainsi que la consommation TEM |
 
-To use an addon standalone, simply ask Claude Code:
-> "Add authentication to my project" → uses add-auth
-> "Set up Stripe for payments" → uses add-stripe
-> "I want to connect my domain name" → uses add-domain
+### Skills addon
 
-### Internal helpers
+Chaque addon peut être activé pendant `/bootstrap` ou utilisé seul sur un projet existant.
 
-The plugin also ships with `_`-prefixed internal skills that are invoked automatically by the public skills above (never by the user directly). They handle shared concerns like env var pushing (`_push-env-vars`), dependency detection (`_check-deps`), secret generation, password hashing, auth setup sub-branches, CLI auto-install, etc. You never need to invoke them yourself.
+| Skill | Ce que ça ajoute |
+|---|---|
+| `/add-db` | Base de données PostgreSQL + Drizzle ORM |
+| `/add-auth` | Authentification - interface admin uniquement OU comptes utilisateurs (email+mot de passe avec inscription, page compte, suppression) |
+| `/add-2fa` | Authentification à deux facteurs (TOTP) en complément de `/add-auth` |
+| `/add-role` | Système de rôles utilisateurs (membre, éditeur, modérateur...) |
+| `/add-email` | Envoi d’emails transactionnels |
+| `/add-analytics` | Analytics du site sans cookies (Matomo), avec un contrôle d’opt-out toujours disponible - aucune bannière de consentement nécessaire |
+| `/add-storage` | Stockage de fichiers/images |
+| `/add-domain` | Connecter un nom de domaine personnalisé (guidé) |
+| `/add-map` | Carte interactive vectorielle (MapLibre + OpenFreeMap, gratuit sans clé API, UE). Single pin, multi-pin, itinéraire ou map-first |
+| `/add-dark-mode` | Mode sombre (clair / sombre / système) avec sélecteur prêt à l’emploi |
+| `/add-pwa` | Transforme l’app en PWA installable (manifest, service worker, icônes, invite d’installation) |
+| `/add-push-notification` | Notifications Web Push (dépend de `/add-pwa`) |
+| `/add-notification-center` | Centre de notifications in-app (cloche, badge non-lu, panneau déroulant) |
+| `/add-cron` | Tâche planifiée |
+| `/add-automation` | Automatisation en arrière-plan - oriente vers la bonne solution (cron, workflow, agent, ou routine personnelle) selon le besoin |
+| `/add-workflow` | Enchaînement fini d’étapes déclenché par un événement, tournant dans l’app, avec des étapes assistées par IA |
+| `/add-agent` | Agent IA autonome (Claude + outils + mémoire optionnelle + garde-fou budgétaire + historique complet d’exécution) |
+| `/add-agent-dashboard` | Dashboard de monitoring des agents (coût, exécutions, détail tour par tour, lancer à la demande) |
+| `/add-routine` | Mission IA récurrente personnelle sur votre propre compte Claude (sans infrastructure applicative) |
 
-## Stack
+Pour utiliser un addon seul, demandez simplement à Claude Code :
+> « Ajoute l’authentification à mon projet » → utilise `/add-auth`
+> « Je veux connecter mon nom de domaine » → utilise `/add-domain`
 
-Projects bootstrapped with this plugin use:
+### Helpers internes
 
-- **Next.js** (App Router) with TypeScript
-- **tRPC** for type-safe API routes
-- **Drizzle ORM** for database access
-- **Tailwind CSS** for styling
-- **shadcn/ui** for UI components
-- **Inter** as the default font (via next/font)
-- **GitHub** for source control
-- **Vercel** for hosting and deployment (functions pinned to `fra1` - Frankfurt)
-- **Neon** for PostgreSQL database (provisioned in Frankfurt, `aws-eu-central-1` - when DB addon is used)
-- **Resend or Brevo** for transactional emails (when the email addon is used)
-- **Stripe** for payments (when stripe addon is used)
-- **Cloudflare R2** for file storage (when storage addon is used)
-- **Google Analytics** for analytics (when analytics addon is used)
-- **next-intl** for internationalization (when i18n addon is used)
-- **Anthropic** (Claude API) for autonomous AI agents (when the agent addon is used)
-- **Render** for hosting AI agents and long-running automations (when the agent / automation addon routes to Render)
-- **Bitwarden** as a **key vault** - your cross-project access keys (Cloudflare, Neon, email…) are stored **encrypted** in a vault, never in plaintext on disk or in environment variables. `/start` sets it up (free account, EU region); you type one master password once a day and Claude fetches the keys on its own when needed.
+Le plugin embarque aussi des skills internes préfixées `_`, invoquées automatiquement par les skills publiques ci-dessus (jamais par l’utilisateur directement). Elles gèrent les préoccupations partagées : push des env vars, détection de dépendances, génération de secrets, hash de mots de passe, sous-branches de setup auth, etc. Vous n’avez jamais besoin de les invoquer vous-même.
 
-## What the bootstrap sets up automatically
+## Stack technique
 
-Every project gets, regardless of mode:
+Les projets créés avec ce plugin utilisent :
 
-- T3 scaffold (Next.js + TypeScript + Tailwind + tRPC)
-- shadcn/ui component library
-- Base SEO (metadata, robots.txt, sitemap.ts, OG placeholder, semantic HTML)
-- GitHub private repo
-- Vercel deployment **with functions pinned to `fra1` (Frankfurt)** - better latency for EU visitors, data stays in EU
-- Custom 404 page
-- Mentions légales + **data-driven privacy policy page**: powered by a central subprocessors registry (`src/lib/subprocessors.json`) that auto-updates whenever you add a service via `/add-*` skills
-- CLAUDE.md with all project conventions
+- **Next.js** (App Router) avec TypeScript
+- **tRPC** pour les routes API typées
+- **Drizzle ORM** pour l’accès à la base de données
+- **Tailwind CSS v4** pour le style
+- **shadcn/ui** pour les composants UI
+- **GitHub** pour le contrôle de version
 
-## Conventions (written to CLAUDE.md)
+Hébergement et services (Scaleway, région `fr-par` sauf mention contraire), provisionnés par la skill addon correspondante lorsqu’elle est activée :
 
-The generated CLAUDE.md includes these conventions that Claude Code follows on every subsequent interaction:
+- **Scaleway Serverless Containers** pour l’hébergement, image poussée vers **Scaleway Container Registry**
+- **Scaleway Serverless SQL Database** (PostgreSQL 16) via **Drizzle ORM** / `node-postgres` (quand l’addon DB est activé)
+- **Scaleway Object Storage** (compatible S3) pour le stockage de fichiers (quand l’addon storage est activé)
+- **Scaleway Domains & DNS** pour les domaines personnalisés (quand l’addon domaine est activé)
+- **Scaleway Transactional Email (TEM)** pour l’email transactionnel (quand l’addon email est activé)
+- **Scaleway Serverless Jobs** pour la planification et les agents IA (quand les addons cron/automation/agent sont activés)
+- **Scaleway Generative APIs** pour le LLM et les embeddings (quand l’addon agent est activé)
+- **Scaleway Secret Manager** pour les secrets
+- **Matomo** pour les analytics (quand l’addon analytics est activé)
 
-- **Design**: read `globals.css` before creating components, use CSS variables, never use default Tailwind colors
-- **Font**: Inter by default (unless the user specifies otherwise)
-- **UX**: `cursor-pointer` on all clickable elements
-- **Feedback**: use shadcn/ui `toast`/`sonner` for success/error messages, never `alert()`
-- **Images**: always use `<Image>` from next/image with descriptive `alt` attributes
-- **Responsive**: mobile-first, all components must work on mobile (< 640px) and desktop
-- **Optimistic UI** (if DB): update the interface immediately, sync the database in the background
-- **Git**: never push without explicit user request
-- **Workflow**: for complex tasks (3+ files), create a numbered todo list with ✅/⏳ progress
-- **Components**: always use shadcn/ui before building custom components
-- **TypeScript**: never use `any`, type everything properly
-- **Typography**: never use em dashes ( - ) in user-facing text
+## Ce que le bootstrap configure automatiquement
 
-## Included MCP server
+Chaque projet reçoit, quel que soit le mode :
 
-The plugin ships with [Context7](https://github.com/upstash/context7-mcp), which gives Claude Code access to up-to-date documentation for Next.js, Tailwind, Drizzle, and other technologies.
+- Scaffold T3 (Next.js + TypeScript + Tailwind + tRPC)
+- Bibliothèque de composants shadcn/ui
+- SEO de base (métadonnées, robots.txt, sitemap.ts, placeholder OG, HTML sémantique)
+- Repo GitHub privé
+- Page 404 personnalisée
+- Mentions légales + page de politique de confidentialité data-driven, alimentée par un registre central des sous-traitants (`src/lib/subprocessors.json`) qui se met à jour automatiquement à chaque ajout de service via les skills `/add-*`
+- CLAUDE.md avec toutes les conventions du projet
+- Restriction par IP au VPN d’entreprise (jusqu’à l’exécution de `/publish`)
 
-## Author
+## Attribution
 
-**Flavien Chervet** - [flavienchervet.fr](https://flavienchervet.fr)
+Baudrier est un dérivé de [Hypervibe Harness](https://github.com/flavien-ia/hypervibe-harness) de **Flavien Chervet** (Hyper Wisdom), sous licence Apache-2.0. Des modifications substantielles ont été apportées pour retirer Vercel, Cloudflare, Neon, Render, Resend, Brevo, Bitwarden, Stripe, OAuth Google/GitHub, l’i18n et la réception d’emails, et pour réorienter le plugin vers une architecture 100 % Scaleway et souveraine. Voir [NOTICE](NOTICE) pour la notice d’attribution complète.
 
-## License
+## Licence
 
-Licensed under the [Apache License 2.0](LICENSE). The source code is free to use, modify and redistribute under the terms of that license.
+Sous [licence Apache 2.0](LICENSE). Le code source est libre d’utilisation, de modification et de redistribution selon les termes de cette licence.
 
-### Trademark
+### Marque
 
-**Hypervibe** and **Certifié Hypervibe** are trademarks of Hyper Wisdom. The open-source license covers the code, not the name: it grants no right to use these names (see section 6 of the Apache License). You may not name a fork, derivative, product or service "Hypervibe", nor imply an official affiliation or certification, without written permission.
+**Hypervibe** et **Certifié Hypervibe** sont des marques de Hyper Wisdom. La licence Apache couvre le code, pas le nom : elle ne confère aucun droit d’usage de ces marques (cf. section 6 de la licence Apache). Ce fork n’utilise pas le nom Hypervibe et ne laisse entendre aucune affiliation avec Hyper Wisdom, ni certification par cette dernière.

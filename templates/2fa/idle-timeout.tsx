@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { signOut } from "next-auth/react";
+import { revokeTrustedDeviceAction } from "~/lib/revoke-trusted-device-action";
 
 const IDLE_MS = 30 * 60 * 1000; // 30 min
 const CHECK_MS = 30 * 1000;
@@ -24,7 +25,12 @@ export function IdleTimeout() {
     const id = setInterval(() => {
       if (Date.now() - last.current >= IDLE_MS) {
         clearInterval(id);
-        void signOut({ callbackUrl: "/admin/signin" });
+        // Revoke the trusted-device grant first: an idle timeout should mean
+        // the next visit is challenged again, not just that this session
+        // ended while the browser stays "trusted" for up to 24h.
+        void revokeTrustedDeviceAction().finally(() => {
+          void signOut({ callbackUrl: "/admin/signin" });
+        });
       }
     }, CHECK_MS);
 

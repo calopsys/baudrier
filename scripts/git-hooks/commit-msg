@@ -1,0 +1,9 @@
+#!/bin/sh
+# baudrier commit-msg hook - strips the trailers Claude Code appends to every
+# commit (the Co-Authored-By line and the claude.ai session URL). Installed
+# into the active hooks directory by tools/bootstrap-deps.mjs on session
+# start; deleting it is safe, it comes back at the next session.
+msg="$1"
+tmp="$msg.baudrier"
+sed -e '/^Co-[Aa]uthored-[Bb]y: Claude /d' -e '/^Claude-Session: /d' "$msg" > "$tmp" && mv "$tmp" "$msg"
+exit 0

@@ -11,13 +11,13 @@ Adds a **user roles system** to differentiate access rights in your app. Each us
 
 ## How it works
 
-1. **Checks** : Hypervibe verifies that you do have a database and a user accounts system (`/add-auth` in users mode). If admin auth is missing, it sets it up beforehand automatically so the management page is protected.
+1. **Checks** : Baudrier verifies that you do have a database and a user accounts system (`/add-auth` in users mode). If admin auth is missing, it sets it up beforehand automatically so the management page is protected.
 
-2. **Choosing the roles** : Hypervibe offers a list tailored to your project (for example `membre, editeur, moderateur` for an editorial site, `acheteur, vendeur, moderateur` for a marketplace). You accept it or give your own.
+2. **Choosing the roles** : Baudrier offers a list tailored to your project (for example `membre, editeur, moderateur` for an editorial site, `acheteur, vendeur, moderateur` for a marketplace). You accept it or give your own.
 
-3. **Default role** : Hypervibe asks which role each new visitor who signs up will receive (typically the most restricted, for example `membre`).
+3. **Default role** : Baudrier asks which role each new visitor who signs up will receive (typically the most restricted, for example `membre`).
 
-4. **Migration of existing users** (if there are any) : Hypervibe asks which role to assign to your already-registered users.
+4. **Migration of existing users** (if there are any) : Baudrier asks which role to assign to your already-registered users.
 
 5. **Automatic setup** :
   - Adding the "role" type to the database (Postgres `enum`)
@@ -41,12 +41,12 @@ Adds a **user roles system** to differentiate access rights in your app. Each us
 
 - The project must have `/add-auth` in **users** mode (user accounts in the database)
 - The database must be wired up (`/add-db` has been run)
-- If you want the management page (most of the time yes), `/add-auth` in admin mode will be run beforehand by Hypervibe if missing
+- If you want the management page (most of the time yes), `/add-auth` in admin mode will be run beforehand by Baudrier if missing
 
 ## Tips
 
 {{callout:tip|The `admin` role is deliberately reserved}}
-The name `admin` is reserved for your app's global admin login (configured by `/add-auth` in admin mode, stored in an environment variable, not in the database). Hypervibe refuses to add it to the user roles list. For a DB role with equivalent power, use `moderateur`, `manager`, or `superviseur`. This guarantees there will never be any confusion between the two notions.
+The name `admin` is reserved for your app's global admin login (configured by `/add-auth` in admin mode, stored in an environment variable, not in the database). Baudrier refuses to add it to the user roles list. For a DB role with equivalent power, use `moderateur`, `manager`, or `superviseur`. This guarantees there will never be any confusion between the two notions.
 {{/callout}}
 
 {{callout:tip|A single role at first, multi-role later if needed}}
@@ -54,9 +54,9 @@ By default the admin page offers a simple dropdown menu (a single role per user)
 {{/callout}}
 
 {{callout:info|Evolving your roles later}}
-You can re-run `/add-role` at any time to add a new role, remove one, rename, or change the default role. Hypervibe detects the existing configuration and offers you a suitable menu. For destructive operations (removing a role), it always asks which other role to reassign the affected users to.
+You can re-run `/add-role` at any time to add a new role, remove one, rename, or change the default role. Baudrier detects the existing configuration and offers you a suitable menu. For destructive operations (removing a role), it always asks which other role to reassign the affected users to.
 {{/callout}}
 
 {{callout:info|To protect a page or an action by role}}
-You don't have to handle the helpers yourself. Just tell Hypervibe : *"protect page X for moderators only"*, or *"only `pro` users can call this function"*. The pattern to follow is documented in the project's `CLAUDE.md`, so Claude applies it on its own for every new page you ask it for.
+You don't have to handle the helpers yourself. Just tell Baudrier : *"protect page X for moderators only"*, or *"only `pro` users can call this function"*. The pattern to follow is documented in the project's `CLAUDE.md`, so Claude applies it on its own for every new page you ask it for.
 {{/callout}}

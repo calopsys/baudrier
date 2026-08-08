@@ -8,15 +8,14 @@
 // catch it at creation, where it is cheap to fix, and propose token-disjoint
 // alternatives when the name can be auto-disambiguated.
 //
-// Existing names come from the same four sources as the /delete-project
-// ownership pass, so the two skills agree on what "collides" means:
-//   1. the shared-worker registry (~/.hypervibe-jobs/jobs.js): ping `project`
-//      fields + snapshot target names,
-//   2. sibling folders of the parent dir (where the project will be created),
-//   3. the Neon project list (REST),
-//   4. the Vercel project list (CLI).
-// Every source is fault-tolerant: a missing key or an absent CLI just drops
-// that source (reported in `sources`), it never aborts the guard.
+// Existing names come from the same sources as the /delete-project ownership
+// pass, so the two skills agree on what "collides" means:
+//   1. sibling folders of the parent dir (where the project will be created),
+//   2. the Scaleway Project list (REST, account/v3/projects) - CONTRACT.md:
+//      one Scaleway Project per app, so this is the same axis bootstrap-init.mjs
+//      itself uses when it creates the project (scwProject step).
+// Every source is fault-tolerant: a missing credential or an absent CLI just
+// drops that source (reported in `sources`), it never aborts the guard.
 //
 // Usage:
 //   node check-name-collision.mjs --name <kebab> [--parent-dir <path>]
@@ -32,7 +31,7 @@
 //     "collisions": [ { "name": "street-cool", "relation": "proposed-is-subset-of" } ],
 //     "suggestions": ["street-app", "street-web"],
 //     "existingCount": 42,
-//     "sources": { "registry": true, "siblings": true, "neon": true, "vercel": false },
+//     "sources": { "siblings": true, "scaleway": false },
 //     "notes": [ ... ]
 //   }
 //
@@ -46,12 +45,11 @@
 //                             suggestions may be empty -> the caller warns).
 
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readUserEnv } from "./_read-user-env.mjs";
 import { tokenMatches, normalizeName } from "./_match.mjs";
+import { loadCredentials, api, sdkCall } from "./scaleway/_scw-auth.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -76,25 +74,6 @@ if (!/^[a-z0-9][a-z0-9-]{0,48}[a-z0-9]$/.test(NAME)) {
 const P = normalizeName(NAME);
 
 // ─── sources ─────────────────────────────────────────────────────────────
-function fromRegistry() {
-  const jobsPath = join(homedir(), ".hypervibe-jobs", "jobs.js");
-  if (!existsSync(jobsPath)) return { names: [], ok: false };
-  try {
-    const raw = readFileSync(jobsPath, "utf8");
-    const m = raw.match(/export default\s*([\s\S]*?);?\s*$/);
-    if (!m) return { names: [], ok: false };
-    const reg = JSON.parse(m[1]);
-    const names = [];
-    for (const j of reg.jobs || []) {
-      if (j.kind === "ping" && j.project) names.push(j.project);
-      if (j.kind === "snapshot") for (const t of j.targets || []) if (t.name) names.push(t.name);
-    }
-    return { names, ok: true };
-  } catch {
-    return { names: [], ok: false };
-  }
-}
-
 function fromSiblings() {
   try {
     const names = [];
@@ -108,40 +87,25 @@ function fromSiblings() {
   }
 }
 
-async function fromNeon() {
-  const key = readUserEnv("NEON_API_KEY") || "";
-  if (!key) return { names: [], ok: false };
+// CONTRACT.md: one Scaleway Project per app. `bootstrap-init.mjs`'s scwProject
+// step slugifies `--name` and finds-or-creates a Project with that slug, so
+// the Scaleway Project list is exactly the axis to check for collisions on.
+// Uses the SDK's Account.v3.ProjectAPI directly (same namespace/class
+// bootstrap-init.mjs's scwProject() uses) rather than the raw
+// /account/v3/projects endpoint.
+// Soft-fails (returns ok:false) if credentials aren't configured or the
+// organization id is missing - this guard must never be the reason /bootstrap
+// can't proceed, it only adds signal when it can.
+async function fromScaleway() {
+  const creds = loadCredentials();
+  if (!creds.accessKey || !creds.secretKey || !creds.organizationId) return { names: [], ok: false };
   try {
-    const res = await fetch("https://console.neon.tech/api/v2/projects?limit=400", {
-      headers: { Authorization: `Bearer ${key}` },
-    });
-    if (!res.ok) return { names: [], ok: false };
-    const data = await res.json();
-    return { names: (data.projects || []).map((p) => p.name).filter(Boolean), ok: true };
+    const projectsApi = await api("Account", "v3", "ProjectAPI");
+    const projects = await sdkCall(() => projectsApi.listProjects({ organizationId: creds.organizationId }).all());
+    return { names: projects.map((p) => p.name).filter(Boolean), ok: true };
   } catch {
     return { names: [], ok: false };
   }
-}
-
-// Parse the first column of `vercel projects ls` into candidate project names.
-// The CLI prints its table to stdout+stderr with decorative header/footer lines;
-// the NOISE set drops the obvious non-names. Mirrors discover-resources.mjs.
-const VERCEL_NOISE = new Set(["vercel", "project", "projects", "name", "latest", "production", "preview", "https", "http", "error", "warn", "updated", "age", "url", "source", "node", "fetching", "retrieving", "deployments", "deployment", "found", "no"]);
-function fromVercel() {
-  // Command as a single string (not argv array) so shell:true does not trip
-  // Node's DEP0190 warning; needed anyway for the `vercel` .cmd shim on Windows.
-  const r = spawnSync("vercel projects ls", { encoding: "utf8", shell: true });
-  if (r.status !== 0) return { names: [], ok: false };
-  const haystack = `${r.stdout || ""}\n${r.stderr || ""}`;
-  const names = [];
-  for (const line of haystack.split("\n")) {
-    if (names.length >= 500) break;
-    const tok = normalizeName(line.trim().split(/\s+/)[0] || "");
-    if (!tok || tok.length < 2) continue;
-    if (!/^[a-z0-9][a-z0-9-]*$/.test(tok) || /^[0-9]+$/.test(tok) || VERCEL_NOISE.has(tok)) continue;
-    names.push(tok);
-  }
-  return { names, ok: true };
 }
 
 // ─── suggestion generator ──────────────────────────────────────────────────
@@ -185,19 +149,16 @@ function buildSuggestions(existing) {
 }
 
 // ─── orchestration ─────────────────────────────────────────────────────────
-const registry = fromRegistry();
 const siblings = fromSiblings();
-const vercel = fromVercel();
-const neon = await fromNeon();
+const scaleway = await fromScaleway();
 
-const sources = { registry: registry.ok, siblings: siblings.ok, neon: neon.ok, vercel: vercel.ok };
+const sources = { siblings: siblings.ok, scaleway: scaleway.ok };
 const notes = [];
-if (!neon.ok) notes.push("Neon project list unavailable (key locked/absent): a Neon-only name clash cannot be seen.");
-if (!vercel.ok) notes.push("Vercel project list unavailable (CLI not logged in?): a Vercel-only name clash cannot be seen.");
+if (!scaleway.ok) notes.push("Scaleway Project list unavailable (no access key, secret key, or organization id found in the environment variables, or the API call failed): a Scaleway-only name clash cannot be seen.");
 
 // Dedup the existing names (normalized).
 const existing = [...new Set(
-  [...registry.names, ...siblings.names, ...neon.names, ...vercel.names].map(normalizeName).filter(Boolean),
+  [...siblings.names, ...scaleway.names].map(normalizeName).filter(Boolean),
 )];
 
 // Classify every collision from the proposed name's point of view.

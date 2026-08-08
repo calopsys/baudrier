@@ -11,11 +11,11 @@ Ajoute une **carte interactive** à votre site (page contact, liste d'agences, �
 
 ## Comment ça se passe
 
-1. **Une question** : Hypervibe vous demande ce que vous voulez faire avec la carte. À partir de votre réponse, elle infère tout le reste (combien de points, sur quelle page, statique ou interactif).
-2. **Vous donnez les emplacements** : soit l'adresse postale (Hypervibe la géocode automatiquement via OpenStreetMap), soit directement les coordonnées GPS si vous les avez.
-3. **Hypervibe installe les briques techniques** : la bibliothèque de cartes (MapLibre GL JS), les composants React, et la connexion au service de tuiles (OpenFreeMap : gratuit, sans clé).
-4. **Hypervibe câble la carte sur la bonne page** : selon votre cas d'usage, c'est intégré à votre page contact, à une nouvelle page dédiée (`/agences`, `/locations`...), ou en plein écran sur la home.
-5. **Fallback texte pour le SEO** : sous chaque carte, Hypervibe ajoute automatiquement la liste textuelle des points avec un lien Google Maps. Comme ça, Google indexe les adresses et les lecteurs d'écran y ont accès.
+1. **Une question** : Baudrier vous demande ce que vous voulez faire avec la carte. À partir de votre réponse, elle infère tout le reste (combien de points, sur quelle page, statique ou interactif).
+2. **Vous donnez les emplacements** : soit l'adresse postale (Baudrier la géocode automatiquement via OpenStreetMap), soit directement les coordonnées GPS si vous les avez.
+3. **Baudrier installe les briques techniques** : la bibliothèque de cartes (MapLibre GL JS), les composants React, et la connexion au service de tuiles (OpenFreeMap : gratuit, sans clé).
+4. **Baudrier câble la carte sur la bonne page** : selon votre cas d'usage, c'est intégré à votre page contact, à une nouvelle page dédiée (`/agences`, `/locations`...), ou en plein écran sur la home.
+5. **Fallback texte pour le SEO** : sous chaque carte, Baudrier ajoute automatiquement la liste textuelle des points avec un lien Google Maps. Comme ça, Google indexe les adresses et les lecteurs d'écran y ont accès.
 6. **Mise à jour de la politique de confidentialité** : OpenFreeMap est ajouté comme sous-traitant (il voit l'IP du visiteur quand il charge les tuiles : pas de cookie, infra en Europe).
 
 ## Ce que ça crée pour vous
@@ -48,5 +48,5 @@ Si vous avez beaucoup de points sur une zone restreinte (genre boutiques d'une v
 {{/callout}}
 
 {{callout:warning|Geocoding au runtime}}
-Si vos utilisateurs entrent des adresses libres dans un formulaire et que vous voulez les afficher sur la carte automatiquement, ça demande un service de geocoding payant (Mapbox / MapTiler) : OpenStreetMap Nominatim limite trop strictement pour ça. Hypervibe utilise Nominatim **uniquement à l'installation** pour vos points fixes, pas en production.
+Si vos utilisateurs entrent des adresses libres dans un formulaire et que vous voulez les afficher sur la carte automatiquement, ça demande un service de geocoding payant (Mapbox / MapTiler) : OpenStreetMap Nominatim limite trop strictement pour ça. Baudrier utilise Nominatim **uniquement à l'installation** pour vos points fixes, pas en production.
 {{/callout}}

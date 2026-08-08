@@ -1,6 +1,6 @@
-// hypervibe:pwa
+// baudrier:pwa
 // Web App Manifest (Next.js App Router). Détecté par /add-push-notification
-// via le marker "hypervibe:pwa" ci-dessus. Ne pas retirer ce commentaire.
+// via le marker "baudrier:pwa" ci-dessus. Ne pas retirer ce commentaire.
 import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {

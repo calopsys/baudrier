@@ -15,14 +15,22 @@ declare module "next-auth" {
       id: string;
     } & DefaultSession["user"];
   }
+  interface User {
+    sessionVersion: number;
+  }
 }
+// No `declare module "next-auth/jwt"` needed for `token.sessionVersion`:
+// the JWT type already extends `Record<string, unknown>`, so arbitrary keys
+// read/write without augmentation - same as the pre-existing `token.id` below.
 
-// hypervibe:auth-modes users
+// baudrier:auth-modes users
 //
 // Drizzle adapter is wired even though session strategy is "jwt" (NextAuth doesn't
-// write to the sessions table in JWT mode). Reason: it lets /add-google-auth or
-// /add-github-auth plug an OAuth provider in later without schema migration -
-// OAuth needs the accounts/sessions tables.
+// write to the sessions table in JWT mode). This is credentials-only auth (no
+// OAuth provider is offered by this harness), but the adapter tables
+// (accounts/sessions) are the standard @auth/drizzle-adapter shape, so keeping
+// them wired costs nothing and avoids a schema migration if OAuth is ever added
+// by hand later.
 export const { auth, handlers, signIn, signOut } = NextAuth({
   adapter: DrizzleAdapter(db, {
     usersTable: users,
@@ -53,15 +61,35 @@ export const { auth, handlers, signIn, signOut } = NextAuth({
           email: user.email,
           name: user.name,
           image: user.image,
+          sessionVersion: user.sessionVersion,
         };
       },
     }),
   ],
   callbacks: {
-    // Persist the user id in the JWT - needed because we use jwt strategy without
-    // the sessions table; the default callback drops `id` otherwise.
-    jwt({ token, user }) {
-      if (user) token.id = user.id;
+    // Persist the user id + sessionVersion in the JWT at sign-in - needed
+    // because we use jwt strategy without the sessions table; the default
+    // callback drops custom fields like `id` otherwise.
+    async jwt({ token, user }) {
+      if (user) {
+        token.id = user.id;
+        token.sessionVersion = user.sessionVersion;
+        return token;
+      }
+
+      // Re-checked on every subsequent request (jwt() runs on token decode,
+      // not only at sign-in): a password reset bumps sessionVersion in DB,
+      // and returning null here is what actually invalidates this JWT, since
+      // sessions are stateless - there is no server-side row to delete.
+      if (typeof token.id === "string") {
+        const current = await db.query.users.findFirst({
+          where: eq(users.id, token.id),
+          columns: { sessionVersion: true },
+        });
+        if (!current || current.sessionVersion !== token.sessionVersion) {
+          return null;
+        }
+      }
       return token;
     },
     session({ session, token }) {

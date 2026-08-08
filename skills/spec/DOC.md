@@ -12,7 +12,7 @@ The specification it produces is a readable `.md` file that `/bootstrap` can the
 
 ## How it works
 
-Hypervibe guides you through **4 short blocks**. At each block, you answer the questions at your own pace, Hypervibe sums up what it understood, and we move on to the next one.
+Baudrier guides you through **4 short blocks**. At each block, you answer the questions at your own pace, Baudrier sums up what it understood, and we move on to the next one.
 
 **Block 1: Project identity**
 - Who is the app for (customers, team, general public, yourself)?
@@ -20,7 +20,7 @@ Hypervibe guides you through **4 short blocks**. At each block, you answer the q
 - Are you drawing inspiration from an existing site or app for the vibe?
 
 **Block 2: The pages**
-- Which pages should your app have? (Hypervibe proposes a baseline like "home, about, contact, dashboard" that you adapt.)
+- Which pages should your app have? (Baudrier proposes a baseline like "home, about, contact, dashboard" that you adapt.)
 - For each page, what does the user see? What actions can they take?
 - Is there an admin or restricted area?
 
@@ -33,13 +33,17 @@ Hypervibe guides you through **4 short blocks**. At each block, you answer the q
 - Have you already written some copy, or do we put in placeholder content to replace later?
 - Anything we did not cover? (A specific integration, a tool you absolutely want to use, a particular constraint.)
 
-At the end, Hypervibe writes the `cahier-des-charges.md` file into your project folder and shows it to you for validation. You can still edit it before it gets used.
+At the end, Baudrier writes the `cahier-des-charges.md` file into your project folder and shows it to you for validation. You can still edit it before it gets used.
 
 ## What it creates for you
 
 - A clear, structured `cahier-des-charges.md` file, ready to be consumed by `/bootstrap`
 - A written record of your vision for the project (useful for you, for others, for yourself in 6 months)
-- Hypervibe also takes the opportunity to silently infer the technical building blocks you will need (database, auth, payments, etc.). You do **not** need to think about them
+- Baudrier also takes the opportunity to silently infer the technical building blocks you will need (database, accounts, email, file storage, notifications, automations, and more). You do **not** need to think about them
+
+## What it does NOT cover
+
+This harness has no online payments and is French-only (no multi-language support). If you mention either while building your spec, `/spec` tells you plainly and records it in a dedicated "out of scope" section of the file instead of silently dropping it or pretending it will be built.
 
 ## Prerequisites
 
@@ -52,5 +56,5 @@ To answer faster and more naturally, switch to **audio mode** in Claude Desktop 
 {{/callout}}
 
 {{callout:info|No technical jargon expected}}
-You do not need to know any technical terms. If Hypervibe asks you something, it is in plain language. If an option is not clear, ask it to explain or to suggest concrete examples.
+You do not need to know any technical terms. If Baudrier asks you something, it is in plain language. If an option is not clear, ask it to explain or to suggest concrete examples.
 {{/callout}}

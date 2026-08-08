@@ -1,13 +1,14 @@
 import { verifyPassword } from "~/lib/password";
+import { db } from "~/server/db";
+import { consumedBackupCodes } from "~/server/db/schema";
 
 /**
- * Codes de secours 2FA, stockés hachés (scrypt salt:hash) dans la variable
- * d'environnement `ADMIN_2FA_BACKUP_HASHES` (tableau JSON de hashs).
- *
- * Note : sans base de données, l'usage unique n'est pas tracé - un code reste
- * valable tant qu'il n'est pas régénéré. Pour un accès owner-only protégé par
- * mot de passe + TOTP, c'est un compromis acceptable. (Pour un usage unique
- * strict, régénérer les codes après chaque utilisation, ou stocker l'état en DB.)
+ * Codes de secours 2FA. Les hachages (scrypt salt:hash) restent dans la
+ * variable d’environnement `ADMIN_2FA_BACKUP_HASHES` (tableau JSON) - régénérer
+ * les codes ne demande donc toujours pas de base de données. L’usage unique,
+ * en revanche, est tracé en base (table `consumed_backup_code`) : un code
+ * déjà utilisé échoue même s’il reste présent dans la variable d’env, tant
+ * qu’elle n’a pas été régénérée.
  */
 export async function consumeBackupCode(code: string): Promise<boolean> {
   const normalized = code.trim().toUpperCase();
@@ -21,8 +22,15 @@ export async function consumeBackupCode(code: string): Promise<boolean> {
     return false;
   }
 
-  for (const h of hashes) {
-    if (await verifyPassword(normalized, h)) return true;
+  for (const hash of hashes) {
+    if (!(await verifyPassword(normalized, hash))) continue;
+
+    // Match found. Mark it consumed atomically: ON CONFLICT DO NOTHING means
+    // a second use of the same code - including a concurrent replay racing
+    // this very request - never gets past this point, even though
+    // verifyPassword above already said the hash was correct.
+    const result = await db.insert(consumedBackupCodes).values({ codeHash: hash }).onConflictDoNothing();
+    return (result.rowCount ?? 0) > 0;
   }
   return false;
 }

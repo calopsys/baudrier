@@ -1,13 +1,13 @@
 ---
 name: geo
 description: Audit and optimize a Next.js project for Generative Engine Optimization (GEO) - being cited and referenced by AI answer engines like ChatGPT, Claude, Perplexity, Google AI Overviews, and Bing Chat. Checks llms.txt, AI crawler policies, FAQPage schema, content structure (Q&A format, chunking), citability signals (dates, sources, stats), and E-E-A-T signals. Complementary to /seo - run after /seo for the full optimization stack.
-compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (vercel, gh)."
+compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (scw, gh)."
 ---
 
 # GEO - Optimization for AI engines
 
 ## Communication
-- Detect the user's language from their messages and ALWAYS reply in that language (default: English). This applies to every user-facing message: questions, progress, confirmations, summaries, errors.
+- Detect the user's language from their messages and ALWAYS reply in that language (default: French for this product's user base). This applies to every user-facing message: questions, progress, confirmations, summaries, errors.
 - Use plain, non-technical business language. Never expose internal script names (*.mjs) or jargon; describe actions in human terms.
 - When generating user-facing content for the scaffolded project (UI labels, emails, copy), write it in the user's language too.
 - Show progress as a short natural-language checklist (in-progress and done states).

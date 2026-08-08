@@ -1,12 +1,12 @@
 {
-  "name": "hypervibe",
-  "description": "Bootstrap a full-stack T3 project (Next.js + tRPC + Drizzle + Tailwind + shadcn/ui) with modular addons for database, auth, payments, email, storage, i18n, analytics, domain, and SEO. Deploys to Vercel with GitHub integration.",
-  "version": "2.6.0",
+  "name": "baudrier",
+  "description": "Bootstrap a full-stack T3 project (Next.js + tRPC + Drizzle + Tailwind + shadcn/ui) with modular addons for database, auth, storage, email, analytics, domain, and SEO. Deploys entirely on Scaleway (Serverless Containers, Serverless SQL Database, Object Storage, Serverless Jobs) for French data sovereignty.",
+  "version": "1.0.0",
   "author": {
-    "name": "Flavien Chervet"
+    "name": "Calopsys"
   },
-  "homepage": "https://hypervibe.fr/plugin",
-  "repository": "https://github.com/flavien-ia/hypervibe-harness",
+  "homepage": "https://github.com/calopsys/baudrier",
+  "repository": "https://github.com/calopsys/baudrier",
   "license": "Apache-2.0",
   "keywords": [
     "claude-code",
@@ -16,6 +16,8 @@
     "trpc",
     "drizzle",
     "tailwind",
+    "scaleway",
+    "souverainete-numerique",
     "bootstrap",
     "scaffolding"
   ]

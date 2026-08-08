@@ -11,18 +11,20 @@ Connects your site to **Google Search Console** and reads the real Google data: 
 
 ## How it works
 
-1. **Domain check**: Hypervibe looks at your site's production domain. If it's still on `*.vercel.app`, it recommends `/add-domain` first (GSC accepts Vercel URLs but their value is limited, no DNS control, no real brand).
+1. **Public access check**: every app ships restricted to the office VPN by default. Googlebot cannot reach a restricted site at all, so Baudrier checks this first and, if needed, asks you to run `/publish` before continuing.
 
-2. **Checking (or installing) the GSC connector**: the first time, Hypervibe walks you through connecting Google Search Console to Claude Code. It's a one-time setup per machine (about 10 min), fully guided click by click: you create a "service account" in Google Cloud (a type of technical account designed for this), you add it as an owner of your Search Console, and that's it. Once this setup is in place, Hypervibe can add properties, verify DNS, submit sitemaps, and more, without you having to go back into Search Console yourself.
+2. **Domain check**: Baudrier looks at your site's production domain. Without a custom domain yet (just the raw container URL), it recommends `/add-domain` first (GSC accepts it, but its value is limited: no brand, no stable DNS control).
 
-3. **Declaring the GSC property**: if your site is not yet declared in GSC, Hypervibe guides you to add a **domain property** (the most complete version, which covers all sub-URLs):
-  - You retrieve a TXT record to add to your Cloudflare DNS
-  - Hypervibe can do it for you via the Cloudflare token (`/start`)
+3. **Checking (or installing) the GSC connector**: the first time, Baudrier walks you through connecting Google Search Console to Claude Code. It's a one-time setup per machine (about 10 min), fully guided click by click: you create a "service account" in Google Cloud (a type of technical account designed for this), you add it as an owner of your Search Console, and that's it. Once this setup is in place, Baudrier can add properties, verify DNS, submit sitemaps, and more, without you having to go back into Search Console yourself.
+
+4. **Declaring the GSC property**: if your site is not yet declared in GSC, Baudrier guides you to add a **domain property** (the most complete version, which covers all sub-URLs):
+  - You retrieve a TXT record to add to your DNS
+  - Baudrier can do it for you directly if your domain is delegated to Scaleway DNS (after `/add-domain`)
   - Google verifies the property within a few minutes
 
-4. **Sitemap submission**: Hypervibe automatically submits your site's sitemap to GSC.
+5. **Sitemap submission**: Baudrier automatically submits your site's sitemap to GSC.
 
-5. **Reading the GSC data**: Hypervibe displays a recap in plain language:
+6. **Reading the GSC data**: Baudrier displays a recap in plain language:
   - **Impressions**: how many times your site appears in Google's results
   - **Clicks**: how many people actually click
   - **CTR**: click rate (impressions -> clicks). A good CTR = 3-5% and up.
@@ -31,7 +33,7 @@ Connects your site to **Google Search Console** and reads the real Google data: 
   - **Top queries**: the searches that bring you the most traffic
   - **Opportunities**: the queries where you are in position 11-20 (close to the top 10, a small effort can be enough)
 
-6. **Action recommendations**: depending on what the data shows, Hypervibe proposes **concrete actions** to improve your search ranking.
+7. **Action recommendations**: depending on what the data shows, Baudrier proposes **concrete actions** to improve your search ranking.
 
 ## What it creates for you
 
@@ -42,10 +44,11 @@ Connects your site to **Google Search Console** and reads the real Google data: 
 
 ## Prerequisites
 
-- The site must be **deployed on a custom domain** (ideally), otherwise Hypervibe suggests `/add-domain` first
+- The site must be **public** (`/publish`): every app ships restricted to the office VPN by default, and Google cannot reach a restricted site
+- The site must be **deployed on a custom domain** (ideally), otherwise Baudrier suggests `/add-domain` first
 - The site must have been **online for a few weeks** for the GSC data to be relevant (Google takes time to crawl and accumulate stats)
 - A Google account (the same one as for Analytics if you have one)
-- Search Console access for the site (Hypervibe sets up the connection for you via a Google service account, no MCP needed)
+- Search Console access for the site (Baudrier sets up the connection for you via a Google service account, no MCP needed)
 
 ## Tips
 
@@ -58,5 +61,5 @@ GSC needs **time** to accumulate data. A new property shows 0 results the first 
 {{/callout}}
 
 {{callout:warning|The "easy opportunities" are worth their weight in gold}}
-The most actionable metric: the queries where you are in **position 11 to 20**. You are close to the top 10 (the first page), a small content / meta effort can push you there, and traffic jumps a lot once you break into the top 10. Hypervibe highlights them in its report.
+The most actionable metric: the queries where you are in **position 11 to 20**. You are close to the top 10 (the first page), a small content / meta effort can push you there, and traffic jumps a lot once you break into the top 10. Baudrier highlights them in its report.
 {{/callout}}

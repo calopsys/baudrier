@@ -12,14 +12,21 @@
 //                            if the agent uses memory-pgvector.ts)
 //   - agent_trigger_queue  : pending manual triggers from dashboard / external
 //
-// pgvector NOTE: if any agent uses semantic memory, the setup script also
-// runs `CREATE EXTENSION IF NOT EXISTS vector;` against the Neon DB. The
-// extension is included by default on Neon - no provisioning needed.
+// pgvector NOTE: Scaleway Serverless SQL Database (PostgreSQL 16) ships the
+// pgvector extension - `CREATE EXTENSION vector;` works with no separate
+// provisioning. If any agent uses semantic memory, setup-agent.mjs generates
+// a CUSTOM drizzle-kit migration (drizzle-kit generate --custom) carrying
+// that DDL, rather than connecting to the database directly - per
+// CONTRACT.md §4, the operator's machine never holds a DATABASE_URL; only
+// `drizzle-kit generate` (no connection) runs locally, and `drizzle-kit
+// migrate` runs inside the deploy pipeline's migration Serverless Job.
 //
 // Naming follows the project's `createTable` prefix convention. The `{prefix}_`
 // prefix is added automatically by Drizzle's pgTableCreator.
 //
-// IMPORTANT: after appending, run `pnpm db:push` to apply to Neon.
+// IMPORTANT: after appending, run `drizzle-kit generate` (writes the SQL
+// migration file, no DB connection) - `/deploy` applies it via the migration
+// Job on the next deploy.
 
 import { sql } from "drizzle-orm";
 import {
@@ -32,7 +39,6 @@ import {
   numeric,
   primaryKey,
   index,
-  pgEnum,
 } from "drizzle-orm/pg-core";
 
 // Reuse the project's createTable if it exists. Replace `pgTable` with your
@@ -49,7 +55,7 @@ export const agentInvocations = pgTable(
     promptPreview: text("prompt_preview"), // first 500 chars of the user prompt
     finalText: text("final_text"),         // the agent's last text response (if success)
     iterations: integer("iterations").notNull().default(0),
-    totalCostUsd: numeric("total_cost_usd", { precision: 12, scale: 6 }).notNull().default("0"),
+    totalCostEur: numeric("total_cost_eur", { precision: 12, scale: 6 }).notNull().default("0"),
     errorMessage: text("error_message"),
     startedAt: timestamp("started_at", { withTimezone: true }).notNull().default(sql`CURRENT_TIMESTAMP`),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
@@ -69,13 +75,11 @@ export const agentTurns = pgTable(
       .notNull()
       .references(() => agentInvocations.id, { onDelete: "cascade" }),
     turnNumber: integer("turn_number").notNull(),
-    stopReason: text("stop_reason").notNull(), // end_turn | tool_use | max_tokens | refusal
-    content: jsonb("content").notNull(),       // raw Anthropic content blocks (text + tool_use)
+    stopReason: text("stop_reason").notNull(), // stop | tool_calls | length | content_filter
+    content: jsonb("content").notNull(),       // { text: string|null, toolCalls: OpenAI tool_calls[] }
     inputTokens: integer("input_tokens").notNull().default(0),
     outputTokens: integer("output_tokens").notNull().default(0),
-    cacheCreationTokens: integer("cache_creation_tokens").notNull().default(0),
-    cacheReadTokens: integer("cache_read_tokens").notNull().default(0),
-    costUsd: numeric("cost_usd", { precision: 12, scale: 6 }).notNull().default("0"),
+    costEur: numeric("cost_eur", { precision: 12, scale: 6 }).notNull().default("0"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`CURRENT_TIMESTAMP`),
   },
   (t) => [index("agent_turns_invocation_idx").on(t.invocationId, t.turnNumber)],
@@ -94,28 +98,35 @@ export const agentMemoryKv = pgTable(
 );
 
 // ─── Vector memory (semantic search) - INTENTIONALLY NOT IN DRIZZLE ──
-// The agent_memory_vector table is created by setup-agent.mjs via raw SQL
-// when --memory=pgvector is chosen. It is NOT declared here because Drizzle's
-// pgTable can't model `vector(1024)` natively - and partial declarations
-// trigger db:push to drop the embedding column it doesn't know about.
+// The agent_memory_vector table is created by a custom drizzle-kit migration
+// (see setup-agent.mjs's patchMemory step) when --memory=pgvector is chosen.
+// It is NOT declared here because Drizzle's pgTable can't model `vector(2000)`
+// natively - and a partial declaration would make later `drizzle-kit generate`
+// runs try to drop the embedding column it doesn't know about.
 //
 // All reads/writes to agent_memory_vector go through templates/agent/memory-
 // pgvector.ts which uses raw SQL via db.execute(). The dashboard does NOT
 // query this table - vector entries are an internal concern of each agent.
 //
-// Raw SQL run by setup-agent.mjs:
+// DDL written into the custom migration by setup-agent.mjs:
 //   CREATE EXTENSION IF NOT EXISTS vector;
 //   CREATE TABLE agent_memory_vector (
 //     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 //     agent_name text NOT NULL,
 //     content text NOT NULL,
 //     metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
-//     embedding vector(1024) NOT NULL,
+//     embedding vector(2000) NOT NULL,
 //     created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
 //   );
 //   CREATE INDEX agent_memory_vector_agent_idx ON agent_memory_vector(agent_name);
 //   CREATE INDEX agent_memory_vector_embedding_idx ON agent_memory_vector
-//     USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+//     USING hnsw (embedding vector_cosine_ops);
+//
+// Embeddings come from Scaleway Generative APIs' qwen3-embedding-8b (native
+// up to 4096 dims, Matryoshka - truncatable). The Embeddings API does not
+// accept a `dimensions` request parameter, so memory-pgvector.ts requests the
+// full vector and truncates + re-normalizes to 2000 dims client-side, which
+// is exactly what "Matryoshka" embeddings are designed to support.
 
 // ─── Trigger queue (dashboard "Run now" + external triggers) ─────────
 export const agentTriggerQueue = pgTable(

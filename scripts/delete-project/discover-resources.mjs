@@ -1,32 +1,61 @@
 #!/usr/bin/env node
-// discover-resources.mjs - Phase 1 of /delete-project, all 17 scans in parallel.
+// discover-resources.mjs - Phase 1 of /delete-project: read-only inventory of
+// every Scaleway resource tied to one app.
 //
 // Usage:
-//   node discover-resources.mjs --project <name> [--cloudflare-account-id <id>]
+//   node discover-resources.mjs --project <name> --project-dir <path>
 //
-// Outputs a single JSON object to stdout with the full inventory of every
-// piece of cloud infrastructure tied to the project, plus a list of detected
-// third-party services (Sentry, PostHog, etc.) that the user needs to clean
-// manually. The LLM consumes this JSON directly to build the Phase 2
-// presentation + scope question.
+// IMPORTANT - database and storage are inventoried here for REPORTING ONLY.
+// Per direct user requirement, /delete-project must never be able to destroy
+// a database or a bucket (see execute-deletions.mjs's header for the hard
+// guarantee on the deletion side). `database` and `storage` below exist
+// purely so Phase 4's French handoff can tell the user exactly what was
+// deliberately left behind, with its name and a console URL - never so
+// execute-deletions.mjs can act on them.
 //
-// Design:
-// - Every scan is fault-tolerant: a single failing API call (Render down,
-//   Upstash CLI not installed, etc.) does NOT abort the discovery. The
-//   corresponding section gets `{ error: "..." }` instead.
-// - No mutations are ever performed here - this script is pure read-only.
-// - All scans run via Promise.all so total wall time = max(individual scan).
+// CONTRACT.md: one Scaleway Project per app. So the whole discovery pivots on
+// resolving that ONE Project id first (resolveScwProject), then listing every
+// resource TYPE scoped by `project_id=<that id>` - which every Scaleway
+// product used by the harness supports as a list filter (containers,
+// registry namespaces, Serverless Jobs, Serverless SQL databases, Secret
+// Manager secrets, TEM domains - confirmed by reading how each
+// scripts/scaleway/*.mjs module's own find-or-create helpers already filter
+// their "does this exist yet" lookups). That means almost nothing here needs
+// the name/token-matching heuristics upstream relied on: a resource that
+// lives inside the app's own Project unambiguously belongs to the app.
+//
+// Two exceptions remain, and get the collision guard from ../_match.mjs:
+//   - IAM Applications/API keys are Organization-scoped, not Project-scoped
+//     (see scripts/scaleway/iam.mjs's own header comment) - there is no
+//     `project_id` filter to lean on, so they are attributed by name
+//     (exact match for the deterministic `baudrier-agents-<projectId>`
+//     naming used by setup-agent.mjs, token match + moreSpecificOwner
+//     disambiguation for everything else, e.g. `<project>-db`).
+//   - DNS: the app's custom domain and TEM sender domain live in the USER'S
+//     OWN external domain, which is not itself a resource "in" the Project
+//     the way a container or a database is. We only ever touch the specific
+//     records the harness added (CNAME to the container, TEM verification
+//     records), never the zone as a whole - see scanDns() below.
+//
+// Design: every scan is fault-tolerant (Promise.all, no scan throwing aborts
+// the others) and 100% read-only - no mutation happens in this script.
 
-import { existsSync, readFileSync, writeFileSync, unlinkSync, readdirSync } from "node:fs";
-import { spawnSync, spawn } from "node:child_process";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { getSecret } from "../vault/vault.mjs";
-import { tokenMatches, tokenMatchCount, moreSpecificOwner, normalizeName } from "../_match.mjs";
+import { REGION, requireCredentials, resolveProjectId, api, sdkCall, slugify } from "../scaleway/_scw-auth.mjs";
+import { listCustomDomains } from "../scaleway/container.mjs";
+import { listImages } from "../scaleway/registry.mjs";
+import { listJobDefinitions } from "../scaleway/jobs.mjs";
+import { listSecrets, getSecret, secretExists } from "../scaleway/secrets.mjs";
+import { listApiKeys } from "../scaleway/iam.mjs";
+import { bucketExists } from "../scaleway/object-storage.mjs";
+import { zoneExists, listRecords } from "../scaleway/dns.mjs";
+import { tokenMatches, moreSpecificOwner } from "../_match.mjs";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+const __dirname = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = join(__dirname, "..", "..");
 const TEMPLATES_DIR = join(PLUGIN_ROOT, "templates", "delete-project");
 
@@ -38,423 +67,381 @@ function arg(name) {
 }
 const PROJECT = arg("--project");
 if (!PROJECT) {
-  console.error("Usage: node discover-resources.mjs --project <name>");
+  console.error("Usage: node discover-resources.mjs --project <name> --project-dir <path>");
   process.exit(1);
 }
-const PROJECT_LOWER = PROJECT.toLowerCase();
-// Local project directory: passed by the skill (which detects it), else the
-// current working directory. No hardcoded workspace root, so this works on any
-// machine/OS (Mac, Windows, Linux).
+const PROJECT_SLUG = slugify(PROJECT);
 const PROJECT_DIR = arg("--project-dir") || process.cwd();
-let CF_ACCOUNT_ID = arg("--cloudflare-account-id") || process.env.CLOUDFLARE_ACCOUNT_ID || "";
 
-// ─── env helpers ───────────────────────────────────────────────────────────
-function readUserEnvSync(name) {
-  const helper = join(PLUGIN_ROOT, "scripts", "_read-user-env.mjs");
-  if (!existsSync(helper)) return process.env[name] || "";
-  const r = spawnSync("node", [helper, name], { encoding: "utf8" });
-  if (r.status !== 0) return process.env[name] || "";
-  return (r.stdout || "").trim();
+// ─── SDK namespaces for the Scaleway sub-resources not wrapped by a scripts/
+// scaleway/*.mjs export (documented endpoints, mirroring how bootstrap-init.mjs
+// already calls the Account SDK directly for Projects - CONTRACT.md's module
+// list is deliberately not exhaustive of every SDK method). Container uses
+// **v1** (v1beta1 was deprecated 2026-07-09, per CONTRACT.md's version-choice
+// guidance) - note its Container type exposes `publicEndpoint`, not the
+// v1beta1-era `domainName` field.
+
+// ─── Scaleway console deep links, scoped by project id ─────────────────────
+// Used only for the Phase 4 handoff message (never for any API call - this
+// script never deletes anything). Best-effort convenience links: the
+// `?project=<id>` filter is Scaleway console's standard convention for
+// scoping a resource list to one Project. If a link is ever stale (console
+// redesign), the resource name/id printed alongside it is always enough for
+// the user to find it by hand.
+function consoleProjectUrl(projectId) {
+  return `https://console.scaleway.com/project/settings?project=${projectId}`;
 }
-const CLOUDFLARE_API_TOKEN = (() => { try { return getSecret("CLOUDFLARE", "api_token"); } catch { return readUserEnvSync("CLOUDFLARE_API_TOKEN") || readUserEnvSync("CF_API_TOKEN") || process.env.CLOUDFLARE_API_TOKEN || ""; } })();
-const NEON_API_KEY = (() => { try { return getSecret("NEON", "api_key"); } catch { return readUserEnvSync("NEON_API_KEY") || process.env.NEON_API_KEY || ""; } })();
-const RENDER_API_KEY = readUserEnvSync("RENDER_API_KEY") || process.env.RENDER_API_KEY || "";
-const STRIPE_SECRET_KEY = readUserEnvSync("STRIPE_SECRET_KEY") || process.env.STRIPE_SECRET_KEY || "";
-
-// ─── shared HTTP helper ────────────────────────────────────────────────────
-async function httpJson(url, opts = {}) {
-  const res = await fetch(url, opts);
-  if (!res.ok) {
-    return { __error: `HTTP ${res.status}`, body: await res.text().catch(() => "") };
-  }
-  return res.json();
+function consoleDatabasesUrl(projectId) {
+  return `https://console.scaleway.com/serverless-sql-databases/databases?project=${projectId}`;
 }
-
-function runCmd(cmd, args = [], opts = {}) {
-  return new Promise((resolve) => {
-    const proc = spawn(cmd, args, { shell: true, ...opts });
-    let stdout = "";
-    let stderr = "";
-    proc.stdout.on("data", (d) => (stdout += d));
-    proc.stderr.on("data", (d) => (stderr += d));
-    proc.on("close", (code) => resolve({ code, stdout, stderr }));
-    proc.on("error", (e) => resolve({ code: -1, stdout, stderr: stderr + String(e) }));
-  });
+function consoleBucketsUrl(projectId) {
+  return `https://console.scaleway.com/object-storage/buckets?project=${projectId}`;
 }
 
-// ─── 1. Vercel ─────────────────────────────────────────────────────────────
-async function scanVercel() {
+// ─── 0. Resolve the app's own Scaleway Project ─────────────────────────────
+// Resolved by name (CONTRACT.md §2, §7 - app repos carry no Scaleway metadata
+// at all): the same axis check-name-collision.mjs already uses at creation
+// time, so the two skills agree on identity. When the org-wide Project list
+// is reachable, it also feeds `ownerCandidates` for the IAM ownership guard
+// below - degrade to the env map/override / session cache (resolveProjectId())
+// instead of aborting discovery when it is not (missing ProjectManager).
+async function resolveScwProject() {
+  const creds = requireCredentials();
+  const projectsApi = await api("Account", "v3", "ProjectAPI");
+
+  let all = [];
+  let orgListFailed = false;
   try {
-    const r = await runCmd("vercel", ["projects", "ls"]);
-    if (r.code !== 0) return { found: false, error: r.stderr.slice(0, 300) };
-    // The Vercel CLI prints the project table to STDERR (only structured data,
-    // if any, lands on stdout). Matching stdout alone misses every project -
-    // search both streams, else /delete-project silently skips the Vercel
-    // project and leaves it orphaned.
-    const haystack = `${r.stdout}\n${r.stderr}`;
-    // Parse the first column of the table as candidate project names: used
-    // both for an exact `found` check and by the ownership post-pass to
-    // attribute prefix-sharing resources to their real project.
-    const NOISE = new Set(["vercel", "project", "projects", "name", "latest", "production", "preview", "https", "http", "error", "warn", "updated", "age", "url", "source", "node", "fetching", "retrieving", "deployments", "deployment", "found", "no"]);
-    const names = [];
-    for (const line of haystack.split("\n")) {
-      if (names.length >= 200) break;
-      const tok = normalizeName(line.trim().split(/\s+/)[0] || "");
-      if (!tok || tok.length < 2) continue;
-      if (!/^[a-z0-9][a-z0-9-]*$/.test(tok) || /^[0-9]+$/.test(tok) || NOISE.has(tok)) continue;
-      if (!names.includes(tok)) names.push(tok);
-    }
-    // Exact name in the parsed table wins; fall back to a word-boundary match
-    // on the raw output only when the table yielded nothing parseable.
-    const found = names.includes(PROJECT_LOWER) || (names.length === 0 && tokenMatches(PROJECT_LOWER, haystack));
-    return { found, names, raw: found ? haystack.trim() : null };
+    all = await sdkCall(() => projectsApi.listProjects({ organizationId: creds.organizationId }).all());
   } catch (e) {
-    return { found: false, error: String(e) };
+    if (e?.status !== 403) throw e;
+    orgListFailed = true;
   }
-}
+  // Every OTHER project name in the org - feeds the IAM ownership guard below.
+  const ownerCandidates = all.map((p) => p.name).filter((n) => n && n !== PROJECT_SLUG);
+  const orgListNote =
+    "Liste des projets de l’organisation indisponible (droits ProjectManager manquants).";
 
-// ─── 2. Neon (REST API, not MCP - script context) ──────────────────────────
-async function scanNeon() {
-  if (!NEON_API_KEY) return { found: false, error: "NEON_API_KEY missing" };
+  if (!orgListFailed) {
+    const hit = all.find((p) => p.name === PROJECT_SLUG);
+    return {
+      found: !!hit,
+      id: hit?.id || null,
+      name: hit?.name || null,
+      organizationId: creds.organizationId,
+      via: hit ? "name-lookup" : null,
+      ownerCandidates,
+    };
+  }
+
   try {
-    const data = await httpJson(`https://console.neon.tech/api/v2/projects?search=${encodeURIComponent(PROJECT)}`, {
-      headers: { Authorization: `Bearer ${NEON_API_KEY}` },
-    });
-    if (data.__error) return { found: false, error: data.__error };
-    // allNames feeds the ownership post-pass: the ?search= response also
-    // returns sibling projects (searching "street" returns "street-cool").
-    const allNames = (data.projects || []).map((p) => p.name);
-    const projects = (data.projects || []).filter((p) => tokenMatches(PROJECT_LOWER, p.name));
-    if (projects.length === 0) return { found: false, allNames };
+    const id = await resolveProjectId({ appName: PROJECT_SLUG });
     return {
       found: true,
-      allNames,
-      projects: projects.map((p) => ({ id: p.id, name: p.name, region: p.region_id, createdAt: p.created_at })),
+      id,
+      name: null,
+      organizationId: creds.organizationId,
+      via: "env-or-cache",
+      ownerCandidates,
+      note: `${orgListNote} Identifiant repris de BAUDRIER_SCW_PROJECTS_IDS, de SCW_DEFAULT_PROJECT_ID ou du cache de session.`,
     };
-  } catch (e) {
-    return { found: false, error: String(e) };
+  } catch {
+    return {
+      found: false,
+      id: null,
+      name: null,
+      organizationId: creds.organizationId,
+      via: null,
+      ownerCandidates,
+      note: `${orgListNote} Aucun identifiant de projet exploitable (aucune entrée BAUDRIER_SCW_PROJECTS_IDS, SCW_DEFAULT_PROJECT_ID absent, cache de session vide) - projet non résolu.`,
+    };
   }
 }
 
-// ─── 3. Cloudflare Workers ─────────────────────────────────────────────────
-async function scanWorkers() {
-  if (!CLOUDFLARE_API_TOKEN) return { found: false, error: "CLOUDFLARE_API_TOKEN missing" };
-  try {
-    const data = await httpJson(
-      `https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/scripts`,
-      { headers: { Authorization: `Bearer ${CLOUDFLARE_API_TOKEN}` } },
-    );
-    if (data.__error) return { found: false, error: data.__error };
-    const workers = (data.result || []).filter((s) => tokenMatches(PROJECT_LOWER, s.id));
-    return { found: workers.length > 0, workers: workers.map((w) => ({ id: w.id, modifiedOn: w.modified_on })) };
-  } catch (e) {
-    return { found: false, error: String(e) };
-  }
-}
-
-// ─── 4. Cloudflare R2 (global + EU) ────────────────────────────────────────
-async function scanR2() {
-  const buckets = [];
-  for (const jurisdiction of ["global", "eu"]) {
-    try {
-      const cmdArgs = ["r2", "bucket", "list"];
-      if (jurisdiction === "eu") cmdArgs.push("-J", "eu");
-      const r = await runCmd("wrangler", cmdArgs);
-      if (r.code !== 0) continue;
-      // wrangler r2 bucket list outputs lines with bucket names
-      const matches = r.stdout
-        .split("\n")
-        .map((l) => l.trim())
-        .filter((l) => tokenMatches(PROJECT_LOWER, l))
-        .map((l) => ({ name: l.split(/\s+/)[0], jurisdiction }));
-      buckets.push(...matches);
-    } catch {
-      // skip
+// ─── 1. Serverless Containers: namespace(s) + containers + custom domains ──
+async function scanContainers(projectId) {
+  const containersApi = await api("Container", "v1");
+  const namespaces = await sdkCall(() => containersApi.listNamespaces({ projectId, region: REGION }).all());
+  const out = [];
+  for (const ns of namespaces) {
+    const containers = await sdkCall(() => containersApi.listContainers({ namespaceId: ns.id, region: REGION }).all());
+    const withDomains = [];
+    for (const c of containers) {
+      let domains = [];
+      try {
+        domains = await listCustomDomains(c.id);
+      } catch {
+        domains = [];
+      }
+      withDomains.push({
+        id: c.id,
+        name: c.name,
+        domainName: c.publicEndpoint,
+        customDomains: domains.map((d) => ({ id: d.id, hostname: d.hostname })),
+      });
     }
+    out.push({ id: ns.id, name: ns.name, containers: withDomains });
   }
-  return { found: buckets.length > 0, buckets };
+  const containerCount = out.reduce((n, ns) => n + ns.containers.length, 0);
+  return { found: namespaces.length > 0, namespaces: out, namespaceCount: namespaces.length, containerCount };
 }
 
-// ─── 5. Cloudflare DNS (all zones) ─────────────────────────────────────────
-async function scanDns() {
-  if (!CLOUDFLARE_API_TOKEN) return { found: false, error: "CLOUDFLARE_API_TOKEN missing" };
-  try {
-    const zonesData = await httpJson(
-      "https://api.cloudflare.com/client/v4/zones?per_page=50",
-      { headers: { Authorization: `Bearer ${CLOUDFLARE_API_TOKEN}` } },
-    );
-    if (zonesData.__error) return { found: false, error: zonesData.__error };
-    const zones = zonesData.result || [];
-    const allRecords = [];
-    await Promise.all(
-      zones.map(async (z) => {
-        const recs = await httpJson(
-          `https://api.cloudflare.com/client/v4/zones/${z.id}/dns_records?per_page=200`,
-          { headers: { Authorization: `Bearer ${CLOUDFLARE_API_TOKEN}` } },
-        );
-        if (recs.__error) return;
-        for (const r of recs.result || []) {
-          const nameMatches = tokenMatches(PROJECT_LOWER, r.name);
-          const contentMatches = tokenMatches(PROJECT_LOWER, r.content || "");
-          if (nameMatches || contentMatches) {
-            allRecords.push({
-              zoneId: z.id,
-              zoneName: z.name,
-              recordId: r.id,
-              type: r.type,
-              name: r.name,
-              content: r.content,
-            });
-          }
-        }
-      }),
-    );
-    return { found: allRecords.length > 0, records: allRecords, zonesScanned: zones.length };
-  } catch (e) {
-    return { found: false, error: String(e) };
+// ─── 2. Container Registry: namespace(s) + image count ─────────────────────
+async function scanRegistry(projectId) {
+  const registryApi = await api("Registry", "v1");
+  const namespaces = await sdkCall(() => registryApi.listNamespaces({ projectId, region: REGION }).all());
+  const out = [];
+  for (const ns of namespaces) {
+    let images = [];
+    try {
+      images = await listImages(ns.id);
+    } catch {
+      images = [];
+    }
+    out.push({ id: ns.id, name: ns.name, endpoint: ns.endpoint, imageCount: images.length });
   }
+  return { found: namespaces.length > 0, namespaces: out };
 }
 
-// ─── 6. Scheduled Neon backups (unified hypervibe-jobs registry, with legacy
-//        db-backup worker fallback) ─────────────────────────────────────────
-// Unified: ~/.hypervibe-jobs/jobs.js holds a "neon-backups" job with a
-// targets[] array. Legacy: ~/.db-backup-worker/wrangler.toml holds a
-// BACKUP_TARGETS JSON env var. Both are reported with the same resource shape
-// ({ isTarget, entry?, totalTargets?, error? }) plus a `source` field so
-// downstream steps know which infrastructure holds the registration.
-// Registry reader shared by the backup-targets scan (6) and the cron-pings
-// scan (6b): ~/.hypervibe-jobs/jobs.js is a JS module whose default export is
-// strict JSON.
-function readUnifiedRegistry() {
-  const jobsPath = join(homedir(), ".hypervibe-jobs", "jobs.js");
-  if (!existsSync(jobsPath)) return { exists: false };
-  try {
-    const raw = readFileSync(jobsPath, "utf8");
-    const m = raw.match(/export default\s*([\s\S]*?);?\s*$/);
-    if (!m) return { exists: true, error: "jobs.js not parseable" };
-    const registry = JSON.parse(m[1]);
-    return { exists: true, jobs: Array.isArray(registry.jobs) ? registry.jobs : [] };
-  } catch (e) {
-    return { exists: true, error: String(e) };
-  }
+// ─── 3. Serverless Jobs: every definition in the Project (migration, agents,
+//        keep-warm, add-cron schedules - all of them, project-scoped) ──────
+async function scanJobs(projectId) {
+  const definitions = await listJobDefinitions({ projectId });
+  return { found: definitions.length > 0, definitions: definitions.map((d) => ({ id: d.id, name: d.name })) };
 }
 
-function readUnifiedBackupTargets() {
-  const reg = readUnifiedRegistry();
-  if (!reg.exists || reg.error) return reg;
-  const job = reg.jobs.find((j) => j.name === "neon-backups");
-  return { exists: true, targets: job && Array.isArray(job.targets) ? job.targets : [] };
-}
-
-function scanDbBackupLegacy() {
-  const wranglerToml = join(homedir(), ".db-backup-worker", "wrangler.toml");
-  if (!existsSync(wranglerToml)) return { isTarget: false, error: "wrangler.toml not found", source: "db-backup-worker" };
-  try {
-    const content = readFileSync(wranglerToml, "utf8");
-    // Extract BACKUP_TARGETS JSON and find this project
-    const targetsMatch = content.match(/BACKUP_TARGETS\s*=\s*'(\[[^']+\])'/);
-    if (!targetsMatch) return { isTarget: false, error: "BACKUP_TARGETS not parseable", source: "db-backup-worker" };
-    const targets = JSON.parse(targetsMatch[1]);
-    const entry = targets.find((t) => t.name.toLowerCase() === PROJECT_LOWER);
-    return entry
-      ? { isTarget: true, entry, totalTargets: targets.length, source: "db-backup-worker" }
-      : { isTarget: false, totalTargets: targets.length, source: "db-backup-worker" };
-  } catch (e) {
-    return { isTarget: false, error: String(e), source: "db-backup-worker" };
-  }
-}
-
-async function scanDbBackup() {
-  const unified = readUnifiedBackupTargets();
-  if (unified.exists && !unified.error) {
-    const entry = unified.targets.find((t) => (t.name || "").toLowerCase() === PROJECT_LOWER);
-    if (entry) return { isTarget: true, entry, totalTargets: unified.targets.length, source: "hypervibe-jobs" };
-    // Not in the unified registry: still check the legacy worker (setups not
-    // yet migrated may hold the registration there).
-    const legacy = scanDbBackupLegacy();
-    if (legacy.isTarget) return legacy;
-    return { isTarget: false, totalTargets: unified.targets.length, source: "hypervibe-jobs" };
-  }
-  return scanDbBackupLegacy();
-}
-
-// ─── 6b. Scheduled cron pings (unified hypervibe-jobs registry) ─────────────
-// Ping jobs registered by /add-cron live in the same registry and keep hitting
-// <app-url>/api/cron/<task> after the app is gone. Match by the job's
-// `project` field, NOT by its name: since 2026-07-05 registry names are
-// composite (<project>-<task>). Older entries without a `project` field are
-// caught via their per-project secret name (CRON_SECRET_<PROJECT>).
-function scanCronPings() {
-  const secretName = `CRON_SECRET_${PROJECT_LOWER.replace(/-/g, "_").toUpperCase()}`;
-  const reg = readUnifiedRegistry();
-  if (!reg.exists) return { found: false, source: "hypervibe-jobs" };
-  if (reg.error) return { found: false, error: reg.error, source: "hypervibe-jobs" };
-  const jobs = reg.jobs.filter(
-    (j) =>
-      j.kind === "ping" &&
-      ((j.project || "").toLowerCase() === PROJECT_LOWER || j.secretName === secretName),
-  );
+// ─── 4. Serverless SQL Database(s): production AND preview databases, all
+//        of them - preview DBs use an arbitrary `<project>-preview-<branch>`
+//        name (see scripts/deploy.mjs), so listing by project_id rather than
+//        by a guessed name is what makes this complete. NEVER DELETED by
+//        this skill - listed here so Phase 4 can hand the exact name(s) +
+//        console link back to the user. ────────────────────────────────────
+async function scanDatabases(projectId, organizationId) {
+  const sdbApi = await api("ServerlessSqldb", "v1alpha1");
+  const databases = await sdkCall(() => sdbApi.listDatabases({ projectId, organizationId, region: REGION }).all());
   return {
-    found: jobs.length > 0,
-    jobs: jobs.map((j) => ({ name: j.name, cron: j.cron, url: j.url, secretName: j.secretName || null })),
-    // Per-project worker secret, dropped by execute-deletions once no registry
-    // job of the project remains.
-    secretName,
-    source: "hypervibe-jobs",
+    found: databases.length > 0,
+    neverDeleted: true,
+    consoleUrl: consoleDatabasesUrl(projectId),
+    databases: databases.map((d) => ({ id: d.id, name: d.name, status: d.status })),
   };
 }
 
-// ─── 7. Render services ────────────────────────────────────────────────────
-async function scanRender() {
-  if (!RENDER_API_KEY) return { found: false, error: "RENDER_API_KEY missing" };
+// ─── 5. Secret Manager: every secret in the Project ─────────────────────────
+async function scanSecrets(projectId) {
+  const secrets = await listSecrets({ projectId });
+  return { found: secrets.length > 0, count: secrets.length, names: secrets.map((s) => s.name) };
+}
+
+// ─── 6. Object Storage: the bucket recorded in Secret Manager (STORAGE_*) ──
+// Object Storage has NO project-scoped listing API (see scripts/scaleway/
+// object-storage.mjs's header - it's S3-only, no bearer-token REST family),
+// so the bucket can only be found via the STORAGE_BUCKET secret this app's
+// own /add-storage run wrote. If storage was never added, this cleanly
+// reports found:false rather than guessing a bucket name. NEVER DELETED and
+// NEVER EMPTIED by this skill - the bucket's versioned object history is the
+// user's only backup of their file data. Listed here purely so Phase 4 can
+// hand the exact bucket name + console link back to the user.
+async function scanStorage(projectId) {
+  const opts = { projectId };
+  if (!(await secretExists("STORAGE_BUCKET", opts))) return { found: false, neverDeleted: true };
   try {
-    const data = await httpJson("https://api.render.com/v1/services?limit=100", {
-      headers: { Authorization: `Bearer ${RENDER_API_KEY}` },
-    });
-    if (data.__error) return { found: false, error: data.__error };
-    const services = (Array.isArray(data) ? data : data.services || [])
-      .map((d) => d.service || d)
-      .filter((s) => tokenMatches(PROJECT_LOWER, s.name || ""));
-    return { found: services.length > 0, services: services.map((s) => ({ id: s.id, name: s.name, type: s.type, suspended: s.suspended })) };
+    const bucket = await getSecret("STORAGE_BUCKET", opts);
+    const region = (await secretExists("STORAGE_REGION", opts)) ? await getSecret("STORAGE_REGION", opts) : REGION;
+    const accessKey = await getSecret("STORAGE_ACCESS_KEY", opts).catch(() => null);
+    const secretKey = await getSecret("STORAGE_SECRET_KEY", opts).catch(() => null);
+    let exists = null;
+    if (accessKey && secretKey) {
+      try {
+        exists = await bucketExists(bucket, { accessKey, secretKey, region });
+      } catch {
+        exists = null; // unknown - never resolved by deleting anything, just informational
+      }
+    }
+    return { found: true, neverDeleted: true, consoleUrl: consoleBucketsUrl(projectId), bucket, region, exists, hasCredentials: !!(accessKey && secretKey) };
   } catch (e) {
-    return { found: false, error: String(e) };
+    return { found: true, neverDeleted: true, consoleUrl: consoleBucketsUrl(projectId), error: String(e.message || e) };
   }
 }
 
-// ─── 8. Stripe webhooks + products ─────────────────────────────────────────
-async function scanStripe() {
-  if (!STRIPE_SECRET_KEY) return { found: false, error: "STRIPE_SECRET_KEY missing" };
-  const auth = Buffer.from(`${STRIPE_SECRET_KEY}:`).toString("base64");
-  const headers = { Authorization: `Basic ${auth}` };
+// ─── 7. IAM: applications this app owns, org-scoped so name-attributed ─────
+async function scanIam(projectId, ownerCandidates) {
+  const creds = requireCredentials();
+  const iamApi = await api("Iam", "v1alpha1");
+  let all;
   try {
-    const [webhooksData, productsData] = await Promise.all([
-      httpJson("https://api.stripe.com/v1/webhook_endpoints?limit=100", { headers }),
-      httpJson("https://api.stripe.com/v1/products?limit=100", { headers }),
-    ]);
-    const webhooks = ((webhooksData.data) || []).filter((w) => tokenMatches(PROJECT_LOWER, w.url || ""));
-    const products = ((productsData.data) || []).filter((p) => tokenMatches(PROJECT_LOWER, p.name || ""));
+    all = await sdkCall(() => iamApi.listApplications({ organizationId: creds.organizationId }).all());
+  } catch (e) {
+    if (e?.status !== 403) throw e;
+    // No IAMManager: degrade to an empty, honest result rather than aborting
+    // the whole discovery - the admin is the one who can actually check.
     return {
-      webhooksFound: webhooks.length > 0,
-      webhooks: webhooks.map((w) => ({ id: w.id, url: w.url, status: w.status })),
-      productsFound: products.length > 0,
-      products: products.map((p) => ({ id: p.id, name: p.name, active: p.active })),
+      found: false,
+      applications: [],
+      excluded: [],
+      note:
+        "Inventaire IAM indisponible (droits IAMManager manquants). Demandez à l’administrateur de vérifier " +
+        `les applications nommées « ${PROJECT_SLUG}-db », « ${PROJECT_SLUG}-storage » et « baudrier-agents-${projectId} ».`,
     };
-  } catch (e) {
-    return { webhooksFound: false, productsFound: false, error: String(e) };
   }
-}
-
-// ─── 9. Upstash (read ~/.upstash.json for creds) ───────────────────────────
-async function scanUpstash() {
-  const credsPath = join(homedir(), ".upstash.json");
-  if (!existsSync(credsPath)) return { found: false, error: "~/.upstash.json missing" };
-  try {
-    const creds = JSON.parse(readFileSync(credsPath, "utf8"));
-    if (!creds.email || !creds.apiKey) return { found: false, error: "invalid creds file" };
-    const auth = Buffer.from(`${creds.email}:${creds.apiKey}`).toString("base64");
-    const data = await httpJson("https://api.upstash.com/v2/redis/databases", {
-      headers: { Authorization: `Basic ${auth}` },
-    });
-    if (data.__error) return { found: false, error: data.__error };
-    const dbs = (Array.isArray(data) ? data : []).filter((d) => tokenMatches(PROJECT_LOWER, d.database_name || ""));
-    return { found: dbs.length > 0, databases: dbs.map((d) => ({ id: d.database_id, name: d.database_name })) };
-  } catch (e) {
-    return { found: false, error: String(e) };
+  // setup-agent.mjs names the Jobs/agents IAM Application after the Scaleway
+  // Project id itself - deterministic, no ambiguity possible.
+  const exactName = `baudrier-agents-${projectId}`;
+  const matched = [];
+  const excluded = [];
+  for (const app of all) {
+    const name = app.name || "";
+    if (name === exactName) {
+      matched.push({ id: app.id, name, matchedBy: "exact" });
+      continue;
+    }
+    if (tokenMatches(PROJECT_SLUG, name)) {
+      const owner = moreSpecificOwner(PROJECT_SLUG, name, ownerCandidates);
+      if (owner) {
+        excluded.push({ id: app.id, name, excludedReason: `appartient probablement au projet "${owner}"` });
+      } else {
+        matched.push({ id: app.id, name, matchedBy: "name" });
+      }
+    }
   }
-}
-
-// ─── 10. Cloudflare Email Routing ──────────────────────────────────────────
-async function scanEmailRouting() {
-  if (!CLOUDFLARE_API_TOKEN) return { found: false, error: "CLOUDFLARE_API_TOKEN missing" };
-  try {
-    const zonesData = await httpJson(
-      "https://api.cloudflare.com/client/v4/zones?per_page=50",
-      { headers: { Authorization: `Bearer ${CLOUDFLARE_API_TOKEN}` } },
-    );
-    if (zonesData.__error) return { found: false, error: zonesData.__error };
-    const zones = zonesData.result || [];
-    const rules = [];
-    await Promise.all(
-      zones.map(async (z) => {
-        const data = await httpJson(
-          `https://api.cloudflare.com/client/v4/zones/${z.id}/email/routing/rules?per_page=200`,
-          { headers: { Authorization: `Bearer ${CLOUDFLARE_API_TOKEN}` } },
-        );
-        if (data.__error) return;
-        for (const r of data.result || []) {
-          const matchersStr = JSON.stringify(r.matchers || []);
-          const actionsStr = JSON.stringify(r.actions || []);
-          if (
-            tokenMatches(PROJECT_LOWER, r.name || "") ||
-            tokenMatches(PROJECT_LOWER, matchersStr) ||
-            tokenMatches(PROJECT_LOWER, actionsStr)
-          ) {
-            rules.push({
-              zoneId: z.id,
-              zoneName: z.name,
-              tag: r.tag,
-              name: r.name,
-              matchers: r.matchers,
-              actions: r.actions,
-              enabled: r.enabled,
-            });
-          }
-        }
-      }),
-    );
-    return { found: rules.length > 0, rules };
-  } catch (e) {
-    return { found: false, error: String(e) };
-  }
-}
-
-// ─── 11. Env vars scan (Vercel + local .env) + third-party detection ───────
-async function scanEnvVars(localDirPath) {
-  const knownVarsPath = join(TEMPLATES_DIR, "known-env-vars.json");
-  const servicesPath = join(TEMPLATES_DIR, "third-party-services.json");
-  const knownVars = JSON.parse(readFileSync(knownVarsPath, "utf8")).vars;
-  const knownSet = new Set(knownVars);
-  const servicesList = JSON.parse(readFileSync(servicesPath, "utf8")).services;
-
-  // Try to pull env vars from Vercel (production scope)
-  let envVarNames = new Set();
-  const sources = [];
-  if (localDirPath && existsSync(localDirPath)) {
-    const tempPath = join(localDirPath, ".env.delete-check");
+  for (const m of matched) {
     try {
-      const r = await runCmd("vercel", ["env", "pull", ".env.delete-check", "--environment=production", "--yes"], { cwd: localDirPath });
-      if (r.code === 0 && existsSync(tempPath)) {
-        const content = readFileSync(tempPath, "utf8");
-        for (const line of content.split("\n")) {
-          const m = line.match(/^([A-Z_][A-Z0-9_]*)\s*=/);
-          if (m) envVarNames.add(m[1]);
+      m.keyCount = (await listApiKeys(m.id)).length;
+    } catch {
+      m.keyCount = null;
+    }
+  }
+  return { found: matched.length > 0, applications: matched, excluded };
+}
+
+// ─── 8. TEM: sender domain(s) created for this Project ─────────────────────
+async function scanTem(projectId) {
+  const temApi = await api("Tem", "v1alpha1");
+  const domains = await sdkCall(() => temApi.listDomains({ projectId, region: REGION }).all());
+  return { found: domains.length > 0, domains: domains.map((d) => ({ id: d.id, name: d.name, status: d.status })) };
+}
+
+// ─── 9. DNS: only the specific records the harness added, never the zone ──
+// The custom domain (add-domain) and the TEM sender domain both live in a
+// zone Scaleway does not "own" the way it owns a Project's other resources -
+// it's the user's external domain, which may carry unrelated records (a
+// personal mailbox's MX, other subdomains). We locate the zone by walking up
+// the label chain of every hostname we know we touched until zoneExists()
+// confirms a zone, then only report the records whose name matches one of
+// those known hostnames (never "every record in the zone").
+async function scanDns(containerScan, temScan) {
+  const hostnames = new Set();
+  for (const ns of containerScan.namespaces || []) {
+    for (const c of ns.containers) {
+      for (const d of c.customDomains) if (d.hostname) hostnames.add(d.hostname);
+    }
+  }
+  for (const d of temScan.domains || []) if (d.name) hostnames.add(d.name);
+  if (hostnames.size === 0) return { found: false, hostnamesConsidered: [] };
+
+  const zoneRecordNames = new Map(); // zone -> Set(record name relative to zone)
+  for (const host of hostnames) {
+    const labels = host.split(".");
+    let zone = null;
+    for (let i = 0; i < labels.length - 1; i++) {
+      const candidate = labels.slice(i).join(".");
+      try {
+        if (await zoneExists(candidate)) {
+          zone = candidate;
+          break;
         }
-        sources.push("vercel-production");
-        unlinkSync(tempPath); // ALWAYS delete the temp file (contains secrets)
-      }
-    } catch (e) {
-      // Ignore - fall back to local .env only
-      if (existsSync(tempPath)) {
-        try { unlinkSync(tempPath); } catch {}
+      } catch {
+        // treat as "no zone here", keep trying shorter suffixes
       }
     }
-    // Also parse local .env if present (might have stuff Vercel doesn't)
-    const localEnv = join(localDirPath, ".env");
-    if (existsSync(localEnv)) {
-      const content = readFileSync(localEnv, "utf8");
-      for (const line of content.split("\n")) {
-        const m = line.match(/^([A-Z_][A-Z0-9_]*)\s*=/);
-        if (m) envVarNames.add(m[1]);
+    if (!zone) continue;
+    if (!zoneRecordNames.has(zone)) zoneRecordNames.set(zone, new Set());
+    zoneRecordNames.get(zone).add(host === zone ? "" : host.slice(0, host.length - zone.length - 1));
+  }
+
+  const zones = [];
+  for (const [zone, names] of zoneRecordNames) {
+    let all = [];
+    try {
+      all = await listRecords(zone);
+    } catch {
+      all = [];
+    }
+    const ours = all.filter((r) => names.has(r.name));
+    zones.push({ zone, records: ours.map((r) => ({ id: r.id, name: r.name, type: r.type, data: r.data })) });
+  }
+  const recordCount = zones.reduce((n, z) => n + z.records.length, 0);
+  return { found: recordCount > 0, zones, hostnamesConsidered: [...hostnames] };
+}
+
+// ─── 10. Claude Code project memory/transcripts ─────────────────────────────
+function scanMemory() {
+  const projectsRoot = join(homedir(), ".claude", "projects");
+  if (!existsSync(projectsRoot)) return { found: false, dirs: [] };
+  const normalize = (s) => s.toLowerCase().replace(/[.\\/:]/g, "-");
+  const needle = normalize(PROJECT);
+  const dirs = [];
+  try {
+    // Token-boundary match (../_match.mjs): a substring match here let deleting
+    // "art" also sweep up the memory directory of "smart-app".
+    for (const d of readdirSync(projectsRoot)) {
+      if (tokenMatches(needle, normalize(d))) dirs.push({ name: d, path: join(projectsRoot, d) });
+    }
+  } catch (e) {
+    return { found: false, dirs: [], error: String(e) };
+  }
+  return { found: dirs.length > 0, dirs };
+}
+
+// ─── 11. GitHub repo ─────────────────────────────────────────────────────
+// `gh` is no longer part of the toolchain (CONTRACT.md §7) - this only parses
+// the local checkout's own `origin` remote (git already knows it, no network
+// call needed) rather than calling any GitHub API. Privacy (public/private)
+// is therefore not reported here; Phase 4's handoff names the repo URL and
+// lets the user check/delete it by hand (execute-deletions.mjs#deleteGitHub
+// no longer deletes it either, for the same reason).
+function scanGitHub() {
+  const r = spawnSync("git", ["-C", PROJECT_DIR, "remote", "get-url", "origin"], { encoding: "utf8" });
+  const remote = (r.stdout || "").trim();
+  if (r.status !== 0 || !remote) return { exists: false };
+  const m = remote.match(/github\.com[:/]([^/]+)\/([^/.]+)(?:\.git)?$/);
+  if (!m) return { exists: false };
+  const [, owner, name] = m;
+  return { exists: true, owner, name, url: `https://github.com/${owner}/${name}` };
+}
+
+// ─── 12. Local project folder ───────────────────────────────────────────────
+function scanLocalDir() {
+  if (!existsSync(PROJECT_DIR)) return { exists: false, path: PROJECT_DIR };
+  return { exists: true, path: PROJECT_DIR };
+}
+
+// ─── 13. Env vars: local .env(.local) + Secret Manager names, diffed against
+//         the known Baudrier/Scaleway stack -> third-party detection ───────
+function scanEnvVars(localExists, secretNames) {
+  const known = JSON.parse(readFileSync(join(TEMPLATES_DIR, "known-env-vars.json"), "utf8"));
+  const knownSet = new Set(known.vars);
+  const knownPatterns = (known.patterns || []).map((p) => new RegExp(p));
+  const servicesList = JSON.parse(readFileSync(join(TEMPLATES_DIR, "third-party-services.json"), "utf8")).services;
+
+  const names = new Set(secretNames || []);
+  const sources = secretNames?.length ? ["secret-manager"] : [];
+  if (localExists) {
+    for (const file of [".env.local", ".env"]) {
+      const p = join(PROJECT_DIR, file);
+      if (!existsSync(p)) continue;
+      for (const line of readFileSync(p, "utf8").split(/\r?\n/)) {
+        const m = line.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=/);
+        if (m) names.add(m[1]);
       }
-      sources.push("local-.env");
+      sources.push(file);
     }
   }
 
-  // Diff with whitelist
-  const allVars = [...envVarNames].sort();
-  const unknown = allVars.filter((v) => !knownSet.has(v));
+  const isKnown = (v) => knownSet.has(v) || knownPatterns.some((re) => re.test(v));
+  const allVars = [...names].sort();
+  const unknown = allVars.filter((v) => !isKnown(v));
 
-  // Match unknown vars against third-party services lookup
   const thirdParty = [];
   const matched = new Set();
   for (const svc of servicesList) {
@@ -466,281 +453,77 @@ async function scanEnvVars(localDirPath) {
       }
     }
   }
-  // Anything left in unknown that didn't match a known service pattern
-  const trulyUnknown = unknown.filter((v) => !matched.has(v));
+  const unknownUnclassified = unknown.filter((v) => !matched.has(v));
 
   return {
     sources,
     allVarsCount: allVars.length,
-    hypervibeStackCount: allVars.filter((v) => knownSet.has(v)).length,
+    stackVarsCount: allVars.length - unknown.length,
     thirdPartyDetected: thirdParty,
-    unknownUnclassified: trulyUnknown,
-    // Special signal: AUTH_GOOGLE_ID present = OAuth Google client to clean manually
-    hasGoogleOAuth: envVarNames.has("AUTH_GOOGLE_ID"),
-    hasGitHubOAuth: envVarNames.has("AUTH_GITHUB_ID"),
+    unknownUnclassified,
   };
 }
 
-// ─── 12. Local dir + package.json deps ─────────────────────────────────────
-function scanLocalDir() {
-  const path = PROJECT_DIR;
-  if (!existsSync(path)) return { exists: false, path };
-  const pkgJsonPath = join(path, "package.json");
-  let deps = [];
-  if (existsSync(pkgJsonPath)) {
-    try {
-      const pkg = JSON.parse(readFileSync(pkgJsonPath, "utf8"));
-      deps = [
-        ...Object.keys(pkg.dependencies || {}),
-        ...Object.keys(pkg.devDependencies || {}),
-      ];
-    } catch {}
-  }
-  return { exists: true, path, dependencies: deps };
-}
-
-// ─── 13. Memory files (Claude project memory) ──────────────────────────────
-function scanMemory() {
-  // Scan every Claude project memory dir (~/.claude/projects/*/memory) instead
-  // of assuming a fixed workspace slug, so this works on any machine/OS. Each
-  // match stores its full path so execute-deletions acts without re-deriving it.
-  const projectsRoot = join(homedir(), ".claude", "projects");
-  if (!existsSync(projectsRoot)) return { files: [], scanned: 0 };
-  const matches = [];
-  let scanned = 0;
-  try {
-    for (const slug of readdirSync(projectsRoot)) {
-      const memDir = join(projectsRoot, slug, "memory");
-      if (!existsSync(memDir)) continue;
-      let mdFiles;
-      try { mdFiles = readdirSync(memDir).filter((f) => f.endsWith(".md")); } catch { continue; }
-      for (const f of mdFiles) {
-        scanned++;
-        let content = "";
-        try { content = readFileSync(join(memDir, f), "utf8"); } catch { continue; }
-        // Word-boundary matching with _ normalized to -, so the memory slug
-        // convention (project_street_cool.md) matches the project street-cool
-        // without "street" claiming it.
-        const fileMatch = tokenMatches(PROJECT_LOWER, f);
-        const contentMentions = tokenMatchCount(PROJECT_LOWER, content);
-        if (fileMatch || contentMentions > 0) {
-          matches.push({
-            filename: f,
-            dir: memDir,
-            path: join(memDir, f),
-            isProjectSpecific: fileMatch,
-            mentionsCount: contentMentions,
-          });
-        }
-      }
-    }
-  } catch (e) {
-    return { files: [], error: String(e) };
-  }
-  return { files: matches, scanned };
-}
-
-// ─── 14. GitHub repo ───────────────────────────────────────────────────────
-async function scanGitHub() {
-  try {
-    const who = await runCmd("gh", ["api", "user", "--jq", ".login"]);
-    const owner = (who.stdout || "").trim();
-    if (!owner) return { exists: false };
-    const r = await runCmd("gh", ["repo", "view", `${owner}/${PROJECT}`, "--json", "name,url,visibility,isPrivate"]);
-    if (r.code !== 0) return { exists: false };
-    const data = JSON.parse(r.stdout);
-    return { exists: true, ...data };
-  } catch (e) {
-    return { exists: false, error: String(e) };
-  }
-}
-
-// ─── orchestrator ──────────────────────────────────────────────────────────
+// ─── orchestrator ────────────────────────────────────────────────────────
 const startedAt = Date.now();
-const local = scanLocalDir();
+const scwProject = await resolveScwProject();
+
+let container = { found: false, namespaces: [] };
+let registry = { found: false, namespaces: [] };
+let jobs = { found: false, definitions: [] };
+let database = { found: false, databases: [] };
+let secrets = { found: false, count: 0, names: [] };
+let storage = { found: false };
+let iam = { found: false, applications: [], excluded: [] };
+let tem = { found: false, domains: [] };
+let dns = { found: false, zones: [] };
+
+if (scwProject.found) {
+  [container, registry, jobs, database, secrets, storage, iam, tem] = await Promise.all([
+    scanContainers(scwProject.id),
+    scanRegistry(scwProject.id),
+    scanJobs(scwProject.id),
+    scanDatabases(scwProject.id, scwProject.organizationId),
+    scanSecrets(scwProject.id),
+    scanStorage(scwProject.id),
+    scanIam(scwProject.id, scwProject.ownerCandidates),
+    scanTem(scwProject.id),
+  ]);
+  dns = await scanDns(container, tem);
+}
+
 const memory = scanMemory();
-const cronJobs = scanCronPings(); // sync (local file read), no need for the Promise.all batch
+const github = scanGitHub();
+const localDir = scanLocalDir();
+const envVars = scanEnvVars(localDir.exists, secrets.names);
 
-// Cloudflare account id: provided via --cloudflare-account-id / CLOUDFLARE_ACCOUNT_ID,
-// otherwise auto-detected from the API token (first account on the token).
-async function resolveCfAccountId() {
-  if (CF_ACCOUNT_ID || !CLOUDFLARE_API_TOKEN) return;
-  const data = await httpJson("https://api.cloudflare.com/client/v4/accounts", {
-    headers: { Authorization: `Bearer ${CLOUDFLARE_API_TOKEN}` },
-  });
-  const id = data?.result?.[0]?.id;
-  if (id) CF_ACCOUNT_ID = id;
+// The Scaleway Project itself is NEVER deleted by this skill (deleting it
+// would cascade to the database and bucket left behind on purpose) - attach
+// its console URL here too, purely for the Phase 4 handoff.
+if (scwProject.found) {
+  scwProject.neverDeleted = true;
+  scwProject.consoleUrl = consoleProjectUrl(scwProject.id);
 }
-await resolveCfAccountId();
-
-const [
-  vercel,
-  neon,
-  workers,
-  r2,
-  dns,
-  dbBackup,
-  render,
-  stripe,
-  upstash,
-  emailRouting,
-  envVars,
-  github,
-] = await Promise.all([
-  scanVercel(),
-  scanNeon(),
-  scanWorkers(),
-  scanR2(),
-  scanDns(),
-  scanDbBackup(),
-  scanRender(),
-  scanStripe(),
-  scanUpstash(),
-  scanEmailRouting(),
-  scanEnvVars(local.exists ? local.path : null),
-  scanGitHub(),
-]);
-
-// ─── ownership post-pass (precision guard) ─────────────────────────────────
-// Word-boundary matching alone still confuses sibling projects sharing a
-// prefix: deleting "street" must not sweep up "street-cool-db". Build the set
-// of OTHER known project names (shared-worker registry, sibling directories,
-// Neon + Vercel project lists) and re-attribute every matched resource to the
-// most specific owner. Claimed items move to a per-section `excluded` array
-// (reported to the user, never deleted). The shared background workers are
-// excluded by name whatever the project is called.
-function collectSiblingDirs() {
-  const out = [];
-  try {
-    const parent = dirname(PROJECT_DIR);
-    if (!parent || parent === PROJECT_DIR) return out;
-    for (const e of readdirSync(parent, { withFileTypes: true })) {
-      if (out.length >= 300) break;
-      if (!e.isDirectory()) continue;
-      const n = normalizeName(e.name);
-      if (n === PROJECT_LOWER || !/^[a-z0-9][a-z0-9-]*$/.test(n)) continue;
-      out.push(n);
-    }
-  } catch {}
-  return out;
-}
-
-function collectRegistryProjects() {
-  const reg = readUnifiedRegistry();
-  if (!reg.exists || reg.error) return [];
-  const out = [];
-  for (const j of reg.jobs) {
-    if (j.kind === "ping" && j.project) out.push(j.project);
-    if (j.kind === "snapshot") for (const t of j.targets || []) if (t.name) out.push(t.name);
-  }
-  return out;
-}
-
-function readSharedWorkerNames() {
-  const names = new Set(["hypervibe-jobs", "db-backup", "db-backup-worker", "quota-monitor"]);
-  for (const dir of [".hypervibe-jobs", ".db-backup-worker"]) {
-    try {
-      const toml = readFileSync(join(homedir(), dir, "wrangler.toml"), "utf8");
-      const m = toml.match(/^\s*name\s*=\s*"([^"]+)"/m);
-      if (m) names.add(m[1].toLowerCase());
-    } catch {}
-  }
-  return names;
-}
-
-const ownerCandidates = [...new Set(
-  [...collectRegistryProjects(), ...collectSiblingDirs(), ...(neon.allNames || []), ...(vercel.names || [])]
-    .map(normalizeName)
-    .filter((n) => n && n !== PROJECT_LOWER),
-)];
-
-function partitionOwned(items, stringsOf) {
-  const kept = [];
-  const excluded = [];
-  for (const it of items || []) {
-    const matched = stringsOf(it).filter((s) => s && tokenMatches(PROJECT_LOWER, s));
-    // Keep when at least one matching string is NOT claimed by a more
-    // specific project (a resource genuinely derived from this project).
-    const unclaimed = matched.length === 0 || matched.some((s) => !moreSpecificOwner(PROJECT_LOWER, s, ownerCandidates));
-    if (unclaimed) {
-      kept.push(it);
-    } else {
-      excluded.push({ ...it, excludedReason: `belongs to project "${moreSpecificOwner(PROJECT_LOWER, matched[0], ownerCandidates)}"` });
-    }
-  }
-  return { kept, excluded };
-}
-
-function applyOwnership(section, listKey, stringsOf, foundKey = "found") {
-  if (!section || !Array.isArray(section[listKey])) return;
-  const { kept, excluded } = partitionOwned(section[listKey], stringsOf);
-  section[listKey] = kept;
-  if (excluded.length) section.excluded = [...(section.excluded || []), ...excluded];
-  section[foundKey] = kept.length > 0;
-}
-
-// Shared background workers are NEVER part of a project inventory, even when
-// the project name overlaps ("hypervibe" vs "hypervibe-jobs").
-if (workers && Array.isArray(workers.workers)) {
-  const shared = readSharedWorkerNames();
-  const kept = [];
-  for (const w of workers.workers) {
-    if (shared.has((w.id || "").toLowerCase())) {
-      workers.excluded = [...(workers.excluded || []), { ...w, excludedReason: "shared Hypervibe infrastructure (never deleted here)" }];
-    } else {
-      kept.push(w);
-    }
-  }
-  workers.workers = kept;
-  workers.found = kept.length > 0;
-}
-
-applyOwnership(neon, "projects", (p) => [p.name]);
-applyOwnership(workers, "workers", (w) => [w.id]);
-applyOwnership(r2, "buckets", (b) => [b.name]);
-applyOwnership(dns, "records", (r) => [r.name, r.content]);
-applyOwnership(emailRouting, "rules", (r) => [r.name, JSON.stringify(r.matchers || []), JSON.stringify(r.actions || [])]);
-applyOwnership(render, "services", (s) => [s.name]);
-applyOwnership(stripe, "webhooks", (w) => [w.url], "webhooksFound");
-applyOwnership(stripe, "products", (p) => [p.name], "productsFound");
-applyOwnership(upstash, "databases", (d) => [d.name]);
-
-// Memory: a file whose name matches a MORE specific project is not ours.
-if (memory && Array.isArray(memory.files)) {
-  for (const f of memory.files) {
-    const owner = f.isProjectSpecific ? moreSpecificOwner(PROJECT_LOWER, f.filename, ownerCandidates) : null;
-    if (owner) {
-      f.isProjectSpecific = false;
-      f.note = `filename matches project "${owner}" better - left for review`;
-    }
-  }
-}
-
-const elapsedMs = Date.now() - startedAt;
 
 const report = {
   project: PROJECT,
+  projectSlug: PROJECT_SLUG,
   scannedAt: new Date().toISOString(),
-  scanDurationMs: elapsedMs,
-  cloudflareAccountId: CF_ACCOUNT_ID,
-  // Sibling project names used for disambiguation; execute-deletions reuses
-  // them when trimming MEMORY.md index lines.
-  ownerCandidates,
-  vercel,
-  neon,
-  workers,
-  r2,
+  scanDurationMs: Date.now() - startedAt,
+  scwProject,
+  container,
+  registry,
+  jobs,
+  database,
+  secrets,
+  storage,
+  iam,
+  tem,
   dns,
-  dbBackup,
-  cronJobs,
-  render,
-  stripe,
-  upstash,
-  emailRouting,
-  envVars,
-  localDir: local,
   memory,
   github,
+  localDir,
+  envVars,
 };
 
 console.log(JSON.stringify(report, null, 2));

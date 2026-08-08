@@ -1,22 +1,24 @@
 ---
 name: gsc
 description: Connect a Next.js project to Google Search Console and audit the real Google data - indexing coverage, search queries, clicks, positions, and sitemap status. Complements /seo (on-page audit) with what Google actually sees. Use after the site has been deployed on a custom domain and has had a few weeks of traffic.
-compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (vercel, gh)."
+compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (scw, gh)."
 ---
 
 # GSC - Google Search Console
 
 ## Communication
-- Detect the user's language from their messages and ALWAYS reply in that language (default: English). This applies to every user-facing message: questions, progress, confirmations, summaries, errors.
+- Detect the user's language from their messages and ALWAYS reply in that language (default: French for this product's user base). This applies to every user-facing message: questions, progress, confirmations, summaries, errors.
 - Use plain, non-technical business language. Never expose internal script names (*.mjs) or jargon; describe actions in human terms.
 - When generating user-facing content for the scaffolded project (UI labels, emails, copy), write it in the user's language too.
 - Show progress as a short natural-language checklist (in-progress and done states).
 
-You connect the project to Google Search Console (GSC) and read the real Google data (impressions, clicks, queries, indexing), **via the REST API** (`webmasters/v3` + `searchconsole/v1` + `siteVerification/v1`), authenticated by a service account stored in the vault. This is the external complement to `/seo`.
+You connect the project to Google Search Console (GSC) and read the real Google data (impressions, clicks, queries, indexing), **via the REST API** (`webmasters/v3` + `searchconsole/v1` + `siteVerification/v1`), authenticated by a service account stored in Scaleway Secret Manager. This is the external complement to `/seo`.
 
-## Authentication (preamble, before any call)
+⚠️ **Google-dependent skill**: every app ships IP-restricted to the office VPN by default (`ACCESS_RESTRICTED=true`, CONTRACT.md §6). Googlebot cannot crawl a restricted site at all. **Step 0 below detects this before anything else** and explains it in French rather than reporting a spurious failure - do not skip it.
 
-Forge a Google token from the vault:
+## Authentication (preamble, before any GSC API call)
+
+Forge a Google token from Scaleway Secret Manager (secret `GSC_SERVICE_ACCOUNT`, this app's own Project - CONTRACT.md §2):
 ```bash
 GSCTOKEN="${CLAUDE_SKILL_DIR}/../../scripts/gsc/gsc-token.mjs"
 TOK=$(node "$GSCTOKEN" --readonly); RC=$?     # read (audit, inspection)
@@ -24,8 +26,8 @@ TOK=$(node "$GSCTOKEN" --readonly); RC=$?     # read (audit, inspection)
 ```
 Handling `RC`:
 - **0** -> we have the token.
-- **2 / 3** (vault locked / expired) -> warn the user, `node "${CLAUDE_SKILL_DIR}/../../scripts/vault/launch.mjs" unlock` (blocking), retry.
-- **4** (GSC not configured: no `GSC_SERVICE_ACCOUNT` in the vault) -> delegate to the internal skill **`_setup-gsc`** (creates the service account + stores the key in the vault + authorizes it on GSC), then retry.
+- **4** (GSC not configured: no `GSC_SERVICE_ACCOUNT` secret yet) -> delegate to the internal skill **`_setup-gsc`** (creates the service account + stores the key in Secret Manager + authorizes it on GSC), then retry.
+- **1** (any other error: missing Scaleway credentials, invalid key, Google token exchange failure) -> relay the error plainly; if it looks like missing Scaleway credentials, point to `/start`.
 
 The token is valid for 1h; re-forge it if a session exceeds this duration. **Never display `$TOK`.**
 
@@ -61,18 +63,61 @@ At startup, display a checklist in natural language. During execution, announce 
 
 ### 0.1 - Verify the site is deployed on a usable domain
 
-Read `.env`, `.env.production`, or the Vercel config to retrieve the production domain.
+Read `.env`/`.env.production` (`APP_URL`) or the linked container's custom domain to retrieve the production domain.
 
-- **No custom domain** (just `*.vercel.app`): warn that GSC accepts `vercel.app` domains but their value is limited. Suggest `/add-domain` first.
-- **Site not yet deployed**: stop and warn that GSC serves to analyze what Google sees, so you first need a site online.
+- **No custom domain** (only the raw container URL): warn that GSC accepts it, but its value is limited (no brand, and it can change). Suggest `/add-domain` first.
+- **Site not yet deployed**: stop and warn that GSC serves to analyze what Google sees, so you first need a site online (`/deploy`).
 
-### 0.2 - Verify GSC is configured (vault)
+### 0.2 - Detect the VPN IP restriction (must run before any Google-dependent call)
 
-Forge a token (preamble). If `RC=4` -> GSC not yet configured on this machine -> Step 0.3. If `RC=0` -> note `GSC_OK` and continue. If `RC=2/3` -> unlock then retry.
+Every app ships IP-restricted by default (`ACCESS_RESTRICTED=true`, CONTRACT.md §6): Googlebot and every Google service cannot reach the site at all in that state. Detect this **before** attempting anything below, rather than reporting a spurious failure or empty data as if something were broken.
 
-### 0.3 - GSC setup (if absent) - delegated to `_setup-gsc`
+Resolve the container to confirm the site is deployed, then read the live value from Secret Manager - a container GET only ever returns an argon2 hash, never plaintext (CONTRACT.md §1), so Secret Manager is the only readable source of truth, not the container:
 
-Delegate to the internal skill **`_setup-gsc`**: it guides the creation of a Google service account (one-time), stores its key in the vault (`GSC_SERVICE_ACCOUNT`), and authorizes it as owner on the GSC property. No MCP, no Python, no restart.
+```bash
+CONTAINER_MJS="${CLAUDE_SKILL_DIR}/../../scripts/scaleway/container.mjs" \
+SECRETS_MJS="${CLAUDE_SKILL_DIR}/../../scripts/scaleway/secrets.mjs" \
+PROJECT_NAME="<PROJECT_NAME>" \
+CONTAINER_NAME="<resolved container name>" \
+node --input-type=module -e '
+import { pathToFileURL } from "node:url";
+const { ensureNamespace, findContainerByName } = await import(pathToFileURL(process.env.CONTAINER_MJS).href);
+const { getSecret } = await import(pathToFileURL(process.env.SECRETS_MJS).href);
+const ns = await ensureNamespace(process.env.PROJECT_NAME);
+const container = await findContainerByName(ns.id, process.env.CONTAINER_NAME);
+if (!container) { console.log(JSON.stringify({ ok: false, error: "container_not_found" })); process.exit(1); }
+// Production-canonical: this skill only ever audits the public production site (never a preview
+// container), so ACCESS_RESTRICTED is production's own value in Secret Manager.
+try {
+  const accessRestricted = await getSecret("ACCESS_RESTRICTED");
+  console.log(JSON.stringify({ ok: true, accessRestricted }));
+} catch (e) {
+  // not_found (or any other read failure) fails closed: treat as restricted.
+  console.log(JSON.stringify({ ok: true, accessRestricted: e.type === "not_found" ? "true" : null }));
+}
+'
+```
+
+- **`container_not_found`** -> not deployed yet; that is already covered by 0.1, stop there.
+- **`accessRestricted` is `"true"` or missing/unclear** (treat conservatively as restricted - `ACCESS_RESTRICTED` is always explicitly set at bootstrap, so a missing value is not a trustworthy "public") -> **STOP. Do not call the GSC API at all.** Explain in French:
+
+  > 🔒 **Google ne peut pas encore accéder à votre site**
+  >
+  > Par défaut, chaque application est protégée : seul le VPN de l'entreprise peut y accéder. Le robot d'indexation de Google (Googlebot) ne peut donc pas du tout charger vos pages tant que cette protection est active - ce n'est pas une erreur de ma part, c'est le comportement normal et volontaire de votre application.
+  >
+  > Pour connecter Google Search Console, il faut d'abord rendre le site public avec `/publish`. Vous pourrez ensuite relancer `/gsc`.
+
+  Stop cleanly.
+- **`accessRestricted === "false"`** -> the site is public, continue to 0.3.
+- If the container lookup itself fails for an unrelated reason (credentials, network), fall back to reading `ACCESS_RESTRICTED` from the local `.env` as a best-effort signal, noting to the user that it may be stale.
+
+### 0.3 - Verify GSC is configured (Secret Manager)
+
+Forge a token (preamble). If `RC=4` -> GSC not yet configured on this machine -> 0.4. If `RC=0` -> note `GSC_OK` and continue. If `RC=1` -> relay the error (see preamble).
+
+### 0.4 - GSC setup (if absent) - delegated to `_setup-gsc`
+
+Delegate to the internal skill **`_setup-gsc`**: it guides the creation of a Google service account (one-time), stores its key in Scaleway Secret Manager (`GSC_SERVICE_ACCOUNT`), and authorizes it as owner on the GSC property. No MCP, no Python, no restart.
 
 When `_setup-gsc` hands back successfully, re-forge the token and continue to Step 1.
 
@@ -108,7 +153,7 @@ curl -s -X POST "https://www.googleapis.com/siteVerification/v1/token" \
 ```
 -> returns `{"token":"google-site-verification=XXXX"}`. This is the value to place in a root TXT.
 
-**(b) Place the TXT** -> see Step 2 (Cloudflare API).
+**(b) Place the TXT** -> see Step 2 (Scaleway DNS).
 
 **(c) Verify ownership** (once the TXT has propagated), while also delegating access to the human via `owners`:
 ```bash
@@ -130,22 +175,26 @@ Mandatory order: (a) token -> (b) TXT -> (c) verify -> (d) add (otherwise 403).
 
 The value `google-site-verification=...` (from Step 1a) goes into a **root TXT (`@`)** of the domain.
 
-### 2.1 - DNS on Cloudflare (standard Hypervibe case)
+### 2.1 - DNS on Scaleway (standard case, once `/add-domain` has run)
 
-The domain is managed by Cloudflare (after `/add-domain`). Cloudflare token from the vault:
+The domain's zone is delegated to Scaleway DNS (after `/add-domain` - CONTRACT.md: "DNS: Scaleway Domains & DNS - external domains only"). Use `scripts/scaleway/dns.mjs` directly, the same cross-platform-safe inline-import pattern used elsewhere in this harness:
+
 ```bash
-CFTOK=$(node "${CLAUDE_SKILL_DIR}/../../scripts/vault/vault.mjs" get CLOUDFLARE api_token); RC=$?
-# RC=2/3 -> unlock ; RC=4 -> the Cloudflare key is not in the vault (suggest launch.mjs add --name CLOUDFLARE --service Cloudflare --fields "api_token:secret")
-ZONE=$(curl -s -H "Authorization: Bearer $CFTOK" "https://api.cloudflare.com/client/v4/zones?name=<domain>" | python -c "import json,sys;z=json.load(sys.stdin)['result'];print(z[0]['id'] if z else '')")
-curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$ZONE/dns_records" \
-  -H "Authorization: Bearer $CFTOK" -H "Content-Type: application/json" \
-  -d '{"type":"TXT","name":"@","content":"google-site-verification=XXXX","ttl":300}'
+DNS_MJS="${CLAUDE_SKILL_DIR}/../../scripts/scaleway/dns.mjs" \
+DOMAIN="<domain>" \
+TXT_VALUE="google-site-verification=XXXX" \
+node --input-type=module -e '
+import { pathToFileURL } from "node:url";
+const { upsertRecords } = await import(pathToFileURL(process.env.DNS_MJS).href);
+await upsertRecords(process.env.DOMAIN, [{ name: "@", type: "TXT", data: process.env.TXT_VALUE, ttl: 300 }]);
+console.log(JSON.stringify({ ok: true }));
+'
 ```
 Show the user what is being added (TXT type, name @, value), noting that it changes nothing about the site.
 
 ### 2.2 - DNS elsewhere (manual)
 
-If the DNS is not on Cloudflare, display the copy-paste instructions (root TXT = the value) for the registrar's dashboard, and wait for confirmation.
+If the domain is not delegated to Scaleway DNS, display the copy-paste instructions (root TXT = the value) for the registrar's dashboard, and wait for confirmation.
 
 ### 2.3 - Wait for propagation then verify
 

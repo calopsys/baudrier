@@ -18,8 +18,15 @@
 //      Its error message is written in English - the calling skill translates it to
 //      the project's language afterwards.
 //
-// The script does NOT add a Content-Security-Policy - CSP requires per-project tuning
-// and misconfiguring it breaks Next.js hydration.
+// CSP: this script now DOES ship a Content-Security-Policy, but a deliberately safe
+// baseline only - a full `default-src 'self'` enforced blind would break Next.js
+// hydration or an addon's third-party script (Matomo, Web Push) the moment it's
+// wired up. So the ENFORCED header only carries `frame-ancestors 'none'` (safe
+// unconditionally, blocks clickjacking, nothing else), and everything else ships as
+// `Content-Security-Policy-Report-Only` - a starter a human promotes to enforced
+// once they've checked the browser console for violations on THIS project. See
+// templates/deploy/next.config.js (the spec this script's SECURITY_HEADERS_BLOCK
+// mirrors) for the exact starter policy and the addon-origin note.
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
@@ -27,15 +34,32 @@ import { dirname } from "node:path";
 const actions = [];
 
 // ─── 1. next.config ────────────────────────────────────────────────────
-const SECURITY_HEADERS_BLOCK = `const securityHeaders = [
+// CONTENT_SECURITY_POLICY_REPORT_ONLY must stay identical to
+// templates/deploy/next.config.js's own constant - that file is the spec,
+// this string is the mechanism that actually delivers it into a generated
+// app (nextConfigStandalone() in bootstrap-init.mjs only patches
+// output/images, never headers - see its own comment).
+const SECURITY_HEADERS_BLOCK = `const CONTENT_SECURITY_POLICY_REPORT_ONLY =
+  "default-src 'self'; img-src 'self' data: blob: https://*.scw.cloud; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'";
+// NOTE: when /add-analytics wires up Matomo, append its origin (the user's
+// own Matomo instance URL) to script-src and connect-src above - see
+// skills/add-analytics/SKILL.md - otherwise the tracker stops loading the
+// moment this policy is promoted from Report-Only to enforced.
+
+const securityHeaders = [
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "X-Frame-Options", value: "DENY" },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
   {
     key: "Strict-Transport-Security",
-    value: "max-age=63072000; includeSubDomains; preload",
+    value: "max-age=63072000; includeSubDomains",
   },
   { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
+  // Enforced: only frame-ancestors, safe unconditionally (clickjacking only).
+  { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+  // Report-Only: the fuller policy, promoted to enforced by hand once a human
+  // has checked the browser console for violations on this specific project.
+  { key: "Content-Security-Policy-Report-Only", value: CONTENT_SECURITY_POLICY_REPORT_ONLY },
 ];
 `;
 
@@ -150,10 +174,10 @@ function patchTrpcFile() {
       }
     }
 
-    // Add the checkRateLimit import
+    // Add the checkRateLimit + resolveClientIp imports
     if (!content.includes(`from "~/lib/rate-limit"`)) {
       const lastImportMatch = content.match(/^(?:import[^;]+;[\r\n]*)+/);
-      const insertion = `import { checkRateLimit } from "~/lib/rate-limit";\n`;
+      const insertion = `import { checkRateLimit } from "~/lib/rate-limit";\nimport { resolveClientIp } from "~/proxy";\n`;
       if (lastImportMatch) {
         content = content.replace(lastImportMatch[0], lastImportMatch[0] + insertion);
       } else {
@@ -166,8 +190,8 @@ function patchTrpcFile() {
     // to the project's language right after running this script.
     const procedureBlock = `
 export const rateLimitedProcedure = publicProcedure.use(async ({ ctx, next }) => {
-  const ip = ctx.headers?.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
-  const { allowed, retryAfterMs } = checkRateLimit(ip);
+  const ip = ctx.headers ? (resolveClientIp(ctx.headers) ?? "unknown") : "unknown";
+  const { allowed, retryAfterMs } = await checkRateLimit(ip);
   if (!allowed) {
     throw new TRPCError({
       code: "TOO_MANY_REQUESTS",
@@ -195,7 +219,16 @@ function writeRateLimitFile() {
 
   mkdirSync(dirname(file), { recursive: true });
 
-  const content = `const WINDOW_MS = 15 * 60 * 1000; // 15 minutes
+  const content = `// baudrier:rate-limit memory-only
+//
+// Created before a database is guaranteed to exist (bootstrap runs this
+// before /add-db, /add-auth, or /add-2fa). /add-auth (users mode) and
+// /add-2fa upgrade this file in place to a DB-backed variant once a
+// database is confirmed present - see templates/2fa/rate-limit.ts. The
+// exported signature is async in both variants so no caller has to change
+// when the upgrade happens.
+
+const WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 const MAX_ATTEMPTS = 5;
 
 const attempts = new Map<string, { count: number; firstAttempt: number }>();
@@ -209,12 +242,12 @@ const cleanup = setInterval(() => {
 }, 5 * 60 * 1000);
 cleanup.unref(); // Don't prevent serverless process from exiting
 
-export function checkRateLimit(ip: string): { allowed: boolean; retryAfterMs?: number } {
+export async function checkRateLimit(key: string): Promise<{ allowed: boolean; retryAfterMs?: number }> {
   const now = Date.now();
-  const entry = attempts.get(ip);
+  const entry = attempts.get(key);
 
   if (!entry || now - entry.firstAttempt > WINDOW_MS) {
-    attempts.set(ip, { count: 1, firstAttempt: now });
+    attempts.set(key, { count: 1, firstAttempt: now });
     return { allowed: true };
   }
 

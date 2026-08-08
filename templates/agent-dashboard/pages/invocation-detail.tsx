@@ -49,7 +49,7 @@ export default async function InvocationDetailPage({ params }: PageProps) {
         <span>•</span>
         <span>{invocation.iterations} tour(s)</span>
         <span>•</span>
-        <span>${Number(invocation.totalCostUsd).toFixed(4)}</span>
+        <span>{Number(invocation.totalCostEur).toFixed(4)} €</span>
       </div>
 
       {invocation.errorMessage && (
@@ -82,7 +82,7 @@ export default async function InvocationDetailPage({ params }: PageProps) {
               <CardTitle className="flex items-center justify-between text-base">
                 <span>Tour {t.turnNumber}</span>
                 <span className="text-xs font-normal text-muted-foreground">
-                  {t.stopReason} · {t.inputTokens + t.outputTokens} tokens · ${Number(t.costUsd).toFixed(4)}
+                  {t.stopReason} · {t.inputTokens + t.outputTokens} tokens · {Number(t.costEur).toFixed(4)} €
                 </span>
               </CardTitle>
             </CardHeader>

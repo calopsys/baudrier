@@ -2,7 +2,7 @@
 name: add-agent-dashboard
 description: Add a monitoring dashboard for AI agents into the project's admin area (/admin/agents). Lists all agents with their stats (cost, success/error counts, last run), shows invocation history per agent, drills into the turn-by-turn reasoning trace of any single invocation, and lets the admin trigger an agent run manually with a custom prompt. Idempotent - safe to re-run, will skip already-installed pages. Auto-invoked by /add-agent at the end if the user opts in. Can also be invoked standalone if the user skipped the dashboard at first or wants to add it after creating multiple agents. Requires admin auth (/add-auth in admin mode) and at least one agent already created (/add-agent first).
 allowed-tools: Bash, Read, Write, Edit, Glob, Grep
-compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (vercel, gh)."
+compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (scw, gh)."
 ---
 
 # Add Agent Dashboard - Monitoring pages for your AI agents
@@ -91,7 +91,7 @@ From the JSON:
 > - `/admin/agents/<name>` - agent detail + **"Run now"** button + last 50 runs
 > - `/admin/agents/<name>/invocations/<id>` - turn-by-turn reasoning chain, each tool called, the detailed cost
 >
-> ⏰ **Manual trigger delay**: ~5 seconds *(the Render worker polls the queue every 5s - not instant but plenty for a dashboard button).*
+> ⏰ **Manual trigger delay**: a few minutes *(the agent's Scaleway Serverless Job wakes up on a short interval to check for pending triggers, then goes back to sleep - not instant, but near scale-to-zero billing between runs, plenty for a dashboard button).*
 >
 > 🔍 **To test**:
 > 1. `pnpm dev` in your web project

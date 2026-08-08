@@ -54,7 +54,7 @@ export default async function AgentDetailPage({ params }: PageProps) {
             <CardTitle className="text-sm font-medium text-muted-foreground">Coût 30 derniers jours</CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-2xl font-semibold">${stats.totalCostLast30d.toFixed(2)}</p>
+            <p className="text-2xl font-semibold">{stats.totalCostLast30d.toFixed(2)} €</p>
             <p className="text-xs text-muted-foreground mt-1">{stats.totalInvocationsLast30d} exécutions</p>
           </CardContent>
         </Card>
@@ -95,7 +95,7 @@ export default async function AgentDetailPage({ params }: PageProps) {
                     <Badge variant={status.variant}>{status.label}</Badge>
                   </td>
                   <td className="px-4 py-2 text-right">{inv.iterations}</td>
-                  <td className="px-4 py-2 text-right">${Number(inv.totalCostUsd).toFixed(4)}</td>
+                  <td className="px-4 py-2 text-right">{Number(inv.totalCostEur).toFixed(4)} €</td>
                 </tr>
               );
             })}

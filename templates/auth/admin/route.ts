@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { handlers } from "~/server/auth";
+import { resolveClientIp } from "~/proxy";
 import { checkRateLimit } from "~/lib/rate-limit";
 
 export const GET = handlers.GET;
@@ -11,8 +12,8 @@ export const GET = handlers.GET;
 export async function POST(req: NextRequest) {
   const url = new URL(req.url);
   if (url.pathname.includes("/callback/credentials")) {
-    const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
-    const { allowed, retryAfterMs } = checkRateLimit(ip);
+    const ip = resolveClientIp(req.headers) ?? "unknown";
+    const { allowed, retryAfterMs } = await checkRateLimit(ip);
     if (!allowed) {
       return NextResponse.json(
         { error: "Trop de tentatives. Réessaie dans quelques minutes." },

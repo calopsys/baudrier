@@ -13,7 +13,7 @@ declare module "next-auth" {
   }
 }
 
-// hypervibe:auth-modes admin
+// baudrier:auth-modes admin
 export const { auth, handlers, signIn, signOut } = NextAuth({
   session: { strategy: "jwt" },
   providers: [

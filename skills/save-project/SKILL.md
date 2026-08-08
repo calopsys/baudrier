@@ -1,177 +1,181 @@
 ---
 name: save-project
-description: "Creates a complete backup (timestamped zip) of a Hypervibe project - code (git bundle), database (schema + JSON data), Vercel environment variables, Cloudflare R2 content, Claude memory files, and configs (Vercel/wrangler/Stripe). Useful before `/delete-project`, before a big refactor, at the end of a mission, or for an offline archive. The zip is saved to Dropbox/Download by default."
+description: "Crée une sauvegarde complète (zip horodaté) d'un projet Baudrier - code (git bundle), variables d'environnement (Secret Manager + .env local), fichiers du stockage Object Storage, mémoire Claude, et la liaison Scaleway (config/scaleway-link.json, résolue par nom). N'inclut PAS les données de la base de données (l'opérateur n'a aucun accès direct à la base - voir DOC.md) : le zip le dit explicitement plutôt que de le taire. Utile avant `/delete-project`, avant un gros refactor, en fin de mission, ou pour une archive hors-ligne. Le zip est enregistré dans le dossier Téléchargements par défaut (dans un dossier temporaire sur Claude Code web)."
+argument-hint: "<nom-du-projet>"
 allowed-tools: Bash Read Edit Write Glob AskUserQuestion
-compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (vercel, gh)."
+compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (gh, scw)."
 ---
 
-# /save-project - Complete snapshot of a Hypervibe project
+# /save-project - Instantané complet d'un projet Baudrier
 
-You create a complete zip of everything that defines a Hypervibe project, at a given point in time. The zip is used as a safety net before a risky operation (deletion, refactor, end of mission) or as a personal/client archive.
+Tu crées un zip complet de tout ce qui définit un projet Baudrier, à un instant donné. Le zip sert de filet de sécurité avant une opération risquée (suppression, refactor, fin de mission) ou d'archive personnelle/client.
 
 ## Communication
-- Detect the user's language from their messages and ALWAYS reply in that language (default: English). This applies to every user-facing message: questions, progress, confirmations, summaries, errors.
+- Detect the user's language from their messages and ALWAYS reply in that language (default: French for this product's user base). This applies to every user-facing message: questions, progress, confirmations, summaries, errors.
 - Use plain, non-technical business language. Never expose internal script names (*.mjs) or jargon; describe actions in human terms.
 - When generating user-facing content for the scaffolded project (UI labels, emails, copy), write it in the user's language too.
 - Show progress as a short natural-language checklist (in-progress and done states).
 
 ---
 
-## Step 1 - Preflight
+## Step 1 - Préflight
 
-### 1a. Determine the project
+### 1a. Déterminer le projet
 
-The project name can come from:
-- A direct argument (`/save-project <name>`)
-- The current directory (read `package.json` at the root of `process.cwd()`, take the `name` field)
-- A directory further up if we are in a monorepo (`apps/web/package.json`)
+Le nom du projet peut venir de :
+- Un argument direct (`/save-project <nom>`)
+- Le dossier courant (lire `package.json` à la racine de `process.cwd()`, champ `name`)
+- Un dossier plus haut si on est dans un monorepo (`apps/web/package.json`)
 
-If the name is ambiguous (e.g. a monorepo where the root `package.json` has a different name than `apps/web/package.json`), show both and ask which one to use.
+Si le nom est ambigu (ex. un monorepo où le `package.json` racine a un nom différent de `apps/web/package.json`), montre les deux et demande lequel utiliser.
 
-If really nothing can be found, ask the user:
+Si vraiment rien ne se détecte, demande à l'utilisateur :
 
-> *"Which folder contains the project to back up? (absolute or relative path)"*
+> *"Quel dossier contient le projet à sauvegarder ? (chemin absolu ou relatif)"*
 
-### 1b. Verify that it really is a Hypervibe project
+### 1b. Vérifier que c'est bien un projet Baudrier
 
-Criteria:
-- `package.json` exists at the root of the project
-- At least one of: `.vercel/project.json`, `wrangler.toml`, `.git/`, presence of `next` in the dependencies
+Critères :
+- `package.json` existe à la racine du projet
+- Au moins un de : un Serverless Container Scaleway résolu par le nom du projet, `.git/`, présence de `next` dans les dépendances
 
-If nothing matches, flag it but offer to continue anyway (it might be a non-Hypervibe project that the user still wants to back up).
+Si rien ne correspond, signale-le mais propose de continuer quand même (ça pourrait être un projet non-Baudrier que l'utilisateur veut quand même sauvegarder).
 
-### 1c. Present the plan to the user
+### 1c. Présenter le plan à l'utilisateur
 
-Show a concise recap:
+Affiche un récap concis :
 
-> ## 📦 Snapshot of project **<name>**
+> ## 📦 Instantané du projet **<nom>**
 >
-> Here is what will be included in the zip:
+> Voici ce qui sera inclus dans le zip :
 >
-> | Item | Status | Notes |
+> | Élément | Statut | Notes |
 > |---|---|---|
-> | **Code + Git history** | ✅ included | Complete git bundle, restorable via `git clone` |
-> | **Working changes** | <✅ included / ➖ none> | Uncommitted changes captured via `git diff HEAD` |
-> | **Database** | <✅ included / ⚠️ not detected> | Schema + all tables, JSON format |
-> | **Vercel env variables** | <✅ included / ⚠️ project not linked> | production + preview + development |
-> | **Cloudflare R2** | <to confirm> | See question below |
-> | **Claude memory** | ✅ included | Files in `~/.claude/projects/.../memory/` |
-> | **Configs** | ✅ included | Vercel, wrangler.toml, Stripe webhooks (URLs only, **no secrets**) |
+> | **Code + historique Git** | ✅ inclus | Git bundle complet, restaurable via `git clone` |
+> | **Modifications en cours** | <✅ inclus / ➖ aucune> | Modifications non commitées capturées via `git diff HEAD` |
+> | **Variables d'environnement** | <✅ incluses / ⚠️ Scaleway non configuré> | Depuis Secret Manager + copie du `.env` local |
+> | **Base de données** | 🔴 **PAS incluse** | Voir la note ci-dessous |
+> | **Stockage de fichiers** | <à confirmer> | Voir la question ci-dessous |
+> | **Mémoire Claude** | ✅ incluse | Fichiers dans `~/.claude/projects/...` |
+> | **Configuration Scaleway** | ✅ incluse | `config/scaleway-link.json` (liaison namespace/container résolue par nom - pas un secret) |
 >
-> ⚠️ **Important note**: the zip will contain **plaintext secrets** in the `.env` files. Treat it as a confidential document after creation.
-
-### 1d. R2 question
-
-If wrangler is installed AND there potentially exist buckets `<project>` or `<project>-eu` (do not check beforehand, the script detects it):
-
-Use **AskUserQuestion**:
-
-> Question: "Include the content of the R2 buckets in the snapshot?"
-> - Option 1: **Yes - include everything (recommended)** - may take a while if there are many files (videos, images)
-> - Option 2: **No - skip R2** - faster snapshot, does not contain the uploaded files
-> - Option 3: **Just the buckets, not the content** - equivalent to "no" right now (the script cannot dump only the metadata)
-
-If the answer is "Just the buckets, not the content", use `--skip-storage` like option 2 (and explain to the user that in this version, the skill cannot export the metadata without the content, so it amounts to the same thing).
-
-### 1e. Output path question
-
-Use **AskUserQuestion**:
-
-> Question: "Where to save the zip?"
-> - Option 1: **`C:/Users/<user>/Dropbox/Download/` (recommended)** - standard download location, accessible cross-device
-> - Option 2: **In the current folder** - convenient if you want everything in the same place
-> - Option 3: **Other path** - the user specifies it explicitly
-
-If Option 3, ask for the path as a follow-up (free text). Verify that it exists or can be created.
-
-### 1f. Final confirmation
-
-Before launching, one last confirmation:
-
-> Final recap:
-> - Project: `<name>`
-> - Source: `<path>`
-> - Destination: `<path>/<name>-snapshot-<TS>.zip`
-> - R2: <included / skipped>
+> 🔴 **Important - la base de données n'est PAS dans ce zip** : la machine de l'opérateur n'a jamais d'accès direct à la base (voir CONTRACT.md §4 - seule la Job de migration s'y connecte). Concrètement, ça veut dire qu'**aucune de tes données métier** (clients, commandes, contenus, comptes...) n'est dans cette sauvegarde - seulement le code, les identifiants techniques et les fichiers du stockage. Scaleway indique dans sa documentation générale effectuer des sauvegardes automatiques des bases de données, mais je n'ai pas pu vérifier précisément la fréquence ni la durée de rétention pour Serverless SQL Database - **ne compte pas dessus comme garantie**. Si tes données comptent, le seul export fiable est celui que tu déclenches toi-même (`pg_dump` depuis un poste ayant accès réseau à la base, ou un outil dans la console Scaleway).
 >
-> Launch the backup?
+> ⚠️ **Note importante** : le zip contiendra des **secrets en clair** dans les fichiers `.env`. À traiter comme un document confidentiel après création.
 
-If yes, move on to Step 2. Otherwise, cancel cleanly.
+**Sur Claude Code web** : la session est temporaire et n’a pas de navigateur pour télécharger un fichier. Le zip est alors écrit dans un dossier temporaire de la session (pas le dossier Téléchargements), et disparaît avec la session - le script le signale explicitement. Dans ce cas, mieux vaut compter sur le dépôt Git (déjà une sauvegarde du code) et le versioning du bucket Object Storage (déjà 90 jours de rétention des versions précédentes, CLAUDE.md) plutôt que sur un zip qu’on ne peut pas récupérer.
+
+### 1d. Question sur le stockage de fichiers
+
+Si un secret `STORAGE_BUCKET` existe pour ce projet (vérifiable via `_pull-env-vars` ou en tentant la lecture), utilise **AskUserQuestion** :
+
+> Question : "Inclure le contenu du stockage de fichiers (Object Storage) dans la sauvegarde ?"
+> - Option 1 : **Oui - tout inclure (recommandé)** - peut prendre du temps s'il y a beaucoup de fichiers (vidéos, images)
+> - Option 2 : **Non - ignorer le stockage** - instantané plus rapide, ne contient pas les fichiers uploadés
+
+Si Option 2, passe `--skip-storage` au script.
+
+### 1e. Question sur le chemin de sortie
+
+Utilise **AskUserQuestion** :
+
+> Question : "Où enregistrer le zip ?"
+> - Option 1 : **Dossier Téléchargements (recommandé)** - emplacement standard, facile à retrouver
+> - Option 2 : **Dans le dossier courant** - pratique si tu veux tout au même endroit
+> - Option 3 : **Autre chemin** - l'utilisateur le précise explicitement
+
+Si Option 3, demande le chemin en suivi (texte libre). Vérifie qu'il existe ou peut être créé.
+
+### 1f. Confirmation finale
+
+Avant de lancer, une dernière confirmation :
+
+> Récap final :
+> - Projet : `<nom>`
+> - Source : `<chemin>`
+> - Destination : `<chemin>/<nom>-snapshot-<TS>.zip`
+> - Stockage : <inclus / ignoré>
+> - Base de données : PAS incluse (voir la note ci-dessus)
+>
+> On lance la sauvegarde ?
+
+Si oui, passe à l'étape 2. Sinon, annule proprement.
 
 ---
 
-## Step 2 - Execution
+## Step 2 - Exécution
 
-Launch the bundled script:
+Lance le script embarqué :
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/save-project/build-snapshot.mjs" \
-  --project "<name>" \
-  --project-dir "<absolute-path-of-the-project>" \
-  --out "<destination-path>" \
-  [--skip-storage if the user said no]
+  --project "<nom>" \
+  --project-dir "<chemin-absolu-du-projet>" \
+  --out "<chemin-de-destination>" \
+  [--skip-storage si l'utilisateur a dit non]
 ```
 
-During execution, the script logs each step to stderr with a `[step] status` prefix. You can relay these logs to the user in real time via `↳ ...` (one per step that completes).
+Pendant l'exécution, le script logge chaque étape sur stderr avec un préfixe `[étape] statut`. Relaie ces logs à l'utilisateur en temps réel via `↳ ...` (un par étape terminée).
 
-At the end, the script writes a JSON `{status, zipPath, zipSize, timestamp, steps}` to stdout. Capture it.
+À la fin, le script écrit un JSON `{status, zipPath, zipSize, timestamp, steps}` sur stdout. Récupère-le.
 
-### Partial errors
+### Erreurs partielles
 
-It is OK if some steps are skipped (e.g. no R2, project not linked to Vercel) - the script continues. An `error` step does not block the next one. Only one step is truly fatal = the zip itself fails.
+C'est normal que certaines étapes soient sautées (pas de stockage configuré, projet pas lié à Scaleway) - le script continue. Une étape en `error` ne bloque pas la suivante. Une seule étape est vraiment fatale = le zip lui-même échoue.
 
 ---
 
-## Step 3 - Report to the user
+## Step 3 - Rapport à l'utilisateur
 
-Show a clear recap:
+Affiche un récap clair :
 
-> ## ✅ Snapshot complete
+> ## ✅ Instantané terminé
 >
-> **File**: `<zipPath>`
-> **Size**: `<zipSize>`
+> **Fichier** : `<zipPath>`
+> **Taille** : `<zipSize>`
 >
-> ### Content
+> ### Contenu
 >
-> | Step | Status | Notes |
+> | Étape | Statut | Notes |
 > |---|---|---|
-> | Code + history | ✅ ok | <bundleBytes in MB>, uncommitted changes: <yes/no> |
-> | Env variables | ✅ ok | <production: X vars, preview: Y, dev: Z> |
-> | Database | ✅ ok | <driver>, <tableCount> tables, <totalRows> rows in total |
-> | Cloudflare R2 | <✅ ok / ➖ skipped> | <bucketsScanned> buckets, <totalObjects> objects (<totalSize>) |
-> | Claude memory | ✅ ok | <matchedDirs> memory folder(s) copied |
-> | Configs | ✅ ok | <captured> |
+> | Code + historique | ✅ ok | <bundleBytes en MB>, modifications non commitées : <oui/non> |
+> | Variables d'env | ✅ ok | <secretsWritten> secrets, <localFilesCopied> fichier(s) .env local copié(s) |
+> | Base de données | 🔴 pas incluse | Voir `db/NOTE.md` dans le zip |
+> | Stockage | <✅ ok / ➖ ignoré> | <totalObjects> fichiers (<totalSize>) |
+> | Mémoire Claude | ✅ ok | <matchedDirs> dossier(s) mémoire copié(s) |
+> | Configuration | ✅ ok | `config/scaleway-link.json` inclus |
 >
-> ### ⚠️ Zip security
+> ### ⚠️ Sécurité du zip
 >
-> This file contains **plaintext secrets**. Before anything:
-> - Do not share it by unencrypted email or on a public channel
-> - If you put it on a cloud service (Dropbox, iCloud...), make sure it is your personal account, not a shared one
-> - If you no longer need it, delete it
+> Ce fichier contient **des secrets en clair**. Avant toute chose :
+> - Pas de partage par email non chiffré ou sur un canal public
+> - Si tu le mets sur un service cloud (Dropbox, iCloud...), assure-toi que c'est ton compte personnel, pas un compte partagé
+> - Supprime-le dès que tu n'en as plus besoin
 >
-> ### To restore
+> ### Pour restaurer
 >
-> The `MANIFEST.md` inside the zip explains the procedure. In short: `git clone code/repo.bundle`, then recreate the DB / buckets / webhooks from the provided files. You can always reopen Claude Code in the extracted folder and ask it to guide the restoration.
+> Le `MANIFEST.md` à l'intérieur du zip explique la procédure. En bref : `git clone code/repo.bundle`, puis recréer la base / le stockage depuis les fichiers fournis. Tu peux toujours rouvrir Claude Code dans le dossier extrait et demander à te faire guider pour la restauration.
 
-If a step has `status: "error"`, mention it honestly with the error message - no need to hide it.
+Si une étape a `status: "error"`, mentionne-la honnêtement avec le message d'erreur - pas besoin de la cacher.
 
-If the `git-bundle` step is skipped (not a git repo), insist: **without a git bundle, the source code is not in the snapshot**. Ask the user whether they still want to keep this zip or cancel everything.
+Si l'étape `git-bundle` est sautée (pas un dépôt git), insiste : **sans git bundle, le code source n'est pas dans la sauvegarde**. Demande à l'utilisateur s'il veut quand même garder ce zip ou tout annuler.
+
+**Rappelle systématiquement**, même si l'utilisateur ne pose pas la question, que la base de données n'est pas dans le zip - donc qu'aucune donnée métier (clients, commandes, contenus...) n'y figure. Ne présente **jamais** les sauvegardes automatiques de Scaleway comme un filet de sécurité garanti (leur fréquence/rétention exactes ne sont pas vérifiées ici) - dis plutôt clairement que si l'utilisateur veut un vrai filet de sécurité pour ses données, c'est à lui de déclencher un export. Ne jamais sous-entendre que la sauvegarde est "complète" sans cette précision.
 
 ---
 
-## Common errors to handle
+## Erreurs courantes à gérer
 
-- **Python not installed**: the last step (the zip) fails. Rare if Python is already installed (often a dependency that is present), but possible for some users. In that case, offer to install Python or to zip by hand from the `WORK_DIR` folder that the script shows on error.
-- **DATABASE_URL not found**: the project may not have a Neon DB, or the variable has a different name. Ask the user whether they want to continue without a DB (the snapshot is still useful for the code/env/configs).
-- **Vercel CLI missing**: env-vars step skipped, we continue. Mention it in the report.
-- **Wrangler CLI missing**: r2-download step skipped, we continue.
-- **The script crashes entirely (exit 1)**: the `WORK_DIR` is left as is for debugging. The path is in the JSON output. Give it to the user so they can go check / delete it manually.
+- **Python non installé** : la dernière étape (le zip) échoue. Rare (souvent déjà présent comme dépendance), mais possible. Propose d'installer Python ou de zipper à la main depuis le dossier `WORK_DIR` que le script indique en cas d'erreur.
+- **Aucun secret DATABASE_URL** : le projet n'a peut-être pas de base Scaleway, ou la variable a un nom différent. C'est normal, `db/NOTE.md` le documente clairement dans le zip.
+- **Scaleway non configuré (`SCW_ACCESS_KEY`/`SCW_SECRET_KEY` absents)** : l'étape variables d'env se limite à la copie du `.env` local, on continue. Mentionne-le dans le rapport.
+- **Le script plante entièrement (exit 1)** : le `WORK_DIR` est laissé tel quel pour du débogage. Le chemin est dans le JSON de sortie. Donne-le à l'utilisateur pour qu'il puisse aller vérifier / supprimer manuellement.
 
 ---
 
-## What NOT to do
+## Ce qu'il ne faut PAS faire
 
-- ❌ Never launch `/save-project` automatically from another skill without explicit confirmation (the zip has a cost in time and disk)
-- ❌ Never include the `whsec_*` (Stripe webhook secrets) - the script already handles this but stay vigilant if you are reading code in parallel
-- ❌ Do not offer an automatic `/restore-project` - it does not exist and that is intentional (too dangerous). Restoration is manual and assisted.
-- ❌ Do not do an automatic `git push` or `commit` - we work read-only on the project
+- ❌ Ne jamais lancer `/save-project` automatiquement depuis une autre skill sans confirmation explicite (le zip a un coût en temps et en disque)
+- ❌ Ne jamais laisser croire que la sauvegarde est complète alors que la base de données n'y est pas - le dire explicitement à chaque fois
+- ❌ Ne pas proposer de `/restore-project` automatique - ça n'existe pas et c'est volontaire (trop dangereux). La restauration est manuelle et assistée.
+- ❌ Ne pas faire de `git push` ou `commit` automatique - on travaille en lecture seule sur le projet

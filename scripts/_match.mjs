@@ -3,8 +3,8 @@
 // collision guard (check-name-collision.mjs). The naive
 // `String.includes(project)` used to sweep up resources of OTHER projects:
 // deleting "art" matched "smart-app", deleting "street" matched everything of
-// "street-cool", and a project named "hypervibe" would have matched the
-// shared "hypervibe-jobs" worker. The bootstrap guard reuses the same
+// "street-cool", and a project named "mon-app" would have matched the
+// shared "mon-app-jobs" worker. The bootstrap guard reuses the same
 // primitives so both skills agree on what "collides" means.
 //
 // Two primitives fix that:
@@ -46,14 +46,6 @@ function boundaryRegex(project) {
 export function tokenMatches(project, s) {
   if (!project || !s) return false;
   return boundaryRegex(project).test(normalizeName(s));
-}
-
-// Count boundary occurrences of `project` in `s` (used for memory mentions).
-export function tokenMatchCount(project, s) {
-  if (!project || !s) return 0;
-  const p = escapeRegExp(normalizeName(project));
-  const re = new RegExp(`(^|[^a-z0-9])${p}(?=[^a-z0-9]|$)`, "g");
-  return (normalizeName(s).match(re) || []).length;
 }
 
 export function moreSpecificOwner(project, s, candidates) {

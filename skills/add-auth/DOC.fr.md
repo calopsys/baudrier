@@ -6,27 +6,26 @@ Ajoute la **connexion / inscription** à votre app. Une seule question vous déc
 
 - Vous voulez un espace privé sur votre site que seul vous (ou une petite équipe) peut voir
 - Votre app a des utilisateurs qui doivent créer un compte, se connecter, avoir leur propre espace
-- Vous voulez ajouter la connexion via Google ou GitHub (vous lancerez `/add-auth` d'abord, puis `/add-google-auth` ou `/add-github-auth`)
 
 ## Comment ça se passe
 
-1. **Vérification** : Hypervibe détecte si une authentification est déjà en place sur le projet. Si oui, vous avez un petit menu pour la faire évoluer (ajouter Google, changer le mot de passe admin, ajouter "mot de passe oublié", etc.).
+1. **Vérification** : Baudrier détecte si une authentification est déjà en place sur le projet. Si oui, vous avez un petit menu pour la faire évoluer (changer le mot de passe admin, ajouter "mot de passe oublié", etc.).
 
-2. **Question principale** (sauf si déjà choisi par `/bootstrap`) : Hypervibe vous demande quel type d'authentification vous voulez :
+2. **Question principale** (sauf si déjà choisi par `/bootstrap`) : Baudrier vous demande quel type d'authentification vous voulez :
   - **Mode admin** : un seul login fixe (le vôtre), avec un mot de passe stocké dans les variables d'environnement. Parfait pour un backoffice, un tableau de bord privé, une admin de site.
   - **Mode utilisateurs** : un vrai système avec inscription, connexion, page de compte, suppression de compte. Adapté quand vous avez des utilisateurs externes qui ont besoin de leur propre espace.
 
 3. **Mise en place automatique** :
-  - **Mode admin** : Hypervibe génère un mot de passe sécurisé, le hash, le pousse dans vos variables Vercel + locales. Le mot de passe en clair vous est affiché **une seule fois** : à sauvegarder dans votre gestionnaire de mots de passe.
-  - **Mode utilisateurs** : Hypervibe ajoute les tables nécessaires en base de données (utilisateurs, sessions, comptes, vérifications), crée les pages `/signin` / `/signup` / `/account`, l'API tRPC pour l'inscription/connexion, et l'intégration NextAuth complète.
+  - **Mode admin** : Baudrier génère un mot de passe sécurisé, le hash, le pousse dans vos variables d'environnement (locales + les secrets de votre app hébergée). Le mot de passe en clair vous est affiché **une seule fois** : à sauvegarder dans votre gestionnaire de mots de passe.
+  - **Mode utilisateurs** : Baudrier ajoute les tables nécessaires en base de données (utilisateurs, sessions, comptes, vérifications), crée les pages `/signin` / `/signup` / `/account`, l'API tRPC pour l'inscription/connexion, et l'intégration NextAuth complète.
 
-4. **Suite optionnelle** : Hypervibe vous propose ensuite d'ajouter Google ou GitHub OAuth en complément (jamais en remplacement, l'email/mot de passe reste le socle).
+Ce harness fonctionne uniquement en **email + mot de passe** - il n'y a pas d'option de connexion Google/GitHub, donc rien à ajouter en complément.
 
 ## Ce que ça crée pour vous
 
 **En mode admin** :
 - Un fichier `src/server/auth.ts` qui gère un login fixe
-- Les variables `ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH_DEV`, `ADMIN_PASSWORD_HASH_PROD` dans `.env` + Vercel
+- Les variables `ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH_DEV`, `ADMIN_PASSWORD_HASH_PROD` dans `.env` + les secrets de votre app
 - Une fonction `isAdmin()` que vous pouvez utiliser pour protéger des pages
 - Mot de passe affiché une fois pour vous
 
@@ -39,7 +38,7 @@ Ajoute la **connexion / inscription** à votre app. Une seule question vous déc
 ## Prérequis
 
 - Le projet doit être en Next.js
-- Mode utilisateurs : nécessite une base de données, `/add-db` doit avoir été lancé d'abord (Hypervibe vous le propose si manquant)
+- Mode utilisateurs : nécessite une base de données, `/add-db` doit avoir été lancé d'abord (Baudrier vous le propose si manquant)
 - Mode utilisateurs avec mot de passe oublié : nécessite aussi `/add-email` configuré
 
 ## Astuces

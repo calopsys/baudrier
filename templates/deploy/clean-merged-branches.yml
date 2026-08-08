@@ -1,0 +1,52 @@
+# Destined for .github/workflows/clean-merged-branches.yml in the generated app.
+# Written by bootstrap-init.mjs (new projects) and add-cleanup-workflow.mjs
+# (retrofit of existing projects).
+#
+# A Claude Code web session cannot delete a remote branch: the session git
+# credential rejects ref deletions (CONTRACT.md paragraph 7). Merged work
+# branches accumulate. The repository owner starts this workflow by hand from
+# the Actions tab (or through the GitHub Actions API). The workflow deletes
+# each remote branch that is fully merged into the default branch. It never
+# touches the default branch and it never deletes an unmerged branch.
+#
+# This is a maintenance workflow, not a build or deploy workflow - the build
+# pipeline stays direct (CONTRACT.md paragraph 5). It is dispatch-only and it
+# reads no repo secret: it uses only the default GITHUB_TOKEN through
+# "permissions: contents: write". Check 60 in tools/verify.mjs pins this shape.
+name: Nettoyage des branches fusionnées
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  clean:
+    # Personal repository: only the owner can fire the cleanup.
+    if: github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 0
+      - name: Supprimer les branches fusionnées
+        run: |
+          set -euo pipefail
+          git fetch --prune origin
+          DEFAULT="${{ github.event.repository.default_branch }}"
+          if [ -z "$DEFAULT" ]; then
+            DEFAULT="$(git symbolic-ref --short refs/remotes/origin/HEAD | cut -d/ -f2-)"
+          fi
+          echo "Branche par défaut : $DEFAULT"
+          for BRANCH in $(git for-each-ref --format='%(refname:strip=3)' refs/remotes/origin); do
+            if [ "$BRANCH" = "HEAD" ] || [ "$BRANCH" = "$DEFAULT" ]; then
+              continue
+            fi
+            if git merge-base --is-ancestor "origin/$BRANCH" "origin/$DEFAULT"; then
+              git push origin --delete "$BRANCH"
+              echo "supprimée : $BRANCH (fusionnée dans $DEFAULT)"
+            else
+              echo "conservée : $BRANCH (pas encore fusionnée dans $DEFAULT)"
+            fi
+          done

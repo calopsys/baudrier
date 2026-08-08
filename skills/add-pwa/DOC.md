@@ -10,15 +10,15 @@ Turns your site into an installable app (PWA) on phone and computer, without goi
 
 ## How it works
 
-1. **Check**: if the PWA is already in place, Hypervibe offers a menu (regenerate the icons, change the name or colors, reinstall pieces).
+1. **Check**: if the PWA is already in place, Baudrier offers a menu (regenerate the icons, change the name or colors, reinstall pieces).
 
-2. **Project detection**: Hypervibe checks that it is a Next.js project and that the favicon (`icon.svg`, created by `/bootstrap`) is present, because the app icons derive from it.
+2. **Project detection**: Baudrier checks that it is a Next.js project and that the favicon (`icon.svg`, created by `/bootstrap`) is present, because the app icons derive from it.
 
 3. **Serwist installation**: the library that handles the "service worker" (the invisible component that makes the app installable and gives it an offline cache).
 
 4. **Manifest**: your app's identity card (name, colors, icons, full-screen mode), generated from your project (name and palette detected automatically).
 
-5. **Icons**: Hypervibe rasterizes your favicon into all the sizes needed (Android, iOS, "maskable" icon with safe zone), in your theme's colors.
+5. **Icons**: Baudrier rasterizes your favicon into all the sizes needed (Android, iOS, "maskable" icon with safe zone), in your theme's colors.
 
 6. **Install invitation window**: a small window shows on mobile to invite the visitor to install the app. On Android, an "Install" button triggers the native installation; on iPhone, it explains step by step the "Share then Add to Home Screen" gesture (Apple does not offer a direct button). It shows neither on computer, nor if the app is already installed, and knows to make itself scarce for 3 days when closed.
 

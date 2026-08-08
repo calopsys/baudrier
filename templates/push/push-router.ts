@@ -7,7 +7,7 @@ import { createTRPCRouter, protectedProcedure } from "~/server/api/trpc";
 import { pushSubscriptions } from "~/server/db/schema";
 
 export const pushRouter = createTRPCRouter({
-  // Enregistre l'abonnement push d'un appareil (idempotent par endpoint).
+  // Enregistre l’abonnement push d’un appareil (idempotent par endpoint).
   subscribe: protectedProcedure
     .input(
       z.object({
@@ -50,11 +50,20 @@ export const pushRouter = createTRPCRouter({
       return { ok: true };
     }),
 
-  // Indique si l'utilisateur a au moins un appareil abonné.
+  // Indique si l’utilisateur a au moins un appareil abonné, et expose la clé
+  // publique VAPID au client. NEXT_PUBLIC_* est inliné par Next.js au moment du
+  // BUILD, alors que les secrets ne sont injectés dans secret_environment_variables
+  // du conteneur qu’au moment du DEPLOY (bien après) - donc VAPID_PUBLIC_KEY ne
+  // peut pas atteindre le navigateur via une constante NEXT_PUBLIC_*. On la sert
+  // ici comme une donnée serveur ordinaire, lue au moment de la requête.
   status: protectedProcedure.query(async ({ ctx }) => {
     const subs = await ctx.db.query.pushSubscriptions.findMany({
       where: eq(pushSubscriptions.userId, ctx.session.user.id),
     });
-    return { subscribed: subs.length > 0, devices: subs.length };
+    return {
+      subscribed: subs.length > 0,
+      devices: subs.length,
+      vapidPublicKey: process.env.VAPID_PUBLIC_KEY ?? null,
+    };
   }),
 });

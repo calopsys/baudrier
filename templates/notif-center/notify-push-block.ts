@@ -8,6 +8,6 @@
 //
 //     import { sendPushToUser } from "~/server/push";
 //
-// (b) À la place de la ligne marker "// hypervibe:notify-push" dans notifyUser :
+// (b) À la place de la ligne marker "// baudrier:notify-push" dans notifyUser :
 //
 //     await sendPushToUser(db, userId, payload);

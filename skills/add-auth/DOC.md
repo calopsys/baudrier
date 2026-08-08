@@ -6,27 +6,26 @@ Adds **sign-in / signup** to your app. A single question decides between two mod
 
 - You want a private area on your site that only you (or a small team) can see
 - Your app has users who need to create an account, sign in, and have their own space
-- You want to add sign-in via Google or GitHub (you will run `/add-auth` first, then `/add-google-auth` or `/add-github-auth`)
 
 ## How it works
 
-1. **Check**: Hypervibe detects whether authentication is already in place on the project. If so, you get a small menu to evolve it (add Google, change the admin password, add "forgot password", etc.).
+1. **Check**: Baudrier detects whether authentication is already in place on the project. If so, you get a small menu to evolve it (change the admin password, add "forgot password", etc.).
 
-2. **Main question** (unless already chosen by `/bootstrap`): Hypervibe asks what type of authentication you want:
+2. **Main question** (unless already chosen by `/bootstrap`): Baudrier asks what type of authentication you want:
   - **Admin mode**: a single fixed login (yours), with a password stored in the environment variables. Perfect for a backoffice, a private dashboard, a site admin.
   - **Users mode**: a real system with signup, sign-in, account page, account deletion. Suitable when you have external users who need their own space.
 
 3. **Automatic setup**:
-  - **Admin mode**: Hypervibe generates a secure password, hashes it, pushes it into your Vercel + local variables. The plaintext password is shown to you **only once**: save it in your password manager.
-  - **Users mode**: Hypervibe adds the necessary tables to the database (users, sessions, accounts, verifications), creates the `/signin` / `/signup` / `/account` pages, the tRPC API for signup/sign-in, and the full NextAuth integration.
+  - **Admin mode**: Baudrier generates a secure password, hashes it, pushes it into your environment variables (local + your hosted app's secrets). The plaintext password is shown to you **only once**: save it in your password manager.
+  - **Users mode**: Baudrier adds the necessary tables to the database (users, sessions, accounts, verifications), creates the `/signin` / `/signup` / `/account` pages, the tRPC API for signup/sign-in, and the full NextAuth integration.
 
-4. **Optional follow-up**: Hypervibe then offers to add Google or GitHub OAuth as a complement (never as a replacement, email/password remains the baseline).
+This harness is **email + password only** - there is no Google/GitHub sign-in option, so there is nothing else to add on top.
 
 ## What it creates for you
 
 **In admin mode**:
 - A `src/server/auth.ts` file that handles a fixed login
-- The `ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH_DEV`, `ADMIN_PASSWORD_HASH_PROD` variables in `.env` + Vercel
+- The `ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH_DEV`, `ADMIN_PASSWORD_HASH_PROD` variables in `.env` + your app's secrets
 - An `isAdmin()` function you can use to protect pages
 - Password shown once for you
 
@@ -39,7 +38,7 @@ Adds **sign-in / signup** to your app. A single question decides between two mod
 ## Prerequisites
 
 - The project must be in Next.js
-- Users mode: requires a database, `/add-db` must have been run first (Hypervibe offers it to you if missing)
+- Users mode: requires a database, `/add-db` must have been run first (Baudrier offers it to you if missing)
 - Users mode with forgot password: also requires `/add-email` to be configured
 
 ## Tips

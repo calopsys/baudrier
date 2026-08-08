@@ -1,98 +1,56 @@
 # /delete-project
 
-Supprime proprement et définitivement un projet Hypervibe et toute son infrastructure cloud associée. Avant toute action, un gros avertissement et une double confirmation, car l'opération est **irréversible** (base de données, hébergement, fichiers stockés, sauvegardes, domaines, webhooks de paiement, services cloud).
+Supprime proprement et définitivement l'infrastructure Scaleway **jetable** d'un projet Baudrier. Avant toute action, un gros avertissement et une double confirmation, car l'opération est **irréversible** pour ce qu'elle supprime réellement.
+
+**Cette skill ne supprime jamais ta base de données, ton bucket de stockage de fichiers, ni le Project Scaleway lui-même.** C'est une limite volontaire, câblée en dur - pas une case à cocher. Voir ci-dessous.
 
 ## Quand l'utiliser
 
-- Vous abandonnez un projet (test, prototype, app obsolète) et vous voulez **tout nettoyer** pour ne pas laisser traîner d'infrastructure cloud
-- Vous voulez **éviter de payer** pour des services restés actifs (Render, Stripe live, Neon hors free tier, etc.)
-- Vous voulez **libérer des quotas** sur vos plans gratuits (Cloudflare R2, Neon, Vercel) pour vos prochains projets
-- Vous voulez **décommissionner** une app qui ne sera plus utilisée (fin de mission, départ d'un client, refonte complète)
+- Tu abandonnes un projet (test, prototype, app obsolète) et tu veux tout nettoyer plutôt que laisser de l'infrastructure tourner.
+- Tu veux arrêter de payer pour un projet dont tu n'as plus besoin.
+- Tu veux décommissionner complètement une app (fin de mission, départ d'un client, refonte complète).
 
-## Comment ça se passe
+## Comment ça marche
 
-La suppression se fait en **4 phases**, avec un point de validation explicite à chaque étape critique.
+**Phase 1 - Identification + gros avertissement.** L'assistant demande le nom exact du projet (s'il n'est pas déjà donné), affiche un avertissement complet listant ce qui sera supprimé **et, tout aussi visiblement, ce qui ne le sera jamais** (base de données, stockage, le Project lui-même), propose de faire une sauvegarde du code/de la config d'abord, puis demande deux confirmations séparées - la deuxième nécessite de retaper le nom exact du projet.
 
-**Phase 1 : Identification + gros avertissement**
+**Phase 2 - Inventaire complet.** Comme Baudrier garde un Scaleway Project dédié par app, l'assistant résout ce Project et liste tout ce qu'il contient en une passe : le site déployé (container) et son domaine personnalisé, le registre des images de build, les tâches planifiées (migrations, agents, tâches cron), les secrets stockés, les accès techniques (IAM) créés pour l'app, le domaine d'envoi d'emails, les entrées DNS ajoutées pour lui, la propre mémoire de travail de l'assistant sur le projet, et le dépôt GitHub. Il retrouve aussi la base de données et le bucket de stockage de fichiers - **uniquement pour pouvoir les nommer dans le rapport final**, jamais pour les supprimer - et scanne les variables d'environnement pour signaler tout service tiers que tu as connecté toi-même (Sentry, OpenAI, Mapbox, etc.) que Baudrier ne peut pas supprimer à ta place.
 
-1. Hypervibe vous demande le nom exact du projet à supprimer (si pas déjà fourni en argument).
-2. Un avertissement plein écran s'affiche, listant tout ce qui va être supprimé : données, sauvegardes, site en ligne, fichiers stockés, abonnements payants éventuels.
-3. **Première confirmation** : Hypervibe vous propose 3 options :
-  - Oui, je confirme la suppression définitive
-  - Non, juste mettre en pause (suspendre Vercel, mettre la base en veille, sans rien supprimer)
-  - Non, j'annule
-4. **Seconde confirmation** : Hypervibe vous demande de **retaper le nom exact** du projet (sensible à la casse) pour valider. Si la chaîne ne matche pas, la skill s'arrête.
+**Phase 3 - Choix du périmètre.** Tu reçois un récap clair en sections, en commençant par ce qui est définitivement conservé (base de données, stockage, le Project), puis ce qui peut être supprimé automatiquement, les services tiers à gérer toi-même (avec l'URL exacte et les instructions pour chacun), les actions manuelles que toi seul peux faire (supprimer le dossier local), et le reste laissé volontairement de côté. Tu choisis de tout supprimer dans la liste jetable ou de garder certaines pièces (par exemple les entrées DNS) - rien ne s'exécute avant validation.
 
-**Phase 2 : Inventaire complet**
+**Phase 4 - Exécution + rapport.** Tout ce qui est approuvé est supprimé, en parallèle quand c'est sûr. Le rapport commence par un rappel bien visible, jamais escamoté, de ce qui a été volontairement laissé en place - nom(s) exact(s) de la base, du bucket, du Project Scaleway - chacun avec un lien vers la console Scaleway, au cas où tu voudrais le supprimer toi-même à la main.
 
-Hypervibe lance un scan parallèle sur **17 surfaces** pour identifier tout ce qui appartient au projet :
-- Hébergement (Vercel)
-- Base de données (Neon)
-- Stockage de fichiers (Cloudflare R2, en versions globale et européenne)
-- Automatisations (Cloudflare Workers)
-- Domaines et DNS, redirection d'emails (Cloudflare)
-- Sauvegardes automatiques (worker `db-backup` partagé entre vos projets)
-- Tâches planifiées (crons enregistrés sur le worker partagé, qui sinon continueraient de frapper une URL morte)
-- Workers de fond (Render)
-- Paiements (webhooks Stripe)
-- Caches et files d'attente (Upstash)
-- Variables d'environnement locales et sur Vercel
-- Dossier de code local + dépendances
-- Mémoire Claude du projet
-- Repo GitHub
+## Ce que ça fait pour toi
 
-Le scan détecte aussi **les services tiers** branchés hors stack Hypervibe (Sentry, OpenAI, Mapbox, Notion, etc.) en analysant vos variables d'environnement.
-
-La détection est précise au mot près : chaque ressource est attribuée au projet le plus spécifique (supprimer `street` ne touche à rien de ce qui appartient à `street-cool`), et l'horloge partagée qui porte vos sauvegardes et vos tâches planifiées n'est jamais listée.
-
-**Phase 3 : Choix de la portée**
-
-Hypervibe vous présente un récap clair en 4 sections :
-
-- **🔵 Infrastructure Hypervibe** que la skill peut supprimer automatiquement
-- **🟠 Services tiers détectés** à supprimer vous-même (Hypervibe vous donne pour chacun l'URL exacte et les étapes clic-par-clic)
-- **🟡 Actions manuelles obligatoires** (suppression du dossier local, du repo GitHub, des clients OAuth Google/GitHub) que la skill ne peut pas faire pour vous
-- **⚪ Volontairement non touché** (Brevo/Resend partagés, zones Cloudflare parentes, produits Stripe)
-
-Vous choisissez : tout supprimer, ou garder certaines briques (DB, DNS, dossier local). La skill ne lance rien tant que ce choix n'est pas validé.
-
-**Phase 4 : Exécution + rapport**
-
-Hypervibe enchaîne les suppressions en parallèle où c'est possible (Vercel, R2, Workers, DNS, Stripe webhooks, Render, Upstash, Email Routing) puis en série là où il y a des dépendances (Neon, puis retrait du projet dans le worker `db-backup` partagé, puis ses tâches planifiées sur le worker partagé, puis mémoire Claude).
-
-À la fin, un rapport vous montre :
-- ✅ Ce qui a été supprimé automatiquement
-- 🟡 Les actions manuelles qu'il vous reste à faire (dossier local, repo GitHub, OAuth, services tiers détectés), avec pour chacune le chemin exact et les clics à faire
-- ℹ️ Ce qui a été volontairement laissé en place
-
-## Ce que ça fait pour vous
-
-- Supprime **toute l'infrastructure Hypervibe** automatisable du projet en une seule passe
-- Détecte **proactivement les services tiers** que vous avez branchés en cours de route et qui pourraient continuer à facturer
-- Vous donne pour chaque action restante **l'URL exacte et les instructions clic-par-clic**
-- Préserve **les services partagés** (Brevo, Resend, zones Cloudflare parentes, sauvegardes automatiques des autres projets) sans rien y toucher
-- Garantit qu'**aucune ressource orpheline ne traîne** dans vos comptes cloud
+- Supprime l'infrastructure Scaleway automatisable et jetable du projet en une seule passe.
+- Détecte de façon proactive les services tiers que tu as connectés toi-même, avec des instructions de nettoyage précises pour chacun.
+- Garantit qu'aucune ressource Scaleway ne reste orpheline parmi ce qu'elle supprime - y compris les accès techniques, faciles à oublier et qui comptent dans les plafonds du compte.
+- Ne touche jamais à un projet frère qui partage une partie de son nom.
+- **Ne détruit jamais tes données.** La base de données, le bucket de stockage (et tout son contenu), et le Project Scaleway qui les contient restent toujours en place - nommés explicitement dans le rapport final, avec des liens console, pour que tu saches toujours exactement ce qui existe encore et comment y accéder toi-même.
 
 ## Prérequis
 
-- Le projet doit être un projet Hypervibe (créé via `/bootstrap`)
-- Vous devez être connecté aux services concernés (`/start` s'en occupe pour Vercel, Cloudflare, GitHub, Neon)
-- Vous devez avoir le droit administrateur sur le projet (typiquement le cas si vous l'avez créé)
+- Le projet doit être un projet Baudrier (créé via `/bootstrap`), avec son propre Scaleway Project.
+- Les identifiants Scaleway doivent être configurés (`/start` s'en charge).
 
 ## Astuces
 
-{{callout:warning|L'opération est strictement irréversible}}
-Une fois la suppression lancée, **aucune donnée ne peut être récupérée**. Si votre projet contient des informations importantes (vraies commandes, comptes utilisateurs, photos uploadées par des clients...), prenez d'abord une sauvegarde manuelle (export DB, copie du dossier local, dump des fichiers R2) avant de lancer la skill. La double confirmation existe précisément pour ça.
+{{callout:warning|Ce qui EST supprimé l'est strictement irréversiblement}}
+Une fois lancée, l'infrastructure jetable listée dans le récap (container, registre, jobs, secrets, IAM, entrées DNS, domaine email, dépôt GitHub) ne peut pas être récupérée. Si quelque chose là-dedans compte pour toi (code, configuration), fais d'abord une sauvegarde - la skill te le propose avant la double confirmation.
 {{/callout}}
 
-{{callout:tip|Vous pouvez juste mettre en pause}}
-Si vous hésitez à supprimer définitivement, choisissez l'option "juste mettre en pause" à la première confirmation. Hypervibe suspend le projet Vercel et met la base Neon en veille : aucune dépense, aucun trafic, mais rien n'est perdu. Vous pourrez réactiver plus tard si besoin, ou relancer `/delete-project` pour supprimer pour de bon.
+{{callout:info|Ta base de données et ton stockage de fichiers ne sont jamais supprimés}}
+C'est une limite câblée dans le script de suppression lui-même, pas une case à cocher : `/delete-project` n'a aucun chemin de code capable de supprimer une base de données ou un bucket (ou de le vider). Le Project Scaleway qui les contient n'est pas non plus supprimé - le supprimer ferait disparaître tout ce qu'il contient encore, tes données comprises. Le rapport final nomme toujours exactement ce qui a été laissé en place et donne le lien console correspondant, pour que TOI (un humain) puisses le supprimer toi-même si tu en es certain.
 {{/callout}}
 
-{{callout:info|Garde le contrôle sur ce qui est supprimé}}
-À la Phase 3, vous n'êtes pas obligé de tout supprimer en bloc. Vous pouvez par exemple garder la base de données (pour récupérer les données plus tard) tout en supprimant l'hébergement, ou garder le DNS (pour réutiliser le domaine sur un nouveau projet) tout en nettoyant le reste. Hypervibe vous propose chaque option à la carte.
+{{callout:info|La sauvegarde avant suppression n'inclut pas la base}}
+La machine de l'opérateur n'a pas d'accès direct à la base de données (voir la documentation de `/save-project` pour comprendre pourquoi), donc l'instantané optionnel proposé avant suppression ne contient pas la base - même si, la base n'étant jamais supprimée par cette skill, ça pose rarement problème en pratique.
 {{/callout}}
 
-{{callout:info|Le dossier local et le repo GitHub restent à votre charge}}
-Pour des raisons de sécurité, Hypervibe ne supprime jamais le dossier de code sur votre ordinateur, ni le repo GitHub. Vous recevez à la fin du processus le chemin exact à ouvrir dans l'explorateur Windows pour supprimer le dossier, et l'URL GitHub pour supprimer le repo (dans Settings : Danger Zone). C'est une étape consciente pour éviter de perdre du code par erreur.
+{{callout:info|Tu gardes le contrôle de ce qui est supprimé}}
+À l'étape du périmètre, tu n'es pas obligé de tout supprimer d'un coup - tu peux par exemple garder les entrées DNS pour réutiliser le domaine sur un nouveau projet.
+{{/callout}}
+
+{{callout:info|Le dossier local reste sous ta responsabilité}}
+Pour ta sécurité, l'assistant ne supprime jamais le dossier de code du projet sur ton ordinateur. À la fin, tu reçois le chemin exact à ouvrir dans ton explorateur de fichiers.
 {{/callout}}

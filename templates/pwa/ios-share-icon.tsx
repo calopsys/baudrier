@@ -1,5 +1,5 @@
 // Pictogramme de partage iOS (SF Symbol "square.and.arrow.up"), utilisé par
-// InstallPrompt pour les instructions "Ajouter à l'écran d'accueil" sur iOS.
+// InstallPrompt pour les instructions "Ajouter à l’écran d’accueil" sur iOS.
 export function IosShareIcon({ className }: { className?: string }) {
   return (
     <svg

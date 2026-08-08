@@ -1,4 +1,4 @@
-// hypervibe:roles {{ROLES_CSV}}
+// baudrier:roles {{ROLES_CSV}}
 //
 // Roles are stored as a Postgres enum array on the `users` table. A user may
 // have one or several roles. Helpers below abstract the storage and provide a

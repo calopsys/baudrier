@@ -1,39 +1,44 @@
 # /start
 
-Prépare votre ordinateur pour qu'il puisse créer des applications avec Hypervibe.
+Prépare votre environnement Claude Code web pour qu’il puisse créer des applications avec Baudrier.
 
-## Quand l'utiliser
+## Quand l’utiliser
 
-C'est la **toute première commande** à lancer juste après avoir installé le plugin. Elle s'occupe de l'installation des outils nécessaires et de la connexion à vos comptes (GitHub, Vercel, base de données, etc.). Vous ne devriez avoir à la lancer qu'une seule fois.
+C’est la **toute première commande** à lancer juste après avoir ouvert un environnement cloud « Baudrier » sur Claude Code web (claude.ai/code). Elle vérifie chaque prérequis et vous guide en cas de configuration Scaleway manquante. Vous ne devriez avoir à la lancer qu’une seule fois par environnement.
 
 ## Comment ça se passe
 
-1. **Bienvenue + détection** : la commande vérifie quel système vous utilisez (Windows, Mac, Linux).
-2. **Audit silencieux** : elle regarde ce qui est déjà installé sur votre machine, sans rien casser.
-3. **Installation automatique des bases** : si Node.js, Git ou pnpm manquent, ils sont installés tout seuls (sans rien vous demander).
-4. **Rapport** : un récap clair vous montre ce qui est OK ✅, ce qui manque ❌, et ce qui est installé mais pas connecté ⚠️.
-5. **Token Cloudflare** : Hypervibe vous guide pour générer un token (pas-à-pas, 1 minute) que vous collez dans le chat. Il sera sauvegardé pour de bon.
-6. **Connexions CLI** : un script ouvre une fenêtre dédiée et vous fait vous connecter à GitHub, Vercel, Cloudflare l'un après l'autre. Vous suivez les instructions à l'écran (un navigateur s'ouvre pour chaque connexion).
-7. **Clé Neon** : si vous avez connecté la base de données Neon, vous générez une clé API (encore 30 secondes) que la commande sauvegarde. Ça active les sauvegardes automatiques de vos futures bases.
-8. **Récap final + commandes** : à la fin, vous avez un tour d'horizon des commandes disponibles (`/bootstrap`, `/spec`, `/prof`, etc.).
-9. **Règles globales** : un petit fichier de règles (`~/.claude/CLAUDE.md`) est créé pour que Claude Code suive vos conventions sur tous vos projets (pas de build pour rien, pas de push sans accord, etc.).
+1. **Vérification de l’environnement** : la commande vérifie qu’elle tourne bien sur Claude Code web. Baudrier n’a plus de chemin d’installation locale : sur toute autre session, elle s’arrête immédiatement et vous renvoie au chapitre Installation du README, plutôt que de démarrer à moitié.
+2. **Dépendances internes** : Baudrier vérifie les librairies qui lui permettent de dialoguer avec votre hébergeur. Le script de configuration de l’environnement cloud les installe normalement à la construction ; un échec ici signifie qu’une vraie réparation est nécessaire - Baudrier rejoue alors ce script pour vous.
+3. **Accès au dépôt** : confirme que cette session peut atteindre le dépôt GitHub sur lequel elle a été ouverte.
+4. **Signature de votre code** : Git a besoin de savoir qui signe les enregistrements de votre code, sinon il refuse d’en créer un seul. Baudrier reprend votre nom depuis le propriétaire du dépôt et vous propose une adresse de redirection GitHub : vos contributions restent rattachées à votre compte, mais votre adresse personnelle n’apparaît jamais dans l’historique public. Une seule confirmation, et c’est réglé pour tous vos projets.
+5. **Identifiants et droits Scaleway** : vérifie que les quatre variables d’environnement requises sont présentes, les valide par un vrai appel API, puis vérifie si votre compte peut créer des Projets Scaleway. Si ce n’est pas le cas, Baudrier explique les deux façons de continuer : recréer la clé vous-même (administrateur d’organisation), ou pointer vers un Projet existant et laisser votre administrateur gérer le reste (membre d’organisation).
+6. **Accès réseau** : confirme que l’accès réseau de l’environnement atteint bien l’API Scaleway.
+7. **Docker et audit des outils** : confirme que Docker répond et que tous les outils que l’environnement devait installer sont vraiment prêts. Sinon, Baudrier recommande de reconstruire l’environnement cloud plutôt que de réparer les outils un par un.
+8. **Vérification d’identité (optionnelle)** : Baudrier explique pourquoi vérifier votre identité chez Scaleway est utile (plafonds plus hauts pour les emails, le stockage, les conteneurs) et propose d’ouvrir la page - entièrement optionnel, jamais bloquant.
+9. **Récap final et conclusion** : un tour d’horizon de ce que vous pouvez faire ensuite (`/bootstrap`, `/prof`, etc.).
 
 ## Ce que ça crée pour vous
 
-- Node.js, pnpm et Git installés et opérationnels
-- GitHub, Vercel, Wrangler (Cloudflare) connectés à vos comptes
-- Token Cloudflare et clé Neon API sauvegardés dans votre ordinateur. Vous n'aurez plus à les retaper
-- Un fichier de règles globales pour Claude Code (`~/.claude/CLAUDE.md`)
+- Les librairies internes de Baudrier installées et vérifiées
+- Un accès confirmé à votre dépôt GitHub
+- Une identité de signature git, pour que chaque enregistrement de votre travail vous soit attribué sans exposer votre adresse personnelle
+- Des identifiants Scaleway confirmés, avec un chemin clair si votre compte n’a pas les droits au niveau de l’organisation
+- Docker et les outils confirmés prêts dans l’environnement cloud
 - Une liste des commandes que vous pouvez maintenant utiliser
 
 ## Prérequis
 
-Aucun. C'est par là que tout commence.
+Un environnement cloud « Baudrier » déjà créé et actif sur Claude Code web, avec les variables d’environnement Scaleway renseignées - voir le chapitre Installation du README.
 
-{{callout:info|Pourquoi tous ces outils}}
-Pour créer des apps complètes, Hypervibe orchestre plusieurs services : GitHub stocke le code, Vercel met l'app en ligne, Neon héberge la base de données, Resend envoie les emails, Cloudflare gère le DNS et les fichiers. La commande `/start` installe et connecte tout ça **une seule fois** : ensuite vous n'y pensez plus.
+{{callout:info|Pourquoi si peu d’outils}}
+Ce plugin repose entièrement sur Scaleway : un seul hébergeur pour tout (l’app, la base de données, le stockage, les emails, le registre de conteneurs, les secrets). Le script de configuration de l’environnement cloud préinstalle exactement ce que ça demande - Node.js, Git, pnpm et Docker. `/start` n’a plus qu’à les vérifier, ainsi que votre connexion GitHub et vos identifiants Scaleway.
 {{/callout}}
 
 {{callout:tip|Si quelque chose se passe mal}}
-Le script qui installe les outils peut être interrompu (fermeture de fenêtre, connexion refusée, Ctrl+C). Aucun problème : relancez simplement `/start`. La commande détecte ce qui est déjà OK et reprend là où ça s'était arrêté. Pas de risque de tout casser.
+Aucun problème : relancez simplement `/start`. La commande détecte ce qui est déjà OK et reprend là où ça s’était arrêté. Pas de risque de tout casser.
+{{/callout}}
+
+{{callout:info|Installer sur Claude Code web}}
+Le guide complet pas à pas est le chapitre Installation du README : création de votre clé API Scaleway, connexion de GitHub, et création de l’environnement cloud « Baudrier ».
 {{/callout}}

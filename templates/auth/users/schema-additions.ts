@@ -23,9 +23,14 @@ export const users = createTable("user", {
     withTimezone: true,
   }).default(sql`CURRENT_TIMESTAMP`),
   image: text("image"),
-  // scrypt hash for credentials login (format: `salt:hash` hex:hex).
+  // scrypt hash for credentials login (format: `scrypt:N=..,r=..,p=..:salt:hash`).
   // Null for OAuth-only accounts (no credentials).
   passwordHash: text("password_hash"),
+  // Bumped on password reset. The jwt() callback in auth.ts re-checks this on
+  // every request against the value embedded in the token at sign-in - a
+  // mismatch means the token predates a reset, so it's rejected even though
+  // sessions here are stateless JWTs with no server-side row to delete.
+  sessionVersion: integer("session_version").notNull().default(0),
 });
 
 export const accounts = createTable(

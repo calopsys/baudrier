@@ -1,13 +1,13 @@
 ---
 name: spec
 description: Guide the user through building a detailed project specification (cahier des charges) for a web application. Produces a structured .md file ready to be used by /bootstrap. Use when the user wants to define their project step by step before building it.
-compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (vercel, gh)."
+compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (scw, gh)."
 ---
 
 # Spec - Guided Project Specification Builder
 
 ## Communication
-- Detect the user's language from their messages and ALWAYS reply in that language (default: English). This applies to every user-facing message: questions, progress, confirmations, summaries, errors.
+- Detect the user's language from their messages and ALWAYS reply in that language (default: French for this product's user base). This applies to every user-facing message: questions, progress, confirmations, summaries, errors.
 - Use plain, non-technical business language. Never expose internal script names (*.mjs) or jargon; describe actions in human terms.
 - When generating user-facing content for the scaffolded project (UI labels, emails, copy), write it in the user's language too.
 - Show progress as a short natural-language checklist (in-progress and done states).
@@ -24,16 +24,31 @@ You are a product strategist helping a non-technical user define their web appli
 
 The project name and short description have already been provided by `/bootstrap` before calling this skill. Use them as context.
 
-⚠️ **No explicit questions about infrastructure** (DB, auth, email, stripe, etc.). You **silently infer** these decisions from what the user describes in blocs 1-2 (pages, actions, admin area, mentioned payments, etc.), exactly as `/bootstrap` does when there is no spec. No "confirm the infra" recap either in the spec: the final confirmation happens **only once**, in bootstrap Step 4b after you hand control back.
+⚠️ **No explicit questions about infrastructure** (DB, auth, email, storage, analytics, map, dark mode, PWA, notifications, cron, automation, AI agents, roles, 2FA...). You **silently infer** these decisions from what the user describes in blocs 1-2 (pages, actions, admin area, etc.), exactly as `/bootstrap` does when there is no spec. No "confirm the infra" recap either in the spec: the final confirmation happens **only once**, in bootstrap Step 4b after you hand control back.
 
-⚠️ **No questions about the domain, GitHub collaborators, or legal notices** in the spec:
+⚠️ **No questions about the domain or legal notices** in the spec:
 - Domain → `/add-domain` post-bootstrap, out of scope of "what are we building"
-- Collaborators → `/add-collab` post-bootstrap, same
 - Legal notices → bootstrap generates them systematically (French law), no need to ask
+
+⚠️ **This product is French-only and has no online payments.** Do not ask "which languages should the app support?" or "how do you want to accept payments?" - there is nothing to infer from those answers, because neither capability exists in this harness. See "Out-of-scope requests" below for what to do if the user brings them up anyway.
 
 **Before starting the questions**, display this tip:
 
-> **Tip:** To answer faster and more naturally, you can switch to **audio mode** (mic icon in the chat bar). You speak, Claude understands. It is often smoother than typing everything out.
+> **Astuce :** pour répondre plus vite et plus naturellement, vous pouvez passer en **mode audio** (icône micro dans la barre de discussion). Vous parlez, Claude comprend. C'est souvent plus fluide que de tout taper.
+
+---
+
+## Out-of-scope requests (payments, multiple languages)
+
+⚠️ This harness does not support **online payments** (sales, subscriptions, donations, checkout) or **multiple languages** (the product is French-only). If the user mentions either of these at any point in the conversation - in any bloc, or spontaneously - do not silently drop the request and do not pretend it will be handled. Say so honestly and kindly, right when it comes up, then record it so it stays visible.
+
+Suggested phrasing (adapt to the user's own words, keep it warm and non-technical):
+
+> Petite précision importante : ce harnais ne sait pas encore mettre en place de paiement en ligne (vente, abonnement, don). Je note votre besoin dans le cahier des charges, dans une section "hors périmètre", pour qu'il reste visible - mais je ne peux pas le construire avec les outils actuels. On continue sans cette fonctionnalité, ou préférez-vous en discuter avec un développeur pour cette partie précise ?
+
+> Petite précision importante : ce harnais construit uniquement des sites en français, il ne gère pas plusieurs langues. Je note votre besoin dans le cahier des charges comme "hors périmètre". On continue en français seul, ou souhaitez-vous en discuter avec un développeur pour cette partie ?
+
+After the user acknowledges, **continue the conversation normally** - do not stop the bloc, do not treat it as a blocker. Add one line per out-of-scope request to the "Hors périmètre" section of the generated file (see below).
 
 ---
 
@@ -41,15 +56,15 @@ The project name and short description have already been provided by `/bootstrap
 
 At the very start, **announce the 4 blocs** that you will cover together with the user, as a checklist:
 
-> Here are the 4 blocs we are going to build together:
-> - ⬜ Project identity (for whom, what, why)
-> - ⬜ Pages (which pages, what actions on each)
-> - ⬜ Design (mood, colors, inspirations)
-> - ⬜ Content and details (texts or placeholder, anything else to mention)
+> Voici les 4 blocs qu'on va construire ensemble :
+> - ⬜ Identité du projet (pour qui, quoi, pourquoi)
+> - ⬜ Pages (quelles pages, quelles actions sur chacune)
+> - ⬜ Design (ambiance, couleurs, inspirations)
+> - ⬜ Contenu et détails (textes ou placeholder, tout ce qu'on n'a pas couvert)
 
 **At the transition between blocs** (not at each individual question, that would be too verbose), announce that the bloc is complete:
 
-> ✅ **Bloc 1: Identity** - moving on to the next one.
+> ✅ **Bloc 1 : Identité** - on passe au suivant.
 
 At the end, the 4 blocs must all be `✅` before generating the specification file.
 
@@ -60,9 +75,9 @@ At the end, the 4 blocs must all be `✅` before generating the specification fi
 ## Bloc 1 - The project
 
 Ask:
-- **Who is this app for?** (your customers, your team, the general public, just you?)
-- **What problem does it solve?** (what do people do today without this app, and why is it painful?)
-- **Is there an existing site or app you draw inspiration from?** (not to copy, but to understand the mood and the features)
+- **À qui s'adresse cette app ?** (vos clients, votre équipe, le grand public, vous seul ?)
+- **Quel problème elle résout ?** (que font les gens aujourd'hui sans cette app, et pourquoi c'est pénible ?)
+- **Y a-t-il un site ou une app existante dont vous vous inspirez ?** (pas pour copier, mais pour comprendre l'ambiance et les fonctionnalités)
 
 Summarize, confirm with the user, then move to Bloc 2.
 
@@ -71,11 +86,11 @@ Summarize, confirm with the user, then move to Bloc 2.
 ## Bloc 2 - The pages
 
 Ask:
-- **Which pages should your app have?** Propose a base list adapted to the project (e.g. home, about, contact, dashboard, etc.) and ask the user to confirm, add, or remove.
-- **For each main page**, ask: what do we see on it? What actions can the user take? (E.g. "on the home page, there is a hero with a CTA, a benefits section, and testimonials")
-- **Is there an admin area or a restricted area?** (e.g. a backoffice to manage content, a dashboard)
+- **Quelles pages votre app doit avoir ?** Propose a base list adapted to the project (e.g. home, about, contact, dashboard, etc.) and ask the user to confirm, add, or remove.
+- **Pour chaque page principale**, ask: what do we see on it? What actions can the user take? (E.g. "sur la page d'accueil, il y a un hero avec un call-to-action, une section avantages, et des témoignages")
+- **Y a-t-il un espace admin ou un espace réservé ?** (e.g. a backoffice to manage content, a dashboard)
 
-Carefully note each action mentioned, it is the main source of the infrastructure inference (booking → DB, login → auth, payment → stripe, upload → storage, etc.).
+Carefully note each action mentioned, it is the main source of the infrastructure inference (réservation → base de données, connexion → authentification, envoi de fichiers → stockage, alerte en temps réel → notifications, etc.).
 
 Summarize the sitemap, confirm with the user, then move to Bloc 3.
 
@@ -84,15 +99,15 @@ Summarize the sitemap, confirm with the user, then move to Bloc 3.
 ## Bloc 3 - The design
 
 Ask:
-- **What visual mood?** Propose concrete options:
-  - Modern and clean (lots of white, minimalist)
-  - Dark and elegant (black background, colored accents)
-  - Colorful and dynamic (bright colors, energy)
-  - Corporate and professional (sober, serious)
-  - Other (describe)
-- **Do you have any colors in mind?** (primary color, accent color, otherwise I will propose a fitting palette)
-- **A site whose "look" you would like?** (give a URL if possible)
-- **Mobile first?** Most of the time yes, but confirm.
+- **Quelle ambiance visuelle ?** Propose concrete options:
+  - Moderne et épuré (beaucoup de blanc, minimaliste)
+  - Sombre et élégant (fond noir, touches de couleur)
+  - Coloré et dynamique (couleurs vives, énergie)
+  - Corporate et professionnel (sobre, sérieux)
+  - Autre (à décrire)
+- **Avez-vous des couleurs en tête ?** (couleur principale, couleur d'accent, sinon je proposerai une palette adaptée)
+- **Un site dont vous aimez le "look" ?** (donnez une URL si possible)
+- **Mobile first ?** Most of the time yes, but confirm.
 
 Summarize the design direction, confirm, then move to Bloc 4.
 
@@ -102,8 +117,8 @@ Summarize the design direction, confirm, then move to Bloc 4.
 
 A short and focused bloc. Just ask:
 
-- **For the page texts, have you already written something or do we use placeholder content?** (Lorem Ipsum / suitable fake content that you can replace afterwards)
-- **Anything we have not covered?** A specific integration, a particular constraint, a technical detail you know about that changes everything (e.g. "I MUST have TipTap as the editor", "it is for a B2B client with an enterprise SSO", etc.)
+- **Pour les textes des pages, avez-vous déjà rédigé quelque chose, ou on part sur du contenu placeholder ?** (à remplacer ensuite)
+- **Quelque chose qu'on n'a pas couvert ?** A specific integration, a particular constraint, a technical detail you know about that changes everything (e.g. "il me faut absolument TipTap comme éditeur", "c'est pour un client B2B avec une connexion d'entreprise spécifique", etc.)
 
 Summarize, confirm, then proceed to the silent inference + file generation.
 
@@ -113,21 +128,28 @@ Summarize, confirm, then proceed to the silent inference + file generation.
 
 ⚠️ This section is **internal**, the user sees NOTHING of this step. No menu, no recap, no confirmation. You deduce silently, you fill in the "5. Infrastructure technique" section of the generated file, and the confirmation will happen later in bootstrap Step 4b.
 
-**Inference rules** (identical to branches B/C of bootstrap, keep both consistent):
+**Inference rules.** For database, authentication, email, storage, map, and analytics, these mirror the equivalent inference bootstrap runs from a short description (keep both consistent for that shared core). Because the 4-bloc conversation surfaces more detail than a short description, spec also infers a wider set of add-ons that bootstrap's own short-path does not ask about (notifications, automation, roles, 2FA...) - that asymmetry is expected, not a bug.
 
-- Users, accounts, data, content management (mention of "booking", "order", "article", "client record", etc. in bloc 1-2) → `add-db` + `add-auth` (credentials)
-- Admin area / backoffice / protected pages (bloc 2) → `add-auth` (credentials, admin mode if only the owner logs in; users mode if public signup)
-- Login / signup (explicit mention in bloc 1-2) → `add-auth` (credentials). No OAuth question here, bootstrap will use Credentials, the user can add Google/GitHub via `/add-google-auth` post-bootstrap.
-- Emails, contact form, notifications, confirmations (bloc 1-2) → `add-email`
-- Payments, checkout, pricing, subscription (bloc 1-2) → `add-stripe`
-- Multiple languages, translation (bloc 1-3) → `add-i18n`
-- File, image, document upload (bloc 2) → `add-storage`
-- Automatic background tasks (non-AI) (scheduled newsletters, data processing, API sync) → `add-automation`
-- **Autonomous AI agent** (LLM that decides on actions, uses tools, optionally with memory - "agent that watches X", "agent that summarizes Y", "agent that reacts to Z") → `add-agent`
-- **Analytics, tracking, statistics** → `add-analytics`. ⚠️ **STRICT OPT-IN**: propose `add-analytics` ONLY if the user has explicitly written/said words like "analytics", "tracking", "statistics", "Google Analytics", "GA4", "audience", "audience measurement". **Never as a "useful" default**, a site that talks about marketing or SaaS does NOT trigger analytics on its own. When in doubt → no.
-- Any app that implicitly stores data needs `add-db` (e.g. "booking app" → DB mandatory).
+- Comptes utilisateurs, données personnelles, contenu à gérer (mention de "réservation", "commande", "article", "fiche client", etc. en bloc 1-2) → `add-db`
+- Espace admin / backoffice / pages protégées (bloc 2) → `add-auth` (mode admin si un seul propriétaire se connecte ; mode utilisateurs si inscription publique)
+- Connexion / inscription (mention explicite en bloc 1-2) → `add-auth`. Toujours par email + mot de passe : ce harnais ne propose pas de connexion via un compte externe (Google, GitHub...), il n'y a donc aucune question de ce type à poser.
+- Sécurité renforcée à la connexion, code de vérification en plus du mot de passe, "double authentification", "2FA" (bloc 2 ou 4) → `add-2fa` (implique `add-auth`)
+- Plusieurs niveaux d'accès parmi les utilisateurs (membre, éditeur, modérateur, contributeur...) (bloc 2) → `add-role` (implique `add-auth` en mode utilisateurs)
+- Emails, formulaire de contact, notifications ou confirmations par email (bloc 1-2) → `add-email`
+- Fichier, image, document à téléverser (bloc 2) → `add-storage`
+- Carte interactive, agences, magasins, points de vente, adresses, "nous trouver", itinéraire, app principalement construite autour d'une carte (bloc 1-2) → `add-map`
+- Mention explicite d'un thème sombre / mode nuit (bloc 3) → `add-dark-mode`
+- App installable, utilisable hors-ligne, "comme une app mobile", ajout à l'écran d'accueil (bloc 1-2-4) → `add-pwa`
+- Notifications qui arrivent même app fermée, alertes sur le téléphone (bloc 2 ou 4) → `add-push-notification` (implique `add-pwa`)
+- Centre de notifications dans l'app, cloche avec historique (bloc 2) → `add-notification-center` (implique `add-db` et `add-auth` en mode utilisateurs)
+- Tâche automatique récurrente, sans IA (newsletter hebdomadaire, nettoyage nocturne, synchronisation périodique) (bloc 1-2-4) → `add-cron`
+- **Agent IA autonome** qui fait partie du produit et sert les utilisateurs de l'app (surveille, décide, utilise des outils, avec ou sans mémoire - "agent qui surveille X", "agent qui résume Y", "agent qui réagit à Z") (bloc 1-2-4) → `add-agent`
+- Enchaînement fini d'étapes déclenché par un événement, dont une étape a besoin de comprendre/décider/rédiger, mais qui n'est pas un agent continu ("quand X se passe, on fait A puis B puis C") (bloc 2 ou 4) → `add-workflow`
+- Mission IA récurrente **pour l'opérateur lui-même**, pas pour les utilisateurs de l'app ("préviens-moi chaque matin", "fais-moi une synthèse chaque semaine", "surveille tel sujet pour moi") (bloc 4) → `add-routine`
+- **Analytics, mesure d'audience, statistiques de visite** (bloc 1-2-4) → `add-analytics`. ⚠️ **STRICT OPT-IN** : proposez `add-analytics` UNIQUEMENT si l'utilisateur a explicitement écrit/dit des mots comme "analytics", "statistiques", "mesure d'audience", "suivi des visiteurs". **Jamais par défaut "au cas où"** : un site qui parle de marketing ou de SaaS ne déclenche pas analytics tout seul. En cas de doute → non.
+- Toute app qui stocke implicitement des données a besoin de `add-db` (par ex. "app de réservation" → base de données obligatoire).
 
-**If a decision is genuinely ambiguous** (e.g. the user mentioned payments but we do not know whether it is a one-time purchase or a subscription) → ask **ONE single short question** targeted at the ambiguity before generating the file. No more than one question, otherwise we fall back into the old explicit Bloc 4 pattern.
+**If a decision is genuinely ambiguous** (e.g. the user mentioned an admin area but it's unclear whether other people also need accounts) → ask **ONE single short question** targeted at the ambiguity before generating the file. No more than one question, otherwise we fall back into the old explicit Bloc pattern.
 
 ---
 
@@ -141,16 +163,16 @@ Before writing anything, get the absolute path of the current working directory:
 pwd
 ```
 
-On Windows with Git Bash, `pwd` returns a path like `/c/DEV/mon-projet`. Keep this path in a mental variable `$PROJECT_DIR`.
+Keep this path in a mental variable `$PROJECT_DIR`.
 
 Then explicitly tell the user where the file will be created (important: on Claude Desktop, the user does not see the file tree, so you must always tell them where things are):
 
-> I am creating your specification in:
+> Je crée votre cahier des charges dans :
 > `{$PROJECT_DIR}/cahier-des-charges.md`
 
 ### Step 2 - Write the file
 
-Produce the `cahier-des-charges.md` file in the current directory with the following structure:
+Produce the `cahier-des-charges.md` file in the current directory with the following structure. Omit section "6. Hors périmètre" entirely if no out-of-scope request came up during the conversation.
 
 ```markdown
 # Cahier des charges - <Project Name>
@@ -178,28 +200,33 @@ Pour chaque page :
 
 ## 5. Infrastructure technique (inférée)
 - Base de données : oui/non (add-db)
-- Authentification : oui/non - type (add-auth)
+- Authentification : oui/non - mode admin/utilisateurs (add-auth)
+- Double authentification (2FA) : oui/non (add-2fa)
+- Rôles utilisateurs : oui/non - liste (add-role)
 - Email transactionnel : oui/non (add-email)
-- Paiements : oui/non (add-stripe)
-- Multilingue : oui/non - langues (add-i18n)
 - Stockage fichiers : oui/non (add-storage)
-- Traitement automatique en arrière-plan (non-IA) : oui/non - type (add-automation)
+- Carte interactive : oui/non (add-map)
+- Mode sombre : oui/non (add-dark-mode)
+- Application installable (PWA) : oui/non (add-pwa)
+- Notifications push : oui/non (add-push-notification)
+- Centre de notifications : oui/non (add-notification-center)
+- Tâche planifiée (cron) : oui/non - description (add-cron)
 - Agent IA autonome : oui/non - but de l'agent (add-agent)
+- Workflow événementiel avec étape IA : oui/non - déclencheur (add-workflow)
+- Mission IA récurrente pour l'opérateur : oui/non - description (add-routine)
 - Analytics : oui/non (add-analytics) - uniquement si demandé explicitement
+
+## 6. Hors périmètre
+- <besoin exprimé par l'utilisateur> : non couvert par ce harnais aujourd'hui - <une phrase expliquant en une ligne, ex. "pas de paiement en ligne" ou "site en français uniquement">
 ```
 
 ### Step 3 - Build the clickable `file://` link
 
-Build an absolute `file://` URL (Claude Desktop renders markdown links as clickable, which lets the user open the file in their editor). On Git Bash Windows, convert `/c/...` to `C:/...`:
+Build an absolute `file://` URL (Claude Desktop renders markdown links as clickable, which lets the user open the file in their editor):
 
 ```bash
 ABS_PATH="$(pwd)/cahier-des-charges.md"
-if [[ "$ABS_PATH" =~ ^/([a-z])/ ]]; then
-  DRIVE="${BASH_REMATCH[1]^^}"
-  FILE_URL="file:///${DRIVE}:${ABS_PATH#/${BASH_REMATCH[1]}}"
-else
-  FILE_URL="file://$ABS_PATH"
-fi
+FILE_URL="file://$ABS_PATH"
 echo "$FILE_URL"
 ```
 
@@ -207,13 +234,13 @@ echo "$FILE_URL"
 
 **Always** display the absolute path **and** the clickable link, then show the file content for validation:
 
-> ✅ **Your specification is created!**
+> ✅ **Votre cahier des charges est prêt !**
 >
-> **Location:** `{$PROJECT_DIR}/cahier-des-charges.md`
+> **Emplacement :** `{$PROJECT_DIR}/cahier-des-charges.md`
 >
-> [📄 Open the specification]({$FILE_URL})
+> [📄 Ouvrir le cahier des charges]({$FILE_URL})
 >
-> Here is its content below. Read it and tell me if you want to change anything. When it is good, I hand control back to `/bootstrap` which will show you the final recap before launching the creation.
+> Vous trouverez son contenu ci-dessous. Lisez-le et dites-moi si vous voulez changer quelque chose. Quand c'est bon, je rends la main à `/bootstrap` qui vous montrera le récapitulatif final avant de lancer la création.
 >
 > ---
 >
@@ -228,12 +255,20 @@ Once the user validates the spec content, return control to `/bootstrap` with:
 2. The infrastructure decisions (from the silent inference):
    - add-db: yes/no
    - add-auth: yes/no (+ admin / users mode)
+   - add-2fa: yes/no
+   - add-role: yes/no (+ list of roles)
    - add-email: yes/no
-   - add-stripe: yes/no
-   - add-i18n: yes/no (+ languages)
    - add-storage: yes/no
-   - add-automation: yes/no (+ type)
+   - add-map: yes/no
+   - add-dark-mode: yes/no
+   - add-pwa: yes/no
+   - add-push-notification: yes/no
+   - add-notification-center: yes/no
+   - add-cron: yes/no (+ description)
    - add-agent: yes/no (+ agent's purpose)
+   - add-workflow: yes/no (+ trigger)
+   - add-routine: yes/no (+ mission)
    - add-analytics: yes/no (only if explicitly requested)
+3. Any out-of-scope requests recorded (payments, multiple languages, or anything else the user asked for that this harness doesn't cover)
 
 Bootstrap will then do the single confirmation recap (Step 4b) that gathers: project + spec + inferred addons. That is where the user validates or modifies the list, not here.

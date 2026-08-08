@@ -13,21 +13,21 @@ The criterion: the output is **for you** (or your team), not for your app or its
 
 ## How it goes
 
-1. **You describe the mission and the pace.** If your sentence already says it all ("brief me every morning on my competitors"), Hypervibe asks nothing more.
+1. **You describe the mission and the pace.** If your sentence already says it all ("brief me every morning on my competitors"), Baudrier asks nothing more.
 
-2. **The guard**: if what you describe actually serves your app (cleaning the database, emailing your customers...), Hypervibe stops you honestly and reroutes: an app must never depend on your personal Claude account.
+2. **The guard**: if what you describe actually serves your app (cleaning the database, emailing your customers...), Baudrier stops you honestly and reroutes: an app must never depend on your personal Claude account.
 
 3. **The two truths, said plainly**: the routine runs on **your Claude account** (each run consumes a bit of your subscription, and stops if the subscription stops); depending on your setup it runs in the cloud (even with your computer off) or on this computer while the Claude app is open.
 
 4. **The mission is drafted with you**: objective, steps, resources, deliverable, limits. It is THE contract of the routine; you validate it before anything is created.
 
-5. **Creation and verification**: the routine is created, verified, and Hypervibe tells you when it runs next.
+5. **Creation and verification**: the routine is created, verified, and Baudrier tells you when it runs next.
 
 ## What it creates for you
 
 - A **routine on your Claude account** (cloud or local), with its mission validated by you
 - **Nothing in your project**: no code, no table, no deployment
-- If the mission concerns one of your Hypervibe projects: a note in its `CLAUDE.md`
+- If the mission concerns one of your Baudrier projects: a note in its `CLAUDE.md`
 
 ## Prerequisites
 

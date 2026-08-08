@@ -7,12 +7,15 @@
 //   - HTTP/HTTPS only (no file://, gopher://, etc.)
 //   - SSRF guard: refuses localhost and private/loopback/link-local/metadata
 //     IP ranges (resolves the hostname first, so a public name pointing at an
-//     internal IP is also blocked)
+//     internal IP is also blocked). Redirects are followed manually (up to 5
+//     hops), re-running this same check on every Location target - a public
+//     URL that later 302s to a blocked address is refused mid-chain, not just
+//     checked once at the start.
 //   - 30 s timeout
 //   - 1 MB response cap (agents shouldn't reason over 10 MB blobs anyway)
 //   - Returns body as text. JSON gets parsed in the agent's reasoning if needed.
 
-import type { Tool } from "@anthropic-ai/sdk/resources/messages";
+import type { ToolDefinition } from "./types.js";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 
@@ -34,11 +37,11 @@ function isBlockedIp(ip: string): boolean {
   return false;
 }
 
-const definition: Tool = {
+const definition: ToolDefinition = {
   name: "http_fetch",
   description:
     "Fetch any HTTP(S) URL and return the response body as text. Use this to read RSS feeds, hit external REST APIs, or fetch web pages. Supports GET (default), POST, PUT, DELETE, PATCH. Times out after 30 seconds. Response capped at 1 MB.",
-  input_schema: {
+  parameters: {
     type: "object",
     properties: {
       url: {
@@ -65,23 +68,17 @@ const definition: Tool = {
   },
 };
 
-async function handler(input: Record<string, unknown>): Promise<string> {
-  const url = String(input.url ?? "");
-  const method = String(input.method ?? "GET").toUpperCase();
-  const headers = (input.headers as Record<string, string>) ?? {};
-  const body = input.body !== undefined ? String(input.body) : undefined;
-
+/** Throws with a user-facing message iff `url` is not safe to fetch. */
+async function assertUrlIsSafe(url: string): Promise<void> {
   if (!/^https?:\/\//i.test(url)) {
-    return `Error: only http:// and https:// URLs are allowed. Got: ${url.slice(0, 60)}`;
+    throw new Error(`only http:// and https:// URLs are allowed. Got: ${url.slice(0, 60)}`);
   }
 
-  // SSRF guard: block internal hostnames and resolve the host to make sure it
-  // does not point at a private/loopback/metadata address.
   let host: string;
   try {
     host = new URL(url).hostname.replace(/^\[|\]$/g, "");
   } catch {
-    return `Error: invalid URL: ${url.slice(0, 60)}`;
+    throw new Error(`invalid URL: ${url.slice(0, 60)}`);
   }
   const lowerHost = host.toLowerCase();
   if (
@@ -90,24 +87,69 @@ async function handler(input: Record<string, unknown>): Promise<string> {
     lowerHost.endsWith(".local") ||
     lowerHost.endsWith(".internal")
   ) {
-    return `Error: refusing to fetch internal host: ${host}`;
+    throw new Error(`refusing to fetch internal host: ${host}`);
   }
   try {
     const addrs = isIP(host) ? [{ address: host }] : await lookup(host, { all: true });
     for (const rec of addrs) {
       if (isBlockedIp(rec.address)) {
-        return `Error: refusing to fetch a private/internal address (${rec.address}) for host ${host}.`;
+        throw new Error(`refusing to fetch a private/internal address (${rec.address}) for host ${host}.`);
       }
     }
-  } catch {
-    return `Error: could not resolve host: ${host}`;
+  } catch (e) {
+    if (e instanceof Error && e.message.startsWith("refusing to fetch")) throw e;
+    throw new Error(`could not resolve host: ${host}`);
   }
+}
+
+const MAX_REDIRECTS = 5;
+
+async function handler(input: Record<string, unknown>): Promise<string> {
+  const method = String(input.method ?? "GET").toUpperCase();
+  const headers = (input.headers as Record<string, string>) ?? {};
+  const body = input.body !== undefined ? String(input.body) : undefined;
+
+  let url = String(input.url ?? "");
 
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), 30_000);
 
   try {
-    const res = await fetch(url, { method, headers, body, signal: ac.signal });
+    // `redirect: "manual"` + a bounded loop, re-validating each hop: the SSRF
+    // guard must run again on every Location target, not just the URL the
+    // agent supplied - the default redirect-follow behaviour would otherwise
+    // let a public, allowed URL 302 the request straight to a blocked address.
+    // Definite-assignment: only reachable unassigned on hop 0, when
+    // `hop > MAX_REDIRECTS` is always false, so the early-return branches
+    // below that read `res` never run before the first fetch.
+    let res!: Response;
+    for (let hop = 0; ; hop++) {
+      await assertUrlIsSafe(url);
+
+      if (hop > MAX_REDIRECTS) {
+        await res.body?.cancel().catch(() => {});
+        return `Error: too many redirects (> ${MAX_REDIRECTS}) following ${url.slice(0, 60)}`;
+      }
+
+      res = await fetch(url, {
+        method,
+        headers,
+        body,
+        signal: ac.signal,
+        redirect: "manual",
+      });
+
+      if (res.status < 300 || res.status >= 400 || !res.headers.has("location")) break;
+
+      const location = res.headers.get("location")!;
+      try {
+        url = new URL(location, url).toString();
+      } catch {
+        await res.body?.cancel().catch(() => {});
+        return `Error: redirect to an invalid Location header: ${location.slice(0, 60)}`;
+      }
+    }
+
     const reader = res.body?.getReader();
     if (!reader) {
       return `Empty response (HTTP ${res.status})`;
@@ -121,6 +163,7 @@ async function handler(input: Record<string, unknown>): Promise<string> {
       if (done) break;
       received += value.byteLength;
       if (received > MAX_BYTES) {
+        await reader.cancel().catch(() => {});
         return `Error: response exceeded 1 MB cap. Use a more specific URL or pagination. Status was HTTP ${res.status}.`;
       }
       chunks.push(value);

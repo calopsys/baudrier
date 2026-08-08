@@ -1,61 +1,52 @@
 # /rotate-secret
 
-Renews a secret key everywhere it lives, locally and online, in a single command. Stripe, Resend, Google, GitHub OAuth, internal secrets: Hypervibe guides you based on the type of key.
+Renews a secret key everywhere it lives - Scaleway Secret Manager, and the running container - in a single command. Scaleway-minted IAM keys, self-generated tokens, external credentials (GitHub, Matomo, PageSpeed, Google Search Console): Baudrier guides you based on the type of key, and always makes sure the change actually takes effect.
 
 ## When to use it
 
 - You **suspect a leak** of one of your keys (accidental commit to a public repo, shared screenshot, etc.)
-- A **collaborator is leaving** your team and you want to revoke their indirect access
-- You are doing a **periodic rotation** for security hygiene (every 3-6 months on critical services)
+- An **operator is leaving** and you want to revoke their indirect access
+- You are doing a **periodic rotation** for security hygiene (every 3-6 months on critical secrets)
 
 ## How it works
 
-1. **Identifying the secret**: you can pass the key name as an argument (`/rotate-secret stripe`) or Hypervibe shows you a list of the secrets currently present in your `.env` and you pick one.
+1. **Identifying the secret**: you can pass the key name as an argument (`/rotate-secret database`) or Baudrier queries this project's Scaleway Secret Manager directly and shows you what's actually there, grouped by category.
 
-2. **Secret type**: Hypervibe detects whether it is:
-  - **A third-party key** (Stripe, Resend, Google OAuth, GitHub OAuth, Brevo, etc.) -> it needs to be regenerated on the provider's side
-  - **A self-managed secret** (CRON_SECRET, AUTH_SECRET, etc.) -> Hypervibe can regenerate it on its own
+2. **Secret type**: Baudrier detects whether it is:
+   - **A Scaleway-minted IAM key** (`DATABASE_URL`, `STORAGE_ACCESS_KEY`/`STORAGE_SECRET_KEY`, `SCW_GENERATIVE_API_KEY`, `TEM_API_SECRET_KEY`) → Baudrier mints a fresh, narrowly-scoped IAM key itself, no dashboard needed
+   - **A self-managed secret** (`AUTH_SECRET`, `CRON_SECRET`, the VAPID Web Push keypair) → Baudrier regenerates it locally, no third party involved
+   - **An external credential** (`MATOMO_TOKEN`, `PAGESPEED_API_KEY`, `GSC_SERVICE_ACCOUNT`) → issued by an external dashboard (Matomo, Google Cloud), stored in this project's own Scaleway Secret Manager; Baudrier guides you there and stores the value you paste back
 
-3. **For a third-party key**: Hypervibe guides you **click by click** through the relevant provider's dashboard:
-  - **Stripe**: dashboard.stripe.com/apikeys -> Roll key
-  - **Resend**: resend.com/api-keys -> Revoke + Create new
-  - **Google OAuth**: Google Cloud Console -> credentials -> reset secret
-  - **GitHub OAuth**: github.com/settings/developers -> your app -> Generate a new client secret
-  - Etc.
-   
-   You paste the new value into the chat.
+3. **Storing the new value**: every rotated secret is written to this project's Scaleway Secret Manager (region `fr-par`).
 
-4. **For a self-managed secret**: Hypervibe generates a new cryptographically strong value itself, without asking you anything.
+4. **Making it take effect - the part that matters**: Scaleway Serverless Containers **cannot reference Secret Manager directly** (a current Scaleway platform limitation). The harness copies secret values into the container's own configuration, so Baudrier **always redeploys the container** as the last step of a per-app rotation - storing the new value alone would leave the old, possibly-compromised one live in production. If nothing is deployed yet, Baudrier says so instead of pretending the rotation is "live".
 
-5. **Push everywhere**:
-  - Updates the local `.env`
-  - Updates Vercel (production + preview)
-  - Idempotent: the **old value is overwritten**, not just added alongside it
+   Scaleway Serverless Jobs (the database-migration job, an autonomous agent) work the other way: they read Secret Manager directly, so they pick up a rotated value automatically on their **next run** - no redeploy needed for that part.
 
-6. **Verification**: Hypervibe offers to test it immediately (for example: `pnpm dev` + a Stripe checkout test if it was a Stripe key).
+5. **Revocation**: for IAM-minted keys, the previous key is deleted from Scaleway IAM once the new one is confirmed working - not just left dangling alongside it.
 
 ## What it creates for you
 
-- A **new value** for the chosen secret
-- **Updated everywhere**: local `.env` + Vercel (production + preview)
-- The **old value** revoked at the provider (you did this in the dashboard during step 3)
-- Minimal downtime: for most providers you create the new key alongside the old one, so there is no interruption; for a few (for example the Stripe webhook secret or a database password) the old value is invalidated the moment you regenerate it, leaving a brief window until the new value is pushed and redeployed
+- A **new value** for the chosen secret, stored in Scaleway Secret Manager
+- For per-app secrets: the running container **redeployed** with the new value already active
+- For IAM-backed secrets: the **old key revoked** at the Scaleway IAM level
+- Brief downtime for `DATABASE_URL` rotation specifically (typically under a minute, while the redeploy takes over with the new database credentials) and for VAPID keys (existing push subscriptions are invalidated and users need to re-subscribe) - Baudrier warns you before either
 
 ## Prerequisites
 
-- You must be inside an existing project (with a `.env` or an active Vercel integration)
-- For third-party keys: access to your account at the provider (Stripe, Resend, etc.)
+- You must be inside an existing baudrier project, with Scaleway credentials configured (`/start`)
+- For external credentials: access to the relevant dashboard (GitHub, Matomo, Google Cloud)
 
 ## Tips
 
 {{callout:tip|Do it without hesitation when in doubt}}
-If you have the slightest doubt about the security of a key (a screenshot shared by mistake, a suspicious commit, a former collaborator who might have seen the screen...), **renew it immediately**. It only takes a few minutes, and the consequences of a compromised key (notably Stripe for payments) can be disastrous.
+If you have the slightest doubt about the security of a key (a screenshot shared by mistake, a suspicious commit, a former operator who might have seen the screen...), **renew it immediately**. It only takes a few minutes, and a compromised `DATABASE_URL` or Object Storage key can expose every user's data.
 {{/callout}}
 
 {{callout:info|Periodic rotation = good hygiene}}
-For the most critical keys (Stripe, AUTH_SECRET, admin keys): consider renewing them every 3-6 months even without any suspicion of a leak. It is a safeguard against silent leaks (an old commit on a public repo, an env variable that may have leaked into logs, etc.).
+For the most critical secrets (`DATABASE_URL`, `AUTH_SECRET`, `STORAGE_ACCESS_KEY`): consider renewing them every 3-6 months even without any suspicion of a leak. It's a safeguard against silent leaks (an old commit on a public repo, a value that leaked into logs, etc.).
 {{/callout}}
 
-{{callout:warning|Webhook secrets = specific procedure}}
-For `STRIPE_WEBHOOK_SECRET` or other webhook secrets, the rotation is a bit more subtle: you need to recreate the webhook on the provider's side, and the key is different between local (CLI `stripe listen`) and production. Hypervibe knows this and guides you depending on the case (it does not touch the local `.env` when you rotate the prod webhook, and vice versa).
+{{callout:warning|Containers vs. Jobs - why "rotated" doesn't always mean "redeployed"}}
+If your project has an autonomous agent (`/add-agent`), rotating its keys (`SCW_GENERATIVE_API_KEY`, `TEM_API_SECRET_KEY`) does **not** trigger a container redeploy for that part - the agent runs as a Serverless Job, which reads Secret Manager natively and simply uses the new value on its next scheduled run. Baudrier tells you which of the two happened so you're never left wondering whether the change is actually live.
 {{/callout}}

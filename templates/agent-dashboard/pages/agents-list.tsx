@@ -63,7 +63,7 @@ export default async function AgentsListPage() {
                   )}
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Coût total</span>
-                    <span className="font-medium">${a.totalCostUsd.toFixed(2)}</span>
+                    <span className="font-medium">{a.totalCostEur.toFixed(2)} €</span>
                   </div>
                   {a.lastRun && (
                     <div className="flex justify-between">

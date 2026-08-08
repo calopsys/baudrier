@@ -1,16 +1,34 @@
-// agent/mail.ts - Minimal email helper for the agent worker.
+// agent/mail.ts - Minimal Scaleway Transactional Email (TEM) client for the
+// agent Job process.
 //
-// The agent runs in a separate Render Background Worker process (apps/agent/),
-// SO it can't directly import the main app's mail wrapper. We re-implement a
-// thin wrapper here using the same provider configured in the main app
-// (Brevo or Resend). Env vars are passed at deploy time.
+// The agent runs as its own Scaleway Serverless Job (apps/<agent-name>/), a
+// separate process from the Next.js app, so it can't import the app's own
+// mail helper - it talks to the TEM HTTP API directly instead. This mirrors
+// how the operator-side scripts/scaleway/tem.mjs works, but with an
+// application-scoped IAM key instead of the harness's own SCW_SECRET_KEY
+// (the deployed Job must never hold full-project harness credentials).
 //
-// Auto-detects which provider based on which env vars are present:
-//   - If BREVO_API_KEY is set     → uses Brevo
-//   - Else if RESEND_API_KEY      → uses Resend
-//   - Else                         → throws (no email provider configured)
+// API: POST https://api.scaleway.com/transactional-email/v1alpha1/regions/{region}/emails
+// Auth: X-Auth-Token: <IAM Application API secret key>
+// Docs: https://www.scaleway.com/en/docs/transactional-email/api-cli/send-emails-with-api/
+//
+// TEM constraints enforced by the API itself (see also tools/send-email.ts,
+// which checks the same limits up front so the agent gets a fast, clear
+// error instead of an opaque 4xx): subject >= 10 characters, max 3
+// recipients per email, no templating engine.
+//
+// Required env vars (secret references on the Job definition):
+//   - TEM_API_ACCESS_KEY / TEM_API_SECRET_KEY : IAM Application key scoped to
+//     Transactional Email only (NOT the harness's own SCW_ACCESS_KEY/SCW_SECRET_KEY).
+//     NOTE: these two names are not yet in CONTRACT.md's env var table - the
+//     harness currently only lists TEM_SENDER_EMAIL/TEM_SENDER_NAME for the
+//     generated app. Flagged for reconciliation with whichever skill owns
+//     TEM provisioning (add-email) - see this agent's handoff report.
+//   - TEM_SENDER_EMAIL / TEM_SENDER_NAME : verified TEM sender (CONTRACT.md §2)
+//   - SCW_DEFAULT_PROJECT_ID : the Scaleway Project id (required in the request body)
+//   - SCW_DEFAULT_REGION : defaults to "fr-par" if unset
 
-import type { ToolName } from "./tools/index.js";
+const TEM_API_BASE = "https://api.scaleway.com/transactional-email/v1alpha1/regions";
 
 // ─── Types ────────────────────────────────────────────────────────────
 export interface SendMailOptions {
@@ -21,67 +39,49 @@ export interface SendMailOptions {
   replyTo?: { email: string; name?: string };
 }
 
-// ─── Provider detection + send ────────────────────────────────────────
+// ─── Send ─────────────────────────────────────────────────────────────
 export async function sendMail(opts: SendMailOptions): Promise<void> {
-  // Strip empty names (Brevo rejects name: "" with HTTP 400 - known footgun).
-  const cleanTo = opts.to.map((r) => (r.name?.trim() ? r : { email: r.email }));
-  const cleanReplyTo = opts.replyTo?.name?.trim() ? opts.replyTo : opts.replyTo ? { email: opts.replyTo.email } : undefined;
+  const secretKey = process.env.TEM_API_SECRET_KEY;
+  const projectId = process.env.SCW_DEFAULT_PROJECT_ID;
+  const region = process.env.SCW_DEFAULT_REGION ?? "fr-par";
+  const senderEmail = process.env.TEM_SENDER_EMAIL;
+  const senderName = process.env.TEM_SENDER_NAME;
 
-  if (process.env.BREVO_API_KEY) {
-    return sendViaBrevo({ ...opts, to: cleanTo, replyTo: cleanReplyTo });
+  if (!secretKey || !projectId || !senderEmail) {
+    throw new Error(
+      "TEM_API_SECRET_KEY, SCW_DEFAULT_PROJECT_ID and TEM_SENDER_EMAIL are required to send email.",
+    );
   }
-  if (process.env.RESEND_API_KEY) {
-    return sendViaResend({ ...opts, to: cleanTo, replyTo: cleanReplyTo });
+  if (opts.subject.length < 10) {
+    throw new Error(`Transactional Email rejects subjects under 10 characters (got ${opts.subject.length}).`);
   }
-  throw new Error("No email provider configured (BREVO_API_KEY or RESEND_API_KEY missing)");
-}
+  if (opts.to.length > 3) {
+    throw new Error(`Transactional Email accepts at most 3 recipients per email (got ${opts.to.length}).`);
+  }
 
-async function sendViaBrevo(opts: SendMailOptions): Promise<void> {
-  const res = await fetch("https://api.brevo.com/v3/smtp/email", {
+  const body: Record<string, unknown> = {
+    project_id: projectId,
+    from: { email: senderEmail, ...(senderName ? { name: senderName } : {}) },
+    to: opts.to,
+    subject: opts.subject,
+    html: opts.htmlContent,
+    ...(opts.textContent ? { text: opts.textContent } : {}),
+    ...(opts.replyTo
+      ? { additional_headers: [{ key: "Reply-To", value: opts.replyTo.email }] }
+      : {}),
+  };
+
+  const res = await fetch(`${TEM_API_BASE}/${region}/emails`, {
     method: "POST",
     headers: {
-      "api-key": process.env.BREVO_API_KEY!,
+      "X-Auth-Token": secretKey,
       "Content-Type": "application/json",
-      Accept: "application/json",
     },
-    body: JSON.stringify({
-      sender: {
-        email: process.env.BREVO_SENDER_EMAIL!,
-        ...(process.env.BREVO_SENDER_NAME ? { name: process.env.BREVO_SENDER_NAME } : {}),
-      },
-      to: opts.to,
-      subject: opts.subject,
-      htmlContent: opts.htmlContent,
-      ...(opts.textContent ? { textContent: opts.textContent } : {}),
-      ...(opts.replyTo ? { replyTo: opts.replyTo } : {}),
-    }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`Brevo API error (HTTP ${res.status}): ${text.slice(0, 200)}`);
-  }
-}
-
-async function sendViaResend(opts: SendMailOptions): Promise<void> {
-  const from = process.env.RESEND_FROM_EMAIL ?? "onboarding@resend.dev";
-  const res = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${process.env.RESEND_API_KEY!}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      from,
-      to: opts.to.map((r) => r.email),
-      subject: opts.subject,
-      html: opts.htmlContent,
-      ...(opts.textContent ? { text: opts.textContent } : {}),
-      ...(opts.replyTo ? { reply_to: opts.replyTo.email } : {}),
-    }),
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Resend API error (HTTP ${res.status}): ${text.slice(0, 200)}`);
+    throw new Error(`Transactional Email API error (HTTP ${res.status}): ${text.slice(0, 200)}`);
   }
 }
 
@@ -96,8 +96,8 @@ export async function sendAgentFailureEmail(opts: {
     console.warn("[agent] sendAgentFailureEmail: ADMIN_EMAIL not set, skipping notification");
     return;
   }
-  const dashboardUrl = process.env.NEXT_PUBLIC_SITE_URL
-    ? `${process.env.NEXT_PUBLIC_SITE_URL}/agents/${opts.agentName}/invocations/${opts.invocationId}`
+  const dashboardUrl = process.env.APP_URL
+    ? `${process.env.APP_URL}/admin/agents/${opts.agentName}/invocations/${opts.invocationId}`
     : null;
   const html = `
     <div style="font-family:-apple-system,sans-serif;font-size:15px;line-height:1.6;max-width:600px;">
@@ -105,7 +105,7 @@ export async function sendAgentFailureEmail(opts: {
       <p><strong>Raison :</strong> ${escape(opts.reason)}</p>
       <p><strong>Invocation :</strong> <code>${escape(opts.invocationId)}</code></p>
       ${dashboardUrl ? `<p><a href="${escape(dashboardUrl)}" style="color:#8B5CF6;">Voir le détail dans le dashboard →</a></p>` : ""}
-      <p style="color:#7A7168;font-size:13px;margin-top:24px;">Cet email vient de ton agent Hypervibe. Si l'erreur est due au plafond budgétaire, l'agent reste en pause jusqu'au prochain cycle (jour ou mois selon le plafond touché).</p>
+      <p style="color:#7A7168;font-size:13px;margin-top:24px;">Cet email vient de ton agent Baudrier. Si l’erreur est due au plafond budgétaire, l’agent reste en pause jusqu’au prochain cycle (jour ou mois selon le plafond touché).</p>
     </div>
   `;
   try {
@@ -122,6 +122,3 @@ export async function sendAgentFailureEmail(opts: {
 function escape(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
-
-// Re-export ToolName so loop.ts can access it via this module too.
-export type { ToolName };

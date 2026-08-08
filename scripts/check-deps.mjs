@@ -2,57 +2,64 @@
 // Check project dependencies (DB, email, auth, etc.) with robust heuristics.
 //
 // Usage:
-//   node check-deps.mjs <check1> [<check2> ...] [--include-vercel]
-//
-// With --include-vercel : runs `vercel env pull` to fetch production env vars from Vercel
-// and merges them into the local env map (Vercel values override local on conflict).
-// Requires the Vercel CLI installed and the project linked (`.vercel/project.json` present).
-// Slower (network call), so opt-in.
+//   node check-deps.mjs <check1> [<check2> ...]
 //
 // Output:
 //   JSON object on stdout, one key per check requested.
 //   Exit code is always 0 - the result is in the JSON, not the exit code.
 //
 // Supported checks:
-//   db           - is a real cloud DB wired up? (not a T3 placeholder / localhost default)
-//   email        - is an email provider configured? (Resend or Brevo)
+//   db           - is a real Scaleway Serverless SQL Database wired up? (not a T3 placeholder / localhost default)
+//   email        - is Scaleway TEM configured? (TEM_SENDER_EMAIL non-placeholder)
 //   auth         - is NextAuth installed & configured? (detects admin vs users mode)
-//   vercel       - is the project linked to Vercel? (.vercel/project.json present & valid)
+//   scaleway     - are SCW_ACCESS_KEY/SCW_SECRET_KEY set AND valid? (live API call)
+//   container    - is the project linked to a Scaleway Serverless Container?
 //   github-repo  - is the project pushed to a GitHub remote?
-//   i18n         - is next-intl installed? (for localized page generation)
-//   stripe       - is Stripe configured? (STRIPE_SECRET_KEY non-placeholder)
-//   storage      - is Cloudflare R2 configured? (R2_ACCOUNT_ID + R2_ACCESS_KEY_ID)
-//   analytics    - is Google Analytics (GA4) configured? (NEXT_PUBLIC_GA_ID)
-//   cloudflare   - is the Cloudflare API token set and valid? (env var + live API verify)
+//   storage      - is Scaleway Object Storage configured? (STORAGE_* vars)
+//   analytics    - is Matomo configured? (NEXT_PUBLIC_MATOMO_URL + NEXT_PUBLIC_MATOMO_SITE_ID)
 //   dark-mode    - is next-themes installed AND ThemeProvider mounted in the root layout?
 //
 // Example:
 //   node check-deps.mjs db email auth
 //   → {"db":{"ok":true,...},"email":{"ok":false,...},"auth":{"ok":true,...}}
 
-import { readFileSync, existsSync, unlinkSync } from "node:fs";
-import { resolve, join } from "node:path";
-import { execSync } from "node:child_process";
-import { readUserEnv } from "./_read-user-env.mjs";
+import { readFileSync, existsSync } from "node:fs";
+import { resolve } from "node:path";
+import { loadCredentials, deriveAppName, resolveProjectId, api, sdkCall, REGION, slugify } from "./scaleway/_scw-auth.mjs";
+import { listSecrets } from "./scaleway/secrets.mjs";
+import { findContainerByName } from "./scaleway/container.mjs";
 
 const args = process.argv.slice(2);
 const checks = [];
-let includeVercel = false;
 
 for (let i = 0; i < args.length; i++) {
-  if (args[i] === "--include-vercel") {
-    includeVercel = true;
-  } else if (args[i].startsWith("--")) {
+  if (args[i].startsWith("--")) {
     console.error(`Unknown flag: ${args[i]}`);
     process.exit(1);
-  } else {
-    checks.push(args[i]);
   }
+  checks.push(args[i]);
 }
 
+// -----------------------------------------------------------------------------
+// dispatch table - declared up front so the "no checks given" usage message
+// (below) can list the real supported set programmatically instead of a
+// hand-maintained (and previously stale) string.
+// -----------------------------------------------------------------------------
+const dispatchers = {
+  db: checkDb,
+  email: checkEmail,
+  auth: checkAuth,
+  scaleway: checkScaleway,
+  container: checkContainer,
+  "github-repo": checkGithubRepo,
+  storage: checkStorage,
+  analytics: checkAnalytics,
+  "dark-mode": checkDarkMode,
+};
+
 if (checks.length === 0) {
-  console.error("Usage: check-deps.mjs <check1> [<check2> ...] [--include-vercel]");
-  console.error("Supported checks: db, email");
+  console.error("Usage: check-deps.mjs <check1> [<check2> ...]");
+  console.error(`Supported checks: ${Object.keys(dispatchers).join(", ")}`);
   process.exit(1);
 }
 
@@ -91,44 +98,10 @@ function readMergedEnv() {
   return merged;
 }
 
-// When --include-vercel is passed, pull production env from Vercel and merge on top of local env.
-// Vercel values override local (they represent the "real" prod state).
-function readVercelEnv() {
-  if (!existsSync(resolve(".vercel/project.json"))) {
-    return { ok: false, reason: ".vercel/project.json absent - projet non linké à Vercel", vars: {} };
-  }
-  const tmpFile = resolve(".env.vercel.check-deps.tmp");
-  try {
-    // vercel env pull writes to stdout via --environment flag, using a tmp file to avoid clobbering user .env files
-    execSync(`vercel env pull "${tmpFile}" --environment=production --yes`, {
-      stdio: "pipe",
-      encoding: "utf8",
-    });
-    if (!existsSync(tmpFile)) {
-      return { ok: false, reason: "vercel env pull a réussi mais pas de fichier généré", vars: {} };
-    }
-    const vars = parseEnvContent(readFileSync(tmpFile, "utf8"));
-    return { ok: true, reason: "vars Vercel prod récupérées", vars };
-  } catch (e) {
-    return { ok: false, reason: `vercel env pull a échoué: ${String(e.message || e).slice(0, 200)}`, vars: {} };
-  } finally {
-    try { if (existsSync(tmpFile)) unlinkSync(tmpFile); } catch {}
-  }
-}
-
-const localEnv = readMergedEnv();
-let env = localEnv;
-let vercelEnvInfo = null;
-if (includeVercel) {
-  vercelEnvInfo = readVercelEnv();
-  if (vercelEnvInfo.ok) {
-    env = { ...localEnv, ...vercelEnvInfo.vars };
-  }
-  // If the pull failed, we silently fall back to local-only - the caller can still see vercelEnvInfo in the output.
-}
+const env = readMergedEnv();
 
 // -----------------------------------------------------------------------------
-// db check
+// db check - real Scaleway Serverless SQL Database wired up?
 // -----------------------------------------------------------------------------
 function checkDb() {
   const url = env.DATABASE_URL;
@@ -136,7 +109,11 @@ function checkDb() {
     return { ok: false, reason: "DATABASE_URL absent du .env" };
   }
 
-  // Reject patterns that indicate a placeholder / local-only / default / non-cloud setup
+  // Reject patterns that indicate a placeholder / local-only / default / non-cloud
+  // setup. The host-shape check further below also rejects any leftover
+  // connection string from a since-removed database provider (CONTRACT.md §2
+  // banned list) - anything not shaped like a Scaleway endpoint is rejected,
+  // so no provider-specific pattern needs to be named here.
   const disqualifyingPatterns = [
     { re: /@localhost:/i, label: "pointe sur localhost" },
     { re: /@127\.0\.0\.1:/i, label: "pointe sur 127.0.0.1" },
@@ -150,6 +127,24 @@ function checkDb() {
     if (re.test(url)) {
       return { ok: false, reason: `DATABASE_URL ${label} → pas une vraie base cloud` };
     }
+  }
+
+  // Extract host for both the friendly reason line and the Scaleway shape check.
+  const hostMatch = url.match(/@([^/:]+)/);
+  const host = hostMatch ? hostMatch[1] : null;
+  if (!host) {
+    return { ok: false, reason: "DATABASE_URL malformée (aucun host trouvé après le @)" };
+  }
+
+  // Scaleway Serverless SQL Database endpoints look like
+  // <id>.pg.sdb.fr-par.scw.cloud (CONTRACT.md §4). Anything else is either a
+  // stale value from a removed provider or a typo - flag it rather than
+  // silently trusting an unrecognised host.
+  if (!/\.pg\.sdb\.[a-z0-9-]+\.scw\.cloud$/i.test(host)) {
+    return {
+      ok: false,
+      reason: `DATABASE_URL host (${host}) ne ressemble pas à un endpoint Scaleway Serverless SQL (attendu *.pg.sdb.fr-par.scw.cloud)`,
+    };
   }
 
   // Check a drizzle.config.ts (or .js) exists somewhere plausible
@@ -167,56 +162,38 @@ function checkDb() {
     return { ok: false, reason: "DATABASE_URL a l'air vrai mais aucun drizzle.config.{ts,js} trouvé" };
   }
 
-  // Extract host for a friendly reason line (everything after `@` up to the next `/` or `:`)
-  const hostMatch = url.match(/@([^/:]+)/);
-  const host = hostMatch ? hostMatch[1] : "inconnu";
-
   return {
     ok: true,
-    reason: `DB cloud détectée (host: ${host}, config: ${foundDrizzle})`,
+    reason: `DB Scaleway Serverless SQL détectée (host: ${host}, config: ${foundDrizzle})`,
     host,
     drizzleConfig: foundDrizzle,
   };
 }
 
 // -----------------------------------------------------------------------------
-// email check
+// email check - Scaleway TEM configured?
 // -----------------------------------------------------------------------------
 function checkEmail() {
-  const placeholderPatterns = [
-    /^$/,
-    /placeholder/i,
-    /^your[-_]?api[-_]?key/i,
-    /^xxx+/i,
-    /^re_your/i,
-    /^xkeysib-your/i,
-  ];
+  const sender = env.TEM_SENDER_EMAIL;
+  const senderName = env.TEM_SENDER_NAME;
 
-  function looksReal(value) {
-    if (!value || value.trim() === "") return false;
-    return !placeholderPatterns.some((re) => re.test(value));
+  if (!sender || sender.trim() === "") {
+    return { ok: false, reason: "TEM_SENDER_EMAIL absente du .env" };
+  }
+  if (/placeholder|your[-_]?email|example\.com$/i.test(sender)) {
+    return { ok: false, reason: "TEM_SENDER_EMAIL ressemble à un placeholder" };
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(sender)) {
+    return { ok: false, reason: `TEM_SENDER_EMAIL ("${sender}") ne ressemble pas à une adresse email valide` };
   }
 
-  const resend = env.RESEND_API_KEY;
-  const brevo = env.BREVO_API_KEY;
-
-  const resendReal = looksReal(resend);
-  const brevoReal = looksReal(brevo);
-
-  if (resendReal) {
-    return { ok: true, provider: "resend", reason: "RESEND_API_KEY présente et non-placeholder" };
-  }
-  if (brevoReal) {
-    return { ok: true, provider: "brevo", reason: "BREVO_API_KEY présente et non-placeholder" };
-  }
-
-  const reasons = [];
-  if (!resend) reasons.push("RESEND_API_KEY absente");
-  else if (!resendReal) reasons.push("RESEND_API_KEY ressemble à un placeholder");
-  if (!brevo) reasons.push("BREVO_API_KEY absente");
-  else if (!brevoReal) reasons.push("BREVO_API_KEY ressemble à un placeholder");
-
-  return { ok: false, provider: null, reason: reasons.join(" ; ") };
+  return {
+    ok: true,
+    provider: "tem",
+    reason: `Scaleway TEM configuré (expéditeur : ${sender})`,
+    sender,
+    senderName: senderName && senderName.trim() !== "" ? senderName : null,
+  };
 }
 
 // -----------------------------------------------------------------------------
@@ -243,7 +220,7 @@ function checkAuth() {
     return { ok: false, reason: "fichier auth.ts introuvable" };
   }
 
-  // Accept AUTH_SECRET (NextAuth v5, hypervibe standard) or NEXTAUTH_SECRET (NextAuth v4 legacy)
+  // Accept AUTH_SECRET (NextAuth v5, baudrier standard) or NEXTAUTH_SECRET (NextAuth v4 legacy)
   const secret = env.AUTH_SECRET || env.NEXTAUTH_SECRET;
   const secretVar = env.AUTH_SECRET ? "AUTH_SECRET" : env.NEXTAUTH_SECRET ? "NEXTAUTH_SECRET" : null;
   if (!secret || secret.trim() === "") {
@@ -267,27 +244,90 @@ function checkAuth() {
 }
 
 // -----------------------------------------------------------------------------
-// vercel check
+// scaleway check - operator credentials set AND valid (live API call)
+//
+// This is the harness's documented gate before any Scaleway provider
+// operation. SCW_ACCESS_KEY/SCW_SECRET_KEY are OPERATOR MACHINE credentials
+// (CONTRACT.md §2), never read from .env - resolution goes through
+// _scw-auth.mjs#loadCredentials() (SCW_* environment variables, the only
+// source), exactly like every scripts/scaleway/*.mjs module.
 // -----------------------------------------------------------------------------
-function checkVercel() {
-  const path = resolve(".vercel/project.json");
-  if (!existsSync(path)) {
-    return { ok: false, reason: "projet pas linké à Vercel (.vercel/project.json absent)" };
+async function checkScaleway() {
+  const creds = loadCredentials();
+  if (!creds.accessKey || !creds.secretKey) {
+    return {
+      ok: false,
+      reason: "SCW_ACCESS_KEY et/ou SCW_SECRET_KEY introuvables (variables d'environnement)",
+    };
   }
   try {
-    const content = JSON.parse(readFileSync(path, "utf8"));
-    if (!content.projectId || !content.orgId) {
-      return { ok: false, reason: ".vercel/project.json présent mais incomplet (projectId/orgId manquants)" };
-    }
+    // Cheap, real, project-scoped call - validates the key pair actually
+    // authenticates against the Scaleway API, not just that the vars exist.
+    const secrets = await listSecrets({ projectId: creds.projectId, region: creds.region });
     return {
       ok: true,
-      reason: `projet linké à Vercel (projectId: ${content.projectId})`,
-      projectId: content.projectId,
-      orgId: content.orgId,
+      reason: `identifiants Scaleway valides (source: ${creds.source}, ${secrets.length} secret(s) dans le projet)`,
+      source: creds.source,
+      secretCount: secrets.length,
     };
   } catch (e) {
-    return { ok: false, reason: `.vercel/project.json illisible: ${e.message}` };
+    return { ok: false, reason: `validation API Scaleway échouée : ${String(e.message || e).slice(0, 200)}` };
   }
+}
+
+// -----------------------------------------------------------------------------
+// container check - is the project linked to a Scaleway Serverless Container?
+//
+// Resolved by NAME, live against the SDK (CONTRACT.md §2, §7 - app repos
+// carry no Scaleway metadata at all): the app name (deriveAppName()) names
+// the Project, the container namespace, and the production container itself;
+// a preview container is `<app-name>-preview-<branch-slug>` in that same
+// namespace. Read-only - never creates a namespace or container as a side
+// effect of checking.
+// -----------------------------------------------------------------------------
+async function checkContainer() {
+  const appName = deriveAppName();
+  const slug = slugify(appName);
+  let projectId;
+  try {
+    projectId = await resolveProjectId({ appName });
+  } catch (e) {
+    return { ok: false, reason: `résolution du projet Scaleway impossible : ${e.message}` };
+  }
+
+  const containersApi = await api("Container", "v1");
+  let namespaces;
+  try {
+    namespaces = await sdkCall(() => containersApi.listNamespaces({ region: REGION, projectId, name: slug }).all());
+  } catch (e) {
+    return { ok: false, reason: `liste des espaces de noms Scaleway impossible : ${e.message}` };
+  }
+  const ns = namespaces.find((n) => n.name === slug);
+  if (!ns) {
+    return { ok: false, reason: `projet pas lié à un Serverless Container (aucun espace de noms "${slug}")` };
+  }
+
+  const production = await findContainerByName(ns.id, appName);
+  if (!production) {
+    return {
+      ok: false,
+      reason: `espace de noms "${slug}" trouvé mais aucun container de production nommé "${slug}"`,
+    };
+  }
+
+  const all = await sdkCall(() => containersApi.listContainers({ region: REGION, namespaceId: ns.id }).all());
+  const previewPrefix = `${slug}-preview-`;
+  const previewBranches = all
+    .filter((c) => c.name.startsWith(previewPrefix))
+    .map((c) => c.name.slice(previewPrefix.length));
+
+  return {
+    ok: true,
+    reason: `projet lié à un Serverless Container (namespace: ${ns.name}, container prod: ${production.id})`,
+    namespaceId: ns.id,
+    productionContainerId: production.id,
+    previewBranches,
+  };
 }
 
 // -----------------------------------------------------------------------------
@@ -298,13 +338,12 @@ function findGitConfigWalkUp() {
   // This is useful for monorepo sub-apps (e.g. books/apps/hyperarme) where .git lives at the monorepo root.
   let dir = resolve(".");
   while (true) {
-    const candidate = join(dir, ".git", "config");
+    const candidate = resolve(dir, ".git", "config");
     if (existsSync(candidate)) return { path: candidate, root: dir };
-    const parent = join(dir, "..");
+    const parent = resolve(dir, "..");
     // Reached filesystem root when parent === dir (resolve stabilizes)
-    const parentResolved = resolve(parent);
-    if (parentResolved === dir) return null;
-    dir = parentResolved;
+    if (parent === dir) return null;
+    dir = parent;
   }
 }
 
@@ -339,272 +378,80 @@ function checkGithubRepo() {
 }
 
 // -----------------------------------------------------------------------------
-// i18n check
-// -----------------------------------------------------------------------------
-function checkI18n() {
-  const pkgLocations = ["package.json", "apps/web/package.json"];
-  for (const p of pkgLocations) {
-    const path = resolve(p);
-    if (!existsSync(path)) continue;
-    try {
-      const pkg = JSON.parse(readFileSync(path, "utf8"));
-      const deps = { ...pkg.dependencies, ...pkg.devDependencies };
-      if (deps["next-intl"]) {
-        // Try to find locales directory
-        const messagesLocations = [
-          "messages",
-          "apps/web/messages",
-          "src/messages",
-          "apps/web/src/messages",
-        ];
-        const messagesDir = messagesLocations.find((m) => existsSync(resolve(m)));
-        return {
-          ok: true,
-          reason: `next-intl installé (${p}${messagesDir ? `, messages: ${messagesDir}` : ""})`,
-          packageJson: p,
-          messagesDir: messagesDir ?? null,
-        };
-      }
-    } catch {
-      // ignore malformed package.json, try next location
-    }
-  }
-  return { ok: false, reason: "next-intl pas installé" };
-}
-
-// -----------------------------------------------------------------------------
-// stripe check
-// -----------------------------------------------------------------------------
-function checkStripe() {
-  const key = env.STRIPE_SECRET_KEY;
-  if (!key || key.trim() === "") {
-    return { ok: false, reason: "STRIPE_SECRET_KEY absente" };
-  }
-  if (/placeholder|your_/i.test(key)) {
-    return { ok: false, reason: "STRIPE_SECRET_KEY ressemble à un placeholder" };
-  }
-  if (!key.startsWith("sk_")) {
-    return { ok: false, reason: "STRIPE_SECRET_KEY n'a pas le préfixe Stripe attendu (sk_...)" };
-  }
-  const mode = key.startsWith("sk_test_") ? "test" : key.startsWith("sk_live_") ? "live" : "unknown";
-  return { ok: true, reason: `Stripe configuré (mode: ${mode})`, mode };
-}
-
-// -----------------------------------------------------------------------------
-// storage (Cloudflare R2) check
+// storage check - Scaleway Object Storage configured?
 // -----------------------------------------------------------------------------
 function checkStorage() {
-  const accountId = env.R2_ACCOUNT_ID || env.CLOUDFLARE_ACCOUNT_ID;
-  const accessKey = env.R2_ACCESS_KEY_ID;
-  const secretKey = env.R2_SECRET_ACCESS_KEY;
-  const endpoint = env.R2_ENDPOINT;
+  const bucket = env.STORAGE_BUCKET;
+  const accessKey = env.STORAGE_ACCESS_KEY;
+  const secretKey = env.STORAGE_SECRET_KEY;
+  const endpoint = env.STORAGE_ENDPOINT;
+  const region = env.STORAGE_REGION;
 
   const missing = [];
-  if (!accountId || accountId.trim() === "") missing.push("R2_ACCOUNT_ID");
-  if (!accessKey || accessKey.trim() === "") missing.push("R2_ACCESS_KEY_ID");
-  if (!secretKey || secretKey.trim() === "") missing.push("R2_SECRET_ACCESS_KEY");
+  if (!bucket || bucket.trim() === "") missing.push("STORAGE_BUCKET");
+  if (!accessKey || accessKey.trim() === "") missing.push("STORAGE_ACCESS_KEY");
+  if (!secretKey || secretKey.trim() === "") missing.push("STORAGE_SECRET_KEY");
   if (missing.length > 0) {
     return { ok: false, reason: `absent(e)s: ${missing.join(", ")}` };
   }
 
-  const values = [accountId, accessKey, secretKey];
-  if (values.some((v) => /placeholder|your_/i.test(v))) {
-    return { ok: false, reason: "une des vars R2 ressemble à un placeholder" };
+  if ([bucket, accessKey, secretKey].some((v) => /placeholder|your_/i.test(v))) {
+    return { ok: false, reason: "une des vars STORAGE_* ressemble à un placeholder" };
   }
 
-  // Detect jurisdiction from endpoint format:
-  //   EU jurisdiction: https://<account>.eu.r2.cloudflarestorage.com
-  //   Default:         https://<account>.r2.cloudflarestorage.com
-  // Projects created or migrated to EU jurisdiction must use the .eu. endpoint.
-  // If R2_ENDPOINT is missing OR doesn't include .eu., flag it as a soft warning
-  // (still ok:true so existing setups don't break, but the consumer skill can
-  // surface a migration suggestion to the user).
-  const isEu = typeof endpoint === "string" && /\.eu\.r2\.cloudflarestorage\.com/i.test(endpoint);
-  const jurisdictionWarning = !endpoint
-    ? "R2_ENDPOINT absent - impossible de vérifier la juridiction"
-    : !isEu
-    ? "R2_ENDPOINT ne contient pas '.eu.' - le bucket est probablement en juridiction par défaut (non-RGPD strict). Migration vers juridiction EU recommandée."
+  // Region check replaces the old R2 "EU jurisdiction" endpoint-suffix logic:
+  // this harness only ever targets fr-par (CONTRACT.md §1 REGION constant), so
+  // anything else is worth a warning rather than a silent accept.
+  const regionOk = region === "fr-par";
+  const regionWarning = !region
+    ? "STORAGE_REGION absente - impossible de vérifier la région"
+    : !regionOk
+    ? `STORAGE_REGION="${region}" ≠ "fr-par" (seule région supportée par ce harness)`
     : null;
 
   return {
     ok: true,
-    reason: "R2 (Cloudflare storage) configuré",
-    bucket: env.R2_BUCKET_NAME ?? null,
-    publicUrl: env.R2_PUBLIC_URL ?? null,
-    jurisdiction: isEu ? "eu" : (endpoint ? "default" : "unknown"),
-    jurisdictionWarning,
+    reason: "Scaleway Object Storage configuré",
+    bucket,
+    endpoint: endpoint ?? null,
+    region: region ?? null,
+    publicUrl: env.STORAGE_PUBLIC_URL ?? null,
+    regionWarning,
   };
 }
 
 // -----------------------------------------------------------------------------
-// cloudflare check - multi-source detection
-//
-// Cloudflare access on this machine can come from THREE places:
-//   1. CLOUDFLARE_API_TOKEN / CF_API_TOKEN env var in the current process
-//   2. Same var, set via setx (Windows) or shell rc (Mac/Linux) but not loaded
-//      into Claude Code's bash subshells (classic macOS launchd issue)
-//   3. Wrangler OAuth session (via `wrangler login`, no env var involved)
-//
-// We probe all three. The check passes if ANY of them works. If multiple are
-// present, we surface a warning when they belong to DIFFERENT Cloudflare
-// accounts (the case that bit Abdel: old wrangler login on account A, fresh
-// `/start` token on account B → operations went to A while we thought they'd
-// go to B).
-// -----------------------------------------------------------------------------
-function checkCloudflare() {
-  // Source 1+2: env var (current shell first, then User scope via helper)
-  let envToken = process.env.CLOUDFLARE_API_TOKEN || process.env.CF_API_TOKEN;
-  let envVarName = process.env.CLOUDFLARE_API_TOKEN
-    ? "CLOUDFLARE_API_TOKEN"
-    : process.env.CF_API_TOKEN
-      ? "CF_API_TOKEN"
-      : null;
-  let envSource = envToken ? "process.env" : null;
-
-  if (!envToken) {
-    // Try User-scope persistent storage (registry on Windows, ~/.zshrc on Mac, ~/.bashrc on Linux).
-    const fromUser =
-      readUserEnv("CLOUDFLARE_API_TOKEN") || readUserEnv("CF_API_TOKEN");
-    if (fromUser) {
-      envToken = fromUser;
-      envVarName = readUserEnv("CLOUDFLARE_API_TOKEN")
-        ? "CLOUDFLARE_API_TOKEN"
-        : "CF_API_TOKEN";
-      envSource = "user-scope";
-    }
-  }
-
-  // Validate the env token if we have one (live API call)
-  let envAccountId = null;
-  let envValid = false;
-  let envReason = null;
-  if (envToken && envToken.trim() !== "" && !/placeholder|your_/i.test(envToken)) {
-    try {
-      const escaped = envToken.replace(/"/g, '\\"');
-      const verifyRes = execSync(
-        `curl -s --max-time 10 -H "Authorization: Bearer ${escaped}" https://api.cloudflare.com/client/v4/user/tokens/verify`,
-        { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] },
-      );
-      const parsed = JSON.parse(verifyRes);
-      if (parsed.success === true && parsed.result?.status === "active") {
-        envValid = true;
-        // Get account ID from a separate call (token verify doesn't return it).
-        try {
-          const accRes = execSync(
-            `curl -s --max-time 10 -H "Authorization: Bearer ${escaped}" https://api.cloudflare.com/client/v4/accounts?per_page=1`,
-            { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] },
-          );
-          const accParsed = JSON.parse(accRes);
-          envAccountId = accParsed.result?.[0]?.id ?? null;
-        } catch {/* non-fatal */}
-      } else {
-        envReason = `token Cloudflare rejeté par l'API (status: ${parsed.result?.status ?? "inconnu"})`;
-      }
-    } catch (e) {
-      envReason = `validation API Cloudflare impossible: ${String(e.message || e).slice(0, 100)}`;
-    }
-  } else if (envToken && /placeholder|your_/i.test(envToken)) {
-    envReason = `${envVarName} ressemble à un placeholder`;
-  }
-
-  // Source 3: Wrangler OAuth (works without env var)
-  let wranglerOk = false;
-  let wranglerAccountId = null;
-  let wranglerEmail = null;
-  try {
-    const out = execSync("wrangler whoami", {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: 10000,
-    });
-    if (out && /You are logged in|Account Name/i.test(out)) {
-      wranglerOk = true;
-      const accMatch = out.match(/\b([0-9a-f]{32})\b/);
-      wranglerAccountId = accMatch?.[1] ?? null;
-      const emailMatch = out.match(/with the email\s+([^\s]+)/);
-      wranglerEmail = emailMatch?.[1] ?? null;
-    }
-  } catch {
-    // wrangler not installed or not logged in - non-fatal, env var path may still work
-  }
-
-  // Synthesize result
-  if (envValid && wranglerOk) {
-    if (envAccountId && wranglerAccountId && envAccountId !== wranglerAccountId) {
-      // Account mismatch - return ok:true (both work) but flag the divergence.
-      // Skills consuming this should warn the user before doing destructive ops.
-      return {
-        ok: true,
-        reason: `token Cloudflare ET wrangler OAuth présents MAIS comptes différents (env: ${envAccountId}, oauth: ${wranglerAccountId})`,
-        varName: envVarName,
-        source: envSource,
-        accountMismatch: true,
-        envAccountId,
-        wranglerAccountId,
-        wranglerEmail,
-      };
-    }
-    return {
-      ok: true,
-      reason: `Cloudflare OK : token (${envSource}, ${envVarName}) + wrangler OAuth (${wranglerEmail ?? "unknown email"})`,
-      varName: envVarName,
-      source: envSource,
-      accountMismatch: false,
-      envAccountId,
-      wranglerAccountId,
-      wranglerEmail,
-    };
-  }
-
-  if (envValid) {
-    return {
-      ok: true,
-      reason: `Cloudflare OK via env var (${envSource}, ${envVarName})${envSource === "user-scope" ? " - pense à \"export CLOUDFLARE_API_TOKEN=$(...)\" au début des skills wrangler pour les sessions bash" : ""}`,
-      varName: envVarName,
-      source: envSource,
-    };
-  }
-
-  if (wranglerOk) {
-    return {
-      ok: true,
-      reason: `Cloudflare OK via wrangler OAuth (${wranglerEmail ?? "unknown email"}) - aucun token env var trouvé`,
-      source: "oauth",
-      wranglerAccountId,
-      wranglerEmail,
-    };
-  }
-
-  // Nothing works
-  if (envToken && envReason) {
-    return { ok: false, reason: `${envReason} - lance /start pour regénérer` };
-  }
-  return {
-    ok: false,
-    reason:
-      "aucun accès Cloudflare détecté : ni token env var (CLOUDFLARE_API_TOKEN), ni wrangler OAuth (`wrangler whoami`). Lance /start pour configurer.",
-  };
-}
-
-// -----------------------------------------------------------------------------
-// analytics (GA4) check
+// analytics check - Matomo configured?
 // -----------------------------------------------------------------------------
 function checkAnalytics() {
-  // Check both common variable names: NEXT_PUBLIC_GA_MEASUREMENT_ID (official Google convention)
-  // and NEXT_PUBLIC_GA_ID (shorter shorthand).
-  const gaId = env.NEXT_PUBLIC_GA_MEASUREMENT_ID || env.NEXT_PUBLIC_GA_ID;
-  const varName = env.NEXT_PUBLIC_GA_MEASUREMENT_ID ? "NEXT_PUBLIC_GA_MEASUREMENT_ID" : "NEXT_PUBLIC_GA_ID";
+  const matomoUrl = env.NEXT_PUBLIC_MATOMO_URL;
+  const siteId = env.NEXT_PUBLIC_MATOMO_SITE_ID;
 
-  if (!gaId || gaId.trim() === "") {
-    return { ok: false, reason: "NEXT_PUBLIC_GA_MEASUREMENT_ID (ou NEXT_PUBLIC_GA_ID) absente" };
+  if (!matomoUrl || matomoUrl.trim() === "") {
+    return { ok: false, reason: "NEXT_PUBLIC_MATOMO_URL absente" };
   }
-  if (/placeholder|your_/i.test(gaId)) {
-    return { ok: false, reason: `${varName} ressemble à un placeholder` };
+  if (!siteId || siteId.trim() === "") {
+    return { ok: false, reason: "NEXT_PUBLIC_MATOMO_SITE_ID absente" };
   }
-  if (!gaId.startsWith("G-")) {
-    return { ok: false, reason: `${varName} ne ressemble pas à un vrai ID GA4 (attendu : G-XXXXX...)` };
+  if (/placeholder|your_/i.test(matomoUrl) || /placeholder|your_/i.test(siteId)) {
+    return { ok: false, reason: "NEXT_PUBLIC_MATOMO_URL ou NEXT_PUBLIC_MATOMO_SITE_ID ressemble à un placeholder" };
   }
-  return { ok: true, reason: `GA4 configuré (${gaId})`, gaId, varName };
+  if (!/^\d+$/.test(siteId.trim())) {
+    return { ok: false, reason: `NEXT_PUBLIC_MATOMO_SITE_ID ("${siteId}") ne ressemble pas à un ID numérique` };
+  }
+  try {
+    // eslint-disable-next-line no-new
+    new URL(matomoUrl);
+  } catch {
+    return { ok: false, reason: `NEXT_PUBLIC_MATOMO_URL ("${matomoUrl}") n'est pas une URL valide` };
+  }
+
+  return {
+    ok: true,
+    reason: `Matomo configuré (site ${siteId} @ ${matomoUrl})`,
+    matomoUrl,
+    siteId,
+  };
 }
 
 // -----------------------------------------------------------------------------
@@ -641,11 +488,6 @@ function checkDarkMode() {
     "app/layout.tsx",
     "apps/web/src/app/layout.tsx",
     "apps/web/app/layout.tsx",
-    // i18n layouts (next-intl with [locale] segment)
-    "src/app/[locale]/layout.tsx",
-    "app/[locale]/layout.tsx",
-    "apps/web/src/app/[locale]/layout.tsx",
-    "apps/web/app/[locale]/layout.tsx",
   ];
 
   let providerMounted = false;
@@ -704,42 +546,16 @@ function checkDarkMode() {
 }
 
 // -----------------------------------------------------------------------------
-// dispatch
+// run
 // -----------------------------------------------------------------------------
-const dispatchers = {
-  db: checkDb,
-  email: checkEmail,
-  auth: checkAuth,
-  vercel: checkVercel,
-  "github-repo": checkGithubRepo,
-  i18n: checkI18n,
-  stripe: checkStripe,
-  storage: checkStorage,
-  analytics: checkAnalytics,
-  cloudflare: checkCloudflare,
-  "dark-mode": checkDarkMode,
-};
-
 const result = {};
 for (const check of checks) {
   const fn = dispatchers[check];
-  if (fn) {
-    result[check] = fn();
-  } else {
+  if (!fn) {
     result[check] = { ok: false, reason: `check inconnu: ${check} (supportés: ${Object.keys(dispatchers).join(", ")})` };
+    continue;
   }
-}
-
-// When Vercel was requested, surface info about the pull so callers know whether values came from local only or local+vercel.
-// IMPORTANT: don't leak secret values - only expose KEYS (var names) that were pulled from Vercel.
-if (includeVercel) {
-  const pullSummary = vercelEnvInfo
-    ? { ok: vercelEnvInfo.ok, reason: vercelEnvInfo.reason, keys: Object.keys(vercelEnvInfo.vars || {}) }
-    : null;
-  result._meta = {
-    sources: vercelEnvInfo?.ok ? ["local", "vercel-production"] : ["local"],
-    vercelPull: pullSummary,
-  };
+  result[check] = await fn();
 }
 
 process.stdout.write(JSON.stringify(result));

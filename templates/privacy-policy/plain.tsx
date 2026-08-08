@@ -130,6 +130,11 @@ export default function PrivacyPolicyPage() {
               </div>
             ))}
           </div>
+          <p className="text-sm text-muted-foreground">
+            Note : les polices de caractères du site (Google Fonts) sont récupérées une seule
+            fois au moment de la construction du site (« build »), puis servies directement par
+            notre hébergeur ; le navigateur des visiteurs n’envoie aucune requête à Google.
+          </p>
         </Section>
 
         <Section title="5. Vos droits">
@@ -172,9 +177,10 @@ export default function PrivacyPolicyPage() {
             n’est déposé sans votre consentement explicite.
           </p>
           <p>
-            Si une fonctionnalité d’analyse d’audience nécessitant un consentement est
-            activée (par exemple Google Analytics), un bandeau de consentement s’affiche avant
-            tout dépôt de cookie non-essentiel.
+            Si une mesure d’audience est activée (Matomo), elle fonctionne par défaut en mode
+            sans cookie (aucun identifiant visiteur déposé) et ne nécessite donc pas de
+            consentement préalable. Si un suivi nécessitant un consentement était activé, un
+            bandeau de consentement s’afficherait avant tout dépôt de cookie non-essentiel.
           </p>
         </Section>
 

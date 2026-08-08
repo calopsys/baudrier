@@ -1,7 +1,8 @@
 // Goes to: apps/web/src/app/admin/agents/[name]/trigger-form.tsx
 //
 // Client island for triggering an agent run on-demand. Submits via the tRPC
-// mutation, then polls every 2 s for the trigger's status until done/failed.
+// mutation; the agent's Scaleway Serverless Job picks it up on its next
+// scheduled tick (a few minutes, not seconds - see entry.ts and router.ts).
 //
 // Used in agent-detail.tsx.
 
@@ -28,12 +29,12 @@ export function TriggerForm({ agentName }: { agentName: string }) {
     try {
       const result = await triggerMutation.mutateAsync({ agentName, prompt });
       toast.success(
-        `Demande envoyée, l'agent va la prendre en charge dans les 5 secondes (id ${result.triggerId.slice(0, 8)})`,
+        `Demande envoyée, l’agent va la prendre en charge d’ici quelques minutes (id ${result.triggerId.slice(0, 8)})`,
       );
       setPrompt("");
-      // Refresh the invocations list after a few seconds (giving the worker
-      // time to pick up + finish the run for short ones).
-      setTimeout(() => router.refresh(), 6000);
+      // Refresh the invocations list after a couple of minutes (giving the
+      // Job time to wake up on its next tick and finish the run for short ones).
+      setTimeout(() => router.refresh(), 120_000);
     } catch (e) {
       toast.error(`Échec : ${e instanceof Error ? e.message : "erreur inconnue"}`);
     } finally {
@@ -44,7 +45,7 @@ export function TriggerForm({ agentName }: { agentName: string }) {
   return (
     <form onSubmit={onSubmit} className="space-y-2">
       <Textarea
-        placeholder="Que doit faire l'agent ?"
+        placeholder="Que doit faire l’agent ?"
         value={prompt}
         onChange={(e) => setPrompt(e.target.value)}
         rows={2}

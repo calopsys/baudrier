@@ -17,7 +17,7 @@ The two complement each other and can be installed **in any order**: as soon as 
 
 ## How it works
 
-1. **Check**: if the center is already in place, Hypervibe offers a menu (reinstall the bell, regenerate, re-wire the push).
+1. **Check**: if the center is already in place, Baudrier offers a menu (reinstall the bell, regenerate, re-wire the push).
 
 2. **Prerequisites**: a database (`/add-db`) to store the notifications, and user accounts (`/add-auth`) to know who each notification belongs to.
 

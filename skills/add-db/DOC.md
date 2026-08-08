@@ -1,6 +1,6 @@
 # /add-db
 
-Adds a **database** to your project so you can store information that persists over time. Hypervibe provisions a PostgreSQL database hosted in Europe, wires it into your code, and enables automatic backups.
+Adds a **database** to your project so you can store information that persists over time. Baudrier provisions a PostgreSQL database hosted in France, wires it into your code, and keeps it backed up automatically.
 
 ## When to use it
 
@@ -9,39 +9,46 @@ Adds a **database** to your project so you can store information that persists o
 
 ## How it works
 
-1. **Check**: Hypervibe looks at whether a database is already wired into this project.
-  - If so, a small menu offers you: push the schema, migrate to a new database, reset the tables, or redo everything. No risk of duplicates.
-  - Otherwise, it moves on.
-2. **Neon project creation**: a Neon project is created under your account, in the `aws-eu-central-1` region (Frankfurt), the same region as your Vercel functions for minimal latency.
-3. **Driver installation**: the Neon serverless driver is installed in your project (edge-computing compatible).
-4. **Drizzle ORM configuration**: Hypervibe configures Drizzle (the tool that acts as the intermediary between your code and the database) to talk to your Neon database.
-5. **Schema application**: the structure of the tables you have (or that Hypervibe creates) is pushed to the database. From now on, your code can read from and write to it.
-6. **Saving the key**: the connection string (`DATABASE_URL`) is saved both in your local `.env` and on Vercel (production + preview + development). You have nothing to copy and paste.
-7. **Automatic backups**: Hypervibe quietly enables automatic backups (a new one every 2 weeks, keeping the 2 latest + 3 historical ones over 9 months).
+1. **Check**: Baudrier looks at whether a database is already wired into this project.
+   - If so, a small menu offers you: apply a schema change, or start over with a brand-new database. No risk of duplicates.
+   - Otherwise, it moves on.
+2. **Database creation**: a Scaleway Serverless SQL Database (PostgreSQL 16) is created under your project, in the `fr-par` region (Paris).
+3. **Dedicated access key**: a private access key is created just for this app - it is never shared with any other project, and it never expires (so your app never breaks because a key silently lapsed).
+4. **Drizzle ORM configuration**: Baudrier configures Drizzle (the tool that acts as the intermediary between your code and the database) to talk to your database.
+5. **Saving the connection**: the connection string is saved securely on Scaleway's side (Secret Manager). It is never written to a file on this computer, and never shown in the chat - there is nothing for you to copy or lose.
+6. **Automatic backups**: included from day one, nothing to turn on. A snapshot is taken every day and kept for 7 days.
 
 ## What it creates for you
 
-- A **Neon project** in your name, ready to receive data
-- The **Drizzle schema file** (`src/server/db/schema.ts`) where you (or Hypervibe) will define your tables
+- A **Scaleway Serverless SQL Database** in your project, ready to receive data
+- The **Drizzle schema file** (`src/server/db/schema.ts`) where you (or Baudrier) will define your tables
 - The connection configured in `src/server/db/index.ts`
-- The handy commands: `pnpm db:push` (to push a schema change) and `pnpm db:studio` (to explore your data in a graphical interface)
-- **Automatic backups** enabled (a Cloudflare Worker shared across your projects)
+- The handy command `pnpm db:generate` (prepares a schema change safely, without touching the live database)
+- **Automatic backups** active from the start, no setup needed
+
+## An important difference from most database tools
+
+This computer never talks directly to your database - not even to preview a change. When you (or Baudrier) change what data your app stores, the change is written to a file first; it only becomes real the next time you publish (`/deploy`), through a dedicated, safe process. This is a deliberate safety choice: it removes an entire category of "someone ran a risky command against production by accident" mistakes.
 
 ## Prerequisites
 
 - The project must be a Next.js project (typically initialized by `/bootstrap`)
-- A Neon API key must be stored in your vault (item `NEON`) - created once on console.neon.tech. Hypervibe detects this and guides you to add it if nothing is available.
+- Your Scaleway account must be connected (`/start` takes care of it, once)
 
 ## Tips
 
-{{callout:tip|Neon free plan}}
-Neon offers a very generous free plan: 100 projects max, 0.5 GB of storage per project, 100 compute hours per month. The database pauses automatically when nobody is using it (zero cost when idle). More than enough for the vast majority of projects.
+{{callout:tip|Included, no separate plan to pick}}
+There's no free-tier-vs-paid-tier database decision to make here: the database scales itself down when nobody is using it and scales up automatically with traffic. You don't need to size anything up front.
 {{/callout}}
 
 {{callout:info|Backups come for free}}
-You don't have to configure backups manually: Hypervibe enables a Cloudflare Worker shared across all your projects that takes a Neon snapshot every 2 weeks. A single Cloudflare "slot" used, even for 50 projects.
+You don't have to configure backups manually: a daily snapshot with 7-day retention is included at no extra cost from the moment the database is created. There's currently no button to trigger an extra backup on demand - the daily one is the safety net.
 {{/callout}}
 
-{{callout:warning|Data in Europe}}
-The database is deliberately created in Europe (Frankfurt) to comply with RGPD on the data-residency side. You have nothing to do for that.
+{{callout:warning|Data in France}}
+The database is created in the `fr-par` (Paris) region to comply with RGPD on the data-residency side. You have nothing to do for that.
+{{/callout}}
+
+{{callout:warning|Baudrier never deletes a database}}
+Deleting a database is never something Baudrier does on its own, even if asked - it's technically blocked. If you genuinely want a database gone, that's a deliberate, manual action you take yourself in the Scaleway console. This is intentional: with no on-demand backup available right before a deletion, an accidental one would be unrecoverable past the last daily snapshot.
 {{/callout}}

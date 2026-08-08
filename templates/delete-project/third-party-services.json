@@ -1,10 +1,10 @@
 {
-  "comment": "Lookup table pour détecter des services tiers (hors stack Hypervibe standard) connectés à un projet. Le matching se fait par regex sur le NOM de la variable d'env (pas la valeur). Lors d'un /delete-project, ces services sont flaggés et l'utilisateur doit nettoyer manuellement (URL fournie). Maintenir cette liste à jour quand un nouveau service tiers commun apparaît.",
+  "comment": "Lookup table pour détecter des services tiers (hors stack Baudrier/Scaleway standard) que l'utilisateur a lui-même connectés à un projet. Le matching se fait par regex sur le NOM de la variable d'env (jamais la valeur). Lors d'un /delete-project, ces services sont signalés et l'utilisateur doit nettoyer manuellement (URL fournie) - le harness ne peut ni les découvrir automatiquement (aucune infra Scaleway ne les connaît) ni les supprimer à sa place. Maintenir cette liste à jour quand un nouveau service tiers courant apparaît dans les projets générés.",
   "services": [
     {
       "pattern": "^OPENAI_",
       "service": "OpenAI",
-      "label": "OpenAI (modèles GPT, embeddings, etc.)",
+      "label": "OpenAI (modèles GPT, embeddings, etc. - distinct des Generative APIs Scaleway fournies par le harness)",
       "actionUrl": "https://platform.openai.com/api-keys",
       "instructions": "Va sur platform.openai.com → API keys. Si une clé est dédiée à ce projet (nom contient le projet), supprime-la. Si la clé est globale et partagée, ne touche pas."
     },
@@ -25,7 +25,7 @@
     {
       "pattern": "^POSTHOG_|^NEXT_PUBLIC_POSTHOG_",
       "service": "PostHog",
-      "label": "PostHog (analytics produit)",
+      "label": "PostHog (analytics produit - distinct de Matomo fourni par le harness)",
       "actionUrl": "https://app.posthog.com/project/settings",
       "instructions": "Va sur posthog.com → Project settings. Trouve le projet correspondant → Delete project."
     },
@@ -46,14 +46,14 @@
     {
       "pattern": "^SUPABASE_|^NEXT_PUBLIC_SUPABASE_",
       "service": "Supabase",
-      "label": "Supabase (DB / auth alternative)",
+      "label": "Supabase (base de données / auth alternative à la Serverless SQL Database Scaleway)",
       "actionUrl": "https://supabase.com/dashboard/projects",
       "instructions": "Va sur supabase.com → Dashboard. Trouve le projet correspondant → Settings → General → Delete project."
     },
     {
       "pattern": "^MISTRAL_",
       "service": "Mistral",
-      "label": "Mistral AI (LLM)",
+      "label": "Mistral AI (LLM - distinct des Generative APIs Scaleway)",
       "actionUrl": "https://console.mistral.ai/api-keys/",
       "instructions": "Va sur console.mistral.ai → API keys. Supprime la clé dédiée au projet si applicable."
     },
@@ -81,28 +81,28 @@
     {
       "pattern": "^ELEVENLABS_",
       "service": "ElevenLabs",
-      "label": "ElevenLabs (TTS / voice cloning)",
+      "label": "ElevenLabs (synthèse vocale / clonage de voix)",
       "actionUrl": "https://elevenlabs.io/app/settings/api-keys",
-      "instructions": "Va sur elevenlabs.io → Settings → API keys. Note : généralement partagée, vérifier avant de supprimer."
+      "instructions": "Va sur elevenlabs.io → Settings → API keys. Note : souvent partagée, vérifie avant de supprimer."
     },
     {
       "pattern": "^PRINTFUL_",
       "service": "Printful",
-      "label": "Printful (print-on-demand)",
+      "label": "Printful (impression à la demande)",
       "actionUrl": "https://www.printful.com/dashboard/store",
       "instructions": "Va sur printful.com → Stores. Vérifie si une boutique est dédiée à ce projet → archive ou supprime."
     },
     {
       "pattern": "^PRINTIFY_",
       "service": "Printify",
-      "label": "Printify (print-on-demand)",
+      "label": "Printify (impression à la demande)",
       "actionUrl": "https://printify.com/app/api",
       "instructions": "Va sur printify.com → API. Vérifie les apps connectées à ce projet."
     },
     {
       "pattern": "^GITHUB_TOKEN$|^GITHUB_PAT$",
       "service": "GitHub PAT",
-      "label": "GitHub Personal Access Token (PAT)",
+      "label": "GitHub Personal Access Token (PAT) - distinct du token GitHub Actions géré par le harness",
       "actionUrl": "https://github.com/settings/tokens",
       "instructions": "Va sur github.com → Settings → Developer settings → Personal access tokens. Si un PAT est dédié à ce projet (nom contient le projet), révoque-le."
     },
@@ -111,7 +111,7 @@
       "service": "Service personnel de l'utilisateur",
       "label": "Compte personnel (potentiellement partagé entre projets, à NE PAS supprimer)",
       "actionUrl": null,
-      "instructions": "Ces variables correspondent à des comptes personnels mutualisés entre projets (documentés dans ~/.claude/CLAUDE.md global). Ne PAS supprimer la clé / le compte. Le projet supprimé arrête juste de les utiliser."
+      "instructions": "Ces variables correspondent à des comptes personnels mutualisés entre projets. Ne PAS supprimer la clé / le compte. Le projet supprimé arrête juste de les utiliser."
     }
   ]
 }

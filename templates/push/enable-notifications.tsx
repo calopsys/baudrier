@@ -1,7 +1,7 @@
 "use client";
 
-// Bouton "Activer les notifications" : demande la permission, abonne l'appareil
-// via PushManager (clé VAPID publique), et enregistre l'abonnement côté serveur.
+// Bouton "Activer les notifications" : demande la permission, abonne l’appareil
+// via PushManager (clé VAPID publique), et enregistre l’abonnement côté serveur.
 // À placer dans une zone connectée (compte, dashboard). /add-push-notification
 // adapte le wording et les couleurs à la palette du projet.
 import { useEffect, useState } from "react";
@@ -46,7 +46,10 @@ export function EnableNotifications() {
   async function enable() {
     setBusy(true);
     try {
-      const vapid = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+      // Lue depuis la query `status` (donnée serveur), pas depuis une constante
+      // NEXT_PUBLIC_* : celle-ci serait figée au build, avant que le secret ne
+      // soit injecté dans le conteneur au déploiement (voir push-router.ts).
+      const vapid = status.data?.vapidPublicKey;
       if (!vapid) {
         toast.error("Notifications non configurées.");
         return;
@@ -71,7 +74,7 @@ export function EnableNotifications() {
       toast.success("Notifications activées sur cet appareil.");
     } catch (err) {
       console.error(err);
-      toast.error("Impossible d'activer les notifications sur cet appareil.");
+      toast.error("Impossible d’activer les notifications sur cet appareil.");
     } finally {
       setBusy(false);
     }

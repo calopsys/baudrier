@@ -1,6 +1,6 @@
 // Notifications push : bloc inséré par /add-push-notification dans le service
 // worker créé par /add-pwa (src/app/sw.ts), juste après le marker
-// "hypervibe:push-handlers". Ne pas dupliquer si déjà présent.
+// "baudrier:push-handlers". Ne pas dupliquer si déjà présent.
 self.addEventListener("push", (event) => {
   let data: { title?: string; body?: string; url?: string } = {};
   try {

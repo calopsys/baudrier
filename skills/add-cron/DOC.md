@@ -8,55 +8,54 @@ Adds a task that runs automatically at a fixed time in your project. Ideal for s
 - **Clean up** the database at night (delete temporary files, expired sessions, etc.)
 - **Sync** your data with an external API every hour
 - Generate an automatic **weekly report**
+- **Keep your site from falling asleep** between visitors
 
 ## How it works
 
-1. **Task description**: you describe in one sentence what the task should do (e.g.: *"send a weekly SEO report by email"*, *"reset user quotas at midnight"*).
+1. **Task description**: you describe in one sentence what the task should do (e.g.: *"send a weekly SEO report by email"*, *"reset usage counters at midnight"*).
 
-2. **When to run it**: you specify the schedule in natural language (*"every day at 9am"*, *"every Monday morning"*, *"every hour"*). Hypervibe converts it into a UTC cron expression.
+2. **When to run it**: you specify the schedule in natural language (*"every day at 9am"*, *"every Monday morning"*, *"every hour"*). Baudrier keeps it in your own local time - no hidden conversion.
 
 3. **Short name**: you give a kebab-case name for the task (`rapport-hebdo`, `sync-clients`, `nettoyage`).
 
-4. **Automatic clock choice**: Hypervibe decides for itself which clock to use (you have no choice to make):
-  - **Your shared clock** (the default, for virtually everything): a single mechanism that serves **all** your projects. Precise to the minute, and zero extra cost no matter how many tasks you add. It is the same clock that already handles your database backups and your quota watch.
-  - **Dedicated Cloudflare Worker** (rare): only when the task needs its own isolated resources on Cloudflare (its own R2, KV or D1 space, or a secret that must not be shared with your other projects).
-  - **GitHub Action** (fallback): used only when Cloudflare is not set up on your computer. Free and unlimited, but with **a possible 30-60 min delay**.
+4. **Automatic decision**: Baudrier decides for itself where the task's logic should live (you have no choice to make):
+  - **In your app** (the default, for almost everything): the task can read and write your data, send emails, and reuse everything already coded in your site.
+  - **A "keep it awake" visit** (rare): if all you want is to stop your site from falling asleep between visitors, since only a real visit - not an automatic check - keeps it awake.
+  - **A direct ping to another service** (rare): if the task is simply "notify this other address on a schedule", with nothing to process.
 
-5. **Automatic configuration**: Hypervibe scaffolds everything, the protected endpoint `/api/cron/<name>` on the Next.js side, the `CRON_SECRET` key (generated if missing), the registration of the schedule on the chosen clock (and the GitHub secrets if the GitHub clock is used).
+5. **Automatic setup**: Baudrier creates a small scheduled task on Scaleway's infrastructure (a "Job" with its own precise clock, real timezone, no shared or limited slot), the protected file where your logic will live if needed, and the `CRON_SECRET` key (generated if missing).
 
-6. **Recap**: Hypervibe explains in one sentence **which clock was chosen and why** (for example: *"I put it on your shared clock: precise to the minute, it serves all your projects at zero extra cost"*).
+6. **Recap**: Baudrier explains in one sentence **what it set up and why**.
 
-7. **Up to you to code the logic**: the task is in place but does nothing yet. Hypervibe has prepared the file where you (or Claude) will write what it should run.
+7. **Up to you to code the logic** (when relevant): the task is in place but does nothing yet. Baudrier has prepared the file where you (or Claude) will write what it should run.
 
 ## What it creates for you
 
-- A **protected route** `/api/cron/<name>` on the Next.js side (with `CRON_SECRET` verification)
-- The task **registered on the right clock** (your shared clock by default; dedicated Worker or GitHub Action when justified)
-- On the shared clock: the schedule saved in a small **versioned registry** on your computer (every change is recorded, you can always see what changed and when)
-- The `CRON_SECRET` key in `.env` + Vercel
+- A **scheduled task** on Scaleway, precise, on your own timezone, with no limit on how many you can have
+- For most tasks: a **protected route** `/api/cron/<name>` in your app (secured by a private key) where the logic lives
+- The `CRON_SECRET` key in `.env` + your site's configuration
 - An update to `CLAUDE.md` with the task recap
 
 ## Prerequisites
 
-- The project must be Next.js deployed on Vercel (typically via `/bootstrap`)
-- For the shared clock (and dedicated Workers): Cloudflare connected to your computer (`/start` handles it). If Cloudflare is not available, Hypervibe automatically switches to GitHub Action.
+- The project must be Next.js, deployed on Scaleway (typically via `/bootstrap` then `/deploy`)
+- If your site hasn't been put online yet, Baudrier prepares everything and finishes turning on the schedule the moment you tell it your first deployment is done
 
 ## Tips
 
 {{callout:tip|You can drive it in natural language}}
-Once the task is in place, simply tell Hypervibe:
+Once the task is in place, simply tell Baudrier:
 - *"run the task right now to test it"*, manual trigger
-- *"show me the latest triggers"*, history
 - *"change the schedule to 10am"*, cron modification
 - *"delete this task"*, full deletion
 
 You have **nothing** to type in a terminal.
 {{/callout}}
 
-{{callout:info|One clock for everything}}
-Behind the scenes, all your projects share **a single clock** (a mutualized Cloudflare mechanism called `hypervibe-jobs`). It handles your scheduled tasks, your database backups and your quota watch, ticks every minute, and consumes a single Cloudflare cron slot in total, whether you have 1 task or 50 spread across 10 projects. Its schedule list is versioned (git) on your computer, so every change leaves a trace. A dedicated clock is created only when a task really needs its own isolated resources.
+{{callout:info|One task, one precise clock}}
+Each scheduled task gets its own small, dedicated mechanism on Scaleway's infrastructure, with a real timezone and no limit on how many you can add - unlike some other platforms, there is no shared bottleneck to manage and nothing to migrate later if you add more tasks.
 {{/callout}}
 
 {{callout:warning|Bad candidate for /add-cron}}
-If your need requires a **continuous process** (24/7), **persistent in-memory state** between runs, or takes **more than 60 seconds** per run, you should run `/add-automation` instead (not `/add-cron`). Hypervibe detects this case and redirects you automatically.
+If your need is a **continuous process** that must stay running between ticks (a live listener, a queue consumer), you should run `/add-automation` instead (not `/add-cron`). Baudrier detects this case and redirects you automatically.
 {{/callout}}

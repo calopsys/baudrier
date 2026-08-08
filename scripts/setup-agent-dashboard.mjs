@@ -30,13 +30,6 @@ import {
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { ensureToolsInPath } from "./_ensure-tools-path.mjs";
-
-// Prepend common CLI install dirs to process.env.PATH so subprocess invocations
-// (pnpm, gh, vercel, git, node) find their binaries even if Claude Code
-// inherited a stale PATH (typical when tools were just installed via /start).
-ensureToolsInPath();
-
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const TEMPLATE_DIR = resolve(__dirname, "../templates/agent-dashboard");
 
@@ -111,7 +104,7 @@ async function preflight() {
 // The dashboard's trigger-form uses ~/components/ui/textarea, which is NOT
 // installed by /bootstrap by default. Idempotent: if the file exists, skip.
 // Run a shell command. capture=true pipes stdout/stderr (returned as strings);
-// otherwise it inherits the parent stdio. Cross-platform via shell:true.
+// otherwise it inherits the parent stdio.
 function run(cmd, cwd, capture = false) {
   return spawnSync(cmd, { cwd, shell: true, encoding: "utf8", stdio: capture ? "pipe" : "inherit" });
 }

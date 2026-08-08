@@ -31,13 +31,6 @@ import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 import { render } from "./_render.mjs";
 
-import { ensureToolsInPath } from "./_ensure-tools-path.mjs";
-
-// Prepend common CLI install dirs to process.env.PATH so subprocess invocations
-// (pnpm, gh, vercel, git, node) find their binaries even if Claude Code
-// inherited a stale PATH (typical when tools were just installed via /start).
-ensureToolsInPath();
-
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // ─── args ─────────────────────────────────────────────────────────────
@@ -246,12 +239,12 @@ async function hashPasswords() {
     fail(`hash-password.mjs (dev) failed with exit ${devRes.status}`);
   }
   state.devHash = devRes.stdout.trim();
-  if (!/^[0-9a-f]+:[0-9a-f]+$/.test(state.devHash)) {
+  if (!/^scrypt:N=\d+,r=\d+,p=\d+:[0-9a-f]+:[0-9a-f]+$/.test(state.devHash)) {
     fail(`Unexpected dev hash format: ${state.devHash.slice(0, 50)}`);
   }
   ok("Dev hash ready");
 
-  // Prod: --generate produces `password=<plain>\nhash=<salt:hash>` on stdout
+  // Prod: --generate produces `password=<plain>\nhash=<scrypt:N=..,r=..,p=..:salt:hash>` on stdout
   const prodRes = spawnSync(
     "node",
     [hashScript, "--generate", "--length", "24", "--format", "alphanumeric"],
@@ -335,11 +328,15 @@ async function pushEnvVars() {
     `ADMIN_PASSWORD_HASH_PROD=${state.prodHash}`,
   ];
 
-  // ADMIN_PASSWORD_HASH_DEV must reach development (we want the dev login working
-  // locally too); --target=all forces all 3 environments regardless of NEXT_PUBLIC_ prefix.
-  const res = spawnSync("node", [helper, "--target=all", ...kvs], {
+  // ADMIN_PASSWORD_HASH_DEV is written to the local .env unconditionally by
+  // push-env-vars.mjs (that write always happens); --env production scopes
+  // the Serverless Container / Secret Manager push to the production container.
+  // Pairs travel over stdin, not argv, so none of these secrets end up
+  // visible in the process list.
+  const res = spawnSync("node", [helper, "--env", "production", "--stdin"], {
     cwd: WEB_DIR,
-    stdio: "inherit",
+    input: kvs.join("\n") + "\n",
+    stdio: ["pipe", "inherit", "inherit"],
     shell: false,
   });
   if (res.status !== 0) {

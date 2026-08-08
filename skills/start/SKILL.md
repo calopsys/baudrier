@@ -1,12 +1,12 @@
 ---
 name: start
-description: First-time onboarding for Hypervibe. Checks that all prerequisites are installed (CLIs, accounts, auth), explains what the plugin does, and guides toward the first /bootstrap. Use when someone installs the plugin for the first time.
-compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (vercel, gh)."
+description: First-time onboarding for Baudrier on Claude Code web. Verifies the session is a Claude Code web sandbox, checks the harness's own dependencies, repo access, git identity, Scaleway environment variables and permissions, network reachability, and Docker, then guides toward the first /bootstrap. Use when someone installs the plugin for the first time, or opens a fresh Claude Code web session.
+compatibility: "Agent Skills standard (Claude Code). Runs only on Claude Code web (claude.ai/code): Node.js, git, pnpm and Docker are preinstalled by the cloud environment's own Setup script."
 ---
 
 # Start - First-time use
 
-You are welcoming a new Hypervibe user. Your role is to verify that everything is in place, install what is missing, and guide them toward their first project.
+You are welcoming a new Baudrier user. Your role is to verify that everything is in place, install what is missing, and guide them toward their first project.
 
 ## Communication
 - Detect the user's language from their messages and ALWAYS reply in that language (default: English). This applies to every user-facing message: questions, progress, confirmations, summaries, errors.
@@ -14,594 +14,225 @@ You are welcoming a new Hypervibe user. Your role is to verify that everything i
 - When generating user-facing content for the scaffolded project (UI labels, emails, copy), write it in the user's language too.
 - Show progress as a short natural-language checklist (in-progress and done states).
 
+This harness runs **entirely on Scaleway** (CONTRACT.md §1): a single hosting provider, a single secrets store, no separate key vault to set up. The machine running Claude Code builds the container image itself (`docker build`, CONTRACT.md §5) - no GitHub Actions anywhere in the pipeline, so there is nothing to check for that. Scaleway credentials are **environment variables only** (CONTRACT.md §2, §7): `scw` has no login of its own to run and is not part of the toolchain at all, and neither is `gh` - repo access is native git auth, checked with `git ls-remote origin`. Baudrier runs **only on Claude Code web** (claude.ai/code, CONTRACT.md §1, §7): an ephemeral, root, no-persistent-home VM, with Node, git, pnpm and Docker preinstalled by the cloud environment's own Setup script (`scripts/setup-clis-web.sh`). `/start` therefore deals with exactly nine things: the environment itself, the harness's own dependencies, repo access, git identity, Scaleway credentials and rights, network reachability, Docker, identity verification (KYC), and the handoff to `/bootstrap`.
+
 ---
 
+## Step 1 - Welcome + environment guard
 
-## Step 1 - Welcome + OS detection
-
-Display the welcome message, then silently detect the OS:
+Display the welcome message, then silently check the environment:
 
 ```bash
-uname -s 2>/dev/null || echo "Windows"
+echo "claude_code_remote=${CLAUDE_CODE_REMOTE:-}"
 ```
 
-- Result `Darwin` → **macOS** → store `OS=mac`
-- Result containing `MINGW`, `MSYS`, or `Windows` → **Windows** → store `OS=windows`
-- Result `Linux` → **Linux** → store `OS=linux`
+**If `claude_code_remote` is not `true` or `1`**, stop immediately - do not run anything else in this skill. Say, in French, then wait:
 
-> **Welcome to Hypervibe!**
->
-> This plugin lets you build complete web applications in just a few minutes. You describe what you want, and I build it.
->
-> First, I will check your environment and install what is missing.
+> Baudrier fonctionne **uniquement sur Claude Code web** (claude.ai/code). Ouvrez le chapitre Installation du README pour créer votre environnement cloud « Baudrier », puis relancez `/start` depuis cet environnement.
 
-**All the following steps adapt based on the detected OS.**
+**If `claude_code_remote` is `true` or `1`**, continue.
+
+> **Bienvenue sur Baudrier !**
+>
+> Ce plugin vous permet de créer des applications web complètes en quelques minutes. Vous décrivez ce que vous voulez, je construis.
+>
+> Je vais d’abord vérifier votre environnement et installer ce qui manque.
 
 ---
 
-## Step 2 - Silent audit
+## Step 2 - Dependencies (blocking)
 
-Run the audit helper, silently. It checks every CLI (installed + logged in) with a
-per-command timeout, so a CLI that hangs on a network call degrades to a `timeout`
-row instead of freezing the whole audit and returning nothing:
+```bash
+node "${CLAUDE_SKILL_DIR}/../../tools/bootstrap-deps.mjs" --json
+```
+
+`ok: true` → say nothing, continue silently. `ok: false` → the environment's Setup script normally already ran this once while the environment was being built, so a failure here means an actual repair is needed. Re-run the Setup script yourself, inside this session, as a repair pass (it is idempotent):
+
+```bash
+bash "${CLAUDE_SKILL_DIR}/../../scripts/setup-clis-web.sh"
+```
+
+then retry the `bootstrap-deps.mjs --json` check once. If it still reports `ok: false`, show the `error` field reworded in plain French and stop - every later step needs these libraries.
+
+⚠️ **Claude-only note - the `health` field.** `health: "broken"` is a specific, non-obvious failure: the packages downloaded fine but are unusable. Scaleway has been publishing packages whose compiled output is missing from the tarball, which is exactly why versions here are pinned to an exact release rather than a range (CONTRACT.md §3). The diagnostic tool is `tools/check-deps-health.mjs`; it names the offending package. Never relax a pin to "fix" this without running it. To the user, say only:
+
+> Une des librairies téléchargées est défectueuse côté éditeur. Ce n’est pas votre installation. Je regarde ce qui se passe.
+
+---
+
+## Step 3 - Repo access
+
+```bash
+git ls-remote origin
+```
+
+This is the whole gate - **never** `gh auth login`, **never** `gh auth status`, no `gh` command at all (`gh` is not part of the toolchain here, CONTRACT.md §7). A working session already has git access to the repo it was opened on; a failure here almost always means GitHub was never connected to claude.ai/code, or the wrong repo is open - point the user at the chapter Installation du README.
+
+- **Succeeds** → say nothing, continue to Step 4.
+- **Fails** → relay the raw git error in plain French and point the user at the README chapter above - this is a GitHub-to-Claude-Code-web connection Baudrier does not manage or fix for them.
+
+---
+
+## Step 4 - Identité git
+
+Git refuses to create a commit until it knows who is committing, and it fails with a message a non-technical user cannot act on (`Identité d'auteur inconnue - Veuillez me dire qui vous êtes`). Every commit this harness makes for them hits it: `/bootstrap`'s first commit, every `add-*` skill that commits its scaffolding, and `/deploy`'s push. Configure it here, once, rather than letting it surface mid-deploy.
+
+This runs **after** Step 3 because it derives the values from the `origin` remote's own owner (parsed straight from the git remote URL - `gh` is no longer part of the toolchain, CONTRACT.md §7).
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/setup-git-identity.mjs" --json
+```
+
+| `status` | What to do |
+|---|---|
+| `already-set` | say nothing, continue - an existing identity is never overwritten |
+| `suggested` | show `suggested.name` / `suggested.email`, ask for a single confirmation, then write |
+| `needs-input` | ask the user for their name and e-mail, then write |
+| `no-git` | should be impossible on the Baudrier cloud environment; treat it as a Step 1 environment problem |
+
+When `suggested`, ask exactly one question and offer the correction in the same breath:
+
+> Pour signer vos enregistrements de code, je vais utiliser **`<name>`** et l’adresse **`<email>`**.
+>
+> Cette adresse est une adresse de redirection fournie par GitHub : vos contributions restent bien rattachées à votre compte, mais votre véritable adresse personnelle n’apparaît jamais dans l’historique public de votre projet.
+>
+> Ça vous va, ou vous préférez un autre nom ou une autre adresse ?
+
+Then write what they confirmed or corrected:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/setup-git-identity.mjs" --name "<NAME>" --email "<EMAIL>" --json
+```
+
+`status: "written"` → confirm in one line. `write-failed` → show `reason` in plain French (the most likely cause is a mistyped e-mail, which the script refuses rather than storing) and ask again.
+
+⚠️ Write to the **global** scope (the script's default). Never pass `--local` here.
+
+---
+
+## Step 5 - Scaleway credentials and rights
+
+Scaleway credentials are **environment variables only, never collected in chat** (CONTRACT.md §2, §7): `scw` has no login of its own to run, and they live in the cloud environment's own env-var dialog.
+
+**Presence check:**
+
+```bash
+node -e 'for (const k of ["SCW_ACCESS_KEY","SCW_SECRET_KEY","SCW_DEFAULT_ORGANIZATION_ID","SCW_DEFAULT_REGION"]) console.log(k + "=" + (process.env[k] ? "set" : "MISSING"))'
+```
+
+If any line says `MISSING`, **stop here** - do not ask the user to paste anything into the chat. Say, in French:
+
+> ⚠️ Il manque au moins une variable Scaleway dans cet environnement. Ouvrez le tableau de bord Claude Code, modifiez l’environnement cloud « Baudrier », et complétez les variables `SCW_ACCESS_KEY`, `SCW_SECRET_KEY`, `SCW_DEFAULT_ORGANIZATION_ID`, `SCW_DEFAULT_REGION` (le détail exact est dans le chapitre Installation du README). Une fois enregistré, **démarrez une NOUVELLE conversation** : celle-ci ne peut pas relire les variables d’un environnement modifié pendant qu’elle tournait déjà.
+
+If all four are present, validate them live with one real API call:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/check-deps.mjs" scaleway
+```
+
+- `ok: true` → confirm to the user: `✅ Scaleway est connecté (identifiants vérifiés par un appel réel à l’API).`
+- `ok: false` → show `reason` in plain French and offer to retry once the fix is confirmed (a common cause: a value copy-pasted with a trailing space or missing character).
+
+**Rights check.** An organization member might not hold the one right `/bootstrap` depends on to create each app's own dedicated Scaleway Project - the harness detects this once, here, rather than fail confusingly the first time `/bootstrap` runs:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/check-scw-permissions.mjs"
+```
+
+One JSON line, e.g. `{"ok":true,"probes":{"projects":{"status":403,...},"iam":{...}},"likelyMissing":["ProjectManager"],"certainty":"denial-only","blocking":false}`. This is a **read-only** probe: a clean result does not *guarantee* create rights, but a denial is a certain "missing" signal.
+
+- **`likelyMissing` empty** → say nothing about it, continue straight to Step 6.
+- **`likelyMissing` non-empty** → show a **non-blocking** warning with two paths:
+
+  > ⚠️ Votre clé Scaleway fonctionne, mais elle n’a pas le droit de lister/créer des Projets au niveau de l’organisation (permission « ProjectManager »). Deux façons de continuer :
+  >
+  > **Cas A** - Vous êtes administrateur de l’organisation : recréez une clé avec cette permission au niveau de l’organisation (chapitre Installation du README), puis remplacez `SCW_SECRET_KEY` dans l’environnement cloud. **Démarrez ensuite une NOUVELLE conversation.**
+  > **Cas B** - Vous êtes membre de l’organisation : listez vos applications et leurs Projets Scaleway dans la variable `BAUDRIER_SCW_PROJECTS_IDS` de l’environnement cloud, sous la forme `app-un:id1,app-deux:id2` - Baudrier ciblera ces Projets sans jamais tenter d’en lister ou d’en créer un autre, et un seul environnement cloud sert toutes vos applications. Pour une seule application, la variable `SCW_DEFAULT_PROJECT_ID` fonctionne aussi.
+  >
+  > Dans les deux cas, une **nouvelle conversation** est nécessaire après la modification.
+
+  Explain Cas B further, non-blocking, in French:
+
+  > Pas besoin d’attendre. Baudrier fonctionne normalement avec votre clé actuelle : pour créer une base de données, un bucket, une clé IA ou une clé email, il n’a besoin d’aucun aller-retour avec votre administrateur pendant le développement. Il utilise automatiquement, en interne, votre propre clé Scaleway le temps que la vraie clé technique soit créée - votre application reste restreinte au VPN pendant ce temps, donc ce n’est pas un problème.
+  >
+  > Votre administrateur est sollicité à exactement deux moments : la création de chaque nouveau projet Scaleway, et la fourniture des vraies clés techniques quand vous voulez rendre un site public (`/publish`). Pour le premier point, chaque nouvelle application (`/bootstrap`) vous demandera l’identifiant d’un projet Scaleway existant : celui que votre administrateur aura préparé pour cette application, ou votre propre projet par défaut si vous voulez d’abord faire un essai seul. Ajoutez cet identifiant à la liste `BAUDRIER_SCW_PROJECTS_IDS` de l’environnement cloud (« Edit environment », puis nouvelle conversation), ou donnez-le moi directement dans la conversation : il servira alors pour la session en cours. `/publish` bloque justement tant que les vraies clés techniques ne sont pas encore en place, et je vous prépare alors une liste unique, prête à transmettre.
+
+  If the user wants to prepare their administrator right away, give them this short forwardable message (French, no adoption step, no organization-wide key):
+
+  > Pour que je puisse travailler avec Baudrier, pouvez-vous m’accorder les permissions de service listées dans CONTRACT.md §1 (`SecretManagerFullAccess`, `ContainersFullAccess`, `ContainerRegistryFullAccess`, `ServerlessSQLDatabaseFullAccess`, `ServerlessJobsFullAccess`, `ObjectStorageFullAccess`, `DomainsDNSFullAccess`, `TransactionalEmailFullAccess`, `GenerativeApisFullAccess`, `BillingReadOnly`, `ObservabilityFullAccess`) - **sans** « ProjectManager » ni « IAMManager » ? Le guide détaillé est ici : `docs/ADMIN-SCALEWAY.md`. Ensuite, vous n’aurez plus rien à faire pendant tout le développement : un projet Scaleway par nouvelle application (`/bootstrap`), puis une seule liste groupée de clés techniques le jour où je voudrai rendre un site public (`/publish`).
+
+  If the user wants the `poc` behavior explicitly (rather than relying on `BAUDRIER_SCW_PROJECTS_IDS` or `SCW_DEFAULT_PROJECT_ID` alone), tell them to add `BAUDRIER_SCW_MODE=poc` to the cloud environment's variables themselves - there is no persistence script to run here, it is a plain environment variable (`full` by default, CONTRACT.md §1, §2), read fresh on every run.
+
+⚠️ **Never block Step 5 on this.** Whichever path the user takes, or skips, Step 5 already concluded above once the live validation succeeded - this subsection only adds a warning and, optionally, a message to forward.
+
+Continue straight to Step 6 either way.
+
+---
+
+## Step 6 - Network reachability of the Scaleway API
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' --max-time 10 https://api.scaleway.com/account/v3/projects
+```
+
+`400` or `401` **proves the domain is reachable** (Scaleway returns a `400` validation error for this call without an `organization_id` - not a network failure; only a `401`/`403` would point at the key itself, already handled above). An empty result or `000` means the environment's network access blocks `api.scaleway.com` - tell the user to switch the environment's network access to **Full** (the recommended setting, see the chapter Installation du README; a hardened Custom allowlist is possible but every missing domain breaks a step), then start a new session.
+
+---
+
+## Step 7 - Docker and tool audit
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/ensure-dockerd.mjs"
+```
+
+This only reports whether the daemon currently answers (`{"running":true|false}`) - it never starts it here. `running: false` is normal and **non-blocking**: `/bootstrap` and `/deploy` both start the daemon lazily themselves, the first time they actually need it (a fresh sandbox session never has `dockerd` running at boot, CONTRACT.md §1, §7). Do not try to start it yourself in this step.
+
+Cross-check every tool the environment's Setup script was supposed to install:
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/audit-clis.mjs" --json
 ```
 
-Each entry has a `status`: `ready` (installed + connected), `logged-out` (installed,
-login missing), `missing` (not installed), `timeout` (no answer in time - treat it as
-**not** verified, never as ready).
+Each entry has a `status`: `ready`, `outdated`, `missing`, or `timeout` (treat a timeout as **not** verified, never as ready). If anything besides Docker's own `daemonRunning` (already handled above) is not `ready`, the environment's Setup script did not fully succeed at build time. Say, in French:
 
-> **Note**: no more Resend CLI or MCP connector (Hostinger, GSC, Neon) to audit. These services now go through their REST API with a key stored in the **vault** (Bitwarden). The vault is set up in Step 3, and the cross-cutting keys (Cloudflare, Neon, email) are collected in Steps 4 and 7.
+> ⚠️ Votre environnement cloud « Baudrier » n’a pas installé tous les outils correctement. Le plus fiable est de le reconstruire : dans le tableau de bord Claude Code, ouvrez l’environnement « Baudrier » et relancez sa construction (le script de configuration, `setup-clis-web.sh`, est rejoué automatiquement). Relancez `/start` une fois la reconstruction terminée.
 
-### Cloudflare token (stored in the vault)
-
-Cloudflare is used by 4 add-ons (`/add-domain`, `/add-email`, `/add-cron`, `/add-storage`). A single API token, now **stored in the vault** (item `CLOUDFLARE`, field `api_token`). `wrangler` reads it on the fly (helper `wrangler-env-init.mjs`).
-
-Check whether it is present (only if the vault is already unlocked, otherwise we collect it in Step 4):
-```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/vault/vault.mjs" get CLOUDFLARE api_token >/dev/null 2>&1 && echo "présent" || echo "à configurer (Étape 4)"
-```
-
-### Neon
-The Neon API key is **stored in the vault** (item `NEON`, field `api_key`), collected in Step 7. Provisioning + SQL via REST API / helper `run-sql.mjs`.
-
-Classification of each tool: ✅ installed+connected · ⚠️ installed without login · ❌ not installed.
+Do not try to patch a broken tool one by one - rebuilding the cloud environment re-runs `setup-clis-web.sh` cleanly, which is the one sanctioned repair path for this class of failure.
 
 ---
 
-## Step 3 - Automatic installation of the foundations
+## Step 8 - Identity verification (KYC)
 
-⚠️ **Install Node.js, Git, and pnpm automatically, without asking, directly via bash. Do NOT create a script for this step.**
+Explain this even though it is optional - a non-technical user will otherwise be baffled the day their app silently stops sending emails.
 
-The CLIs (GitHub, Vercel, Wrangler) are never installed here. They are offered in Step 4 after confirmation.
-
-### Windows
-
-**Check winget** (needed to install Node.js and Git):
-```bash
-winget --version 2>/dev/null
-```
-If winget is not available, install it automatically via PowerShell:
-```bash
-powershell.exe -ExecutionPolicy Bypass -Command "Invoke-WebRequest -Uri 'https://github.com/microsoft/winget-cli/releases/latest/download/Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle' -OutFile \"$env:TEMP\\winget.msixbundle\"; Add-AppxPackage -Path \"$env:TEMP\\winget.msixbundle\""
-```
-Re-check with `winget --version`. If it fails, inform the user:
-> The automatic installation of winget failed. Install it manually: https://aka.ms/getwinget (App Installer in the Microsoft Store). Then re-run `/start`.
-
-**Do not continue without winget.**
-
-**Node.js** (if missing):
-```bash
-winget install OpenJS.NodeJS.LTS --accept-package-agreements --accept-source-agreements 2>&1
-```
-After the install, force the PATH update in the current bash session:
-```bash
-export PATH="/c/Program Files/nodejs:$PATH"
-```
-
-**Git** (if missing):
-```bash
-winget install Git.Git --accept-package-agreements --accept-source-agreements 2>&1
-```
-
-**pnpm** (if missing):
-```bash
-npm install -g pnpm
-```
-
-### macOS
-
-**Homebrew** (if missing):
-```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-```
-
-⚠️ **Right after the install, `brew` is NOT on the shell PATH** (Apple Silicon installs it in `/opt/homebrew`, Intel in `/usr/local`). **Before any `brew` command**, put it on the PATH, for the current session AND future ones (zsh = macOS default). Do it **in the same block** as the install (shell variables do not persist between commands):
-
-**Node.js + Git** (if missing):
-```bash
-# resolve brew by absolute path (PATH not yet refreshed)
-BREW=$([ -x /opt/homebrew/bin/brew ] && echo /opt/homebrew/bin/brew || echo /usr/local/bin/brew)
-# persist for future shells
-grep -q "brew shellenv" ~/.zprofile 2>/dev/null || echo 'eval "$('"$BREW"' shellenv)"' >> ~/.zprofile
-# activate in the current session + install
-eval "$("$BREW" shellenv)" && brew install node git
-```
-
-**pnpm** (if missing):
-```bash
-npm install -g pnpm
-```
-
-### Post-install verification
+> **Une dernière chose, optionnelle mais utile : la vérification d’identité Scaleway.**
+>
+> Sans vérification, votre compte Scaleway est limité :
+> - **500 emails/mois** et **2 domaines** pour l’envoi d’emails (après vérification : 5 000 emails/mois et 5 domaines)
+> - **100 secrets** dans le coffre-fort de secrets (après : 250)
+> - **25 espaces de conteneurs** (après : 50)
+> - **60 Go de RAM** pour vos conteneurs au total (après : 150 Go)
+>
+> Ces plafonds sont larges pour démarrer, mais si votre app envoie beaucoup d’emails ou si vous avez plusieurs projets, mieux vaut vérifier votre identité maintenant (pièce d’identité, ~2 minutes) pour ne jamais avoir de mauvaise surprise (typiquement : les emails qui s’arrêtent silencieusement une fois le plafond atteint).
+>
+> Voulez-vous le faire maintenant, ou plus tard depuis la console Scaleway ?
 
 ```bash
-node --version && npm --version && pnpm --version
+node "${CLAUDE_SKILL_DIR}/../../scripts/open-url.mjs" --json "https://console.scaleway.com/organization/settings"
 ```
 
-If an installation fails, display the exact error and stop.
+Same rule as Step 5: if `opened: false`, show the address rather than assuming a browser opened.
 
-### Pnpm global bin in the PATH (cross-platform, idempotent)
-
-`pnpm` installs the global CLIs (`pnpm add -g <cli>`) in a dedicated folder (`%LOCALAPPDATA%\pnpm` on Windows, `~/Library/pnpm` on macOS, `~/.local/share/pnpm` on Linux). This folder must be on the PATH so that `vercel`, `wrangler`, `neonctl`, etc. are callable without an absolute path. But `npm install -g pnpm` (Step 3) installs the latest available version of pnpm without configuring the PATH. A separate `pnpm setup` is needed. Without it, every skill that runs `vercel --version` hits `command not found` and wastes 5-10 lines diagnosing it (seen in prod 2026-05-02).
-
-Run this script. It wraps `pnpm setup`, which is the canonical cross-platform command to configure PNPM_HOME + PATH (User registry on Windows, `~/.zshrc` or `~/.bashrc` on Unix). Idempotent: re-running is a no-op if already configured.
-
-```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/ensure-pnpm-globalbin.mjs"
-```
-
-Expected output:
-- `OK` (normal case) → say nothing to the user, continue silently.
-- `ERROR: <reason>` → briefly mention it to the user in the final report (do not block; the pnpm CLIs will be usable after a manual `pnpm setup`).
-
-⚠️ **For the current terminal**: `pnpm setup` modifies the PATH at the shell rc / registry level, not the running process. If a pnpm-installed command must be run RIGHT NOW (before restarting the terminal), Claude can do an `export PATH` at the start of the Bash:
-- Windows: `export PATH="$PATH:/c/Users/$USER/AppData/Local/pnpm"`
-- macOS: `export PATH="$PATH:$HOME/Library/pnpm"`
-- Linux: `export PATH="$PATH:$HOME/.local/share/pnpm"`
-
-### Gitleaks - machine-wide secret-leak protection (cross-platform, idempotent)
-
-Gitleaks scans the staged diff on every `git commit` and blocks the commit if a secret pattern is detected (API keys, tokens, connection strings, JWT, etc.). We install it **once at the machine level**: binary in the user PATH, global git hook, shared config. All repos (past, present, future) benefit from it automatically, without committing anything into the projects. Important when working with LLMs and frequently copy-pasting `.env` files.
-
-Run this script (cross-platform, idempotent - Windows / macOS / Linux):
-
-```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/setup-gitleaks-global.mjs"
-```
-
-The script:
-- Downloads the official gitleaks binary from GitHub releases (latest, ~10 MB)
-- Installs it in `%LOCALAPPDATA%\gitleaks` (Windows) or `~/.local/bin` (Mac/Linux)
-- Adds it to the User PATH **without ever using `setx PATH`** (PowerShell `[Environment]::SetEnvironmentVariable` on Windows, line added to `~/.zshrc` or `~/.bashrc` on Mac/Linux)
-- Creates `~/.git-hooks/pre-commit` which invokes gitleaks on the staged files
-- Creates `~/.gitleaks.toml` with a Hypervibe-friendly allowlist (`.env.example` placeholders, lockfiles, fixtures, etc.)
-- Configures `git config --global core.hooksPath` with the right format depending on the OS
-
-Expected output (on stdout, 1 line):
-- `OK` → already installed + configured, say nothing to the user, continue
-- `INSTALLED` → first setup successful, mention in the final report (Step 4): "Secret-leak protection enabled across the whole machine"
-- `ERROR: <reason>` → mention it to the user, non-blocking (commits will continue without this protection)
-
-⚠️ **Track the status in `STATUS_GITLEAKS`** (mental variable) to pass it as a flag in Step 9 (`--with-gitleaks` to `update-global-claude-md.mjs`).
+This is informational only - never block `/start` on the answer. If the user says later/no, move on without repeating the pitch on future runs (do not re-ask if the same account already went through this Step and answered).
 
 ---
 
-## Step 3bis - Key vault (Bitwarden) - MANDATORY
+## Step 9 - Overview and conclusion
 
-The encrypted vault keeps the participant's cross-cutting keys (Cloudflare, Neon, email) off the disk in plaintext. We set it up BEFORE collecting these keys (Steps 4, 7, and 7bis).
-
-**Install the `bw` tool** (idempotent):
-```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/vault/install-bw.mjs"
-```
-- `OK` → already there. `INSTALLED…` → installed (export the PATH for the session: `export PATH="$PATH:$HOME/.hypervibe/bin"`). `ERROR:` → report it, non-blocking.
-
-**Check the vault state**:
-```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/vault/vault.mjs" status 2>/dev/null
-bw status 2>/dev/null
-```
-- `unlocked` → vault already ready, move on to Step 4.
-- `bw status` = `unauthenticated` (no connected account) → **immediately launch the `_add-keyring` skill by default, WITHOUT asking for confirmation**: the vault is MANDATORY, there is nothing to decide. NEVER ask a question like "do you want to set up your vault now?", do not wait for confirmation: go straight to `_add-keyring`, which guides the creation of the Bitwarden account (free, master password to write down offline, 2FA), the login, and the first unlock. Non-technical language.
-- `locked`/`expired` (account connected but vault closed) → open it: `node "${CLAUDE_SKILL_DIR}/../../scripts/vault/launch.mjs" unlock` (blocking).
-
-> **Your key vault**: an encrypted place where I store your access keys (database, email, hosting, etc.). You type your master password once a day, and after that I use it without you having to copy anything over. ⚠️ This master password cannot be recovered by anyone. Write it down offline.
-
-Re-confirm `vault.mjs status` = `unlocked` before continuing.
-
----
-
-## Step 4 - Report and proposal
-
-Present a clear report:
-
-> **Your environment:**
+> **Tout est prêt !** Vous pouvez lancer votre premier projet avec :
 >
-> ✅ Node.js - vX.X.X
-> ✅ pnpm - vX.X.X
-> ✅ Git - vX.X.X
-> ❌ GitHub CLI - not installed
-> ❌ Vercel CLI - not installed
-> ❌ Wrangler CLI - not installed
-> 🔒 Vault - ready / to configure
-> 🔑 Cloudflare / Neon / Resend (vault keys), to collect (Steps 4, 7, and 7bis)
-
-### Cloudflare token (to do BEFORE the CLIs script)
-
-⚠️ The Cloudflare token must be configured **before** running the CLIs script, because `wrangler` detects the env var at install/usage time. If the token is missing or invalid, ask first:
-
-> For Cloudflare, I need an **API token** (a single one, used for DNS, Workers, R2, and Email Routing). Here is how to generate it for me in 2 minutes:
+> `/bootstrap` - Décrivez ce que vous voulez créer, je m’occupe du reste.
 >
-> **0. First, log in to Cloudflare**
-> Go to **https://dash.cloudflare.com** - if you do not have an account, create one (free, ~1 min). Otherwise, log in.
->
-> **1. Generate the token**
-> Once logged in, go to **https://dash.cloudflare.com/profile/api-tokens**
->
-> 2. Click **"Create Token"** → **"Create Custom token"** → **"Get started"**
-> 3. **Token name**: `Claude Code`
-> 4. **Permissions** (click "+ Add more" for each additional line):
->    - Account · Workers Scripts · Edit
->    - Account · Workers R2 Storage · Edit
->    - Account · Workers AI · Read
->    - Account · Email Routing Addresses · Edit
->    - Account · Account Settings · Read
->    - Account · Account Analytics · Read
->    - User · User Details · Read
->    - User · Memberships · Read
->    - Zone · Zone · Edit
->    - Zone · DNS · Edit
->    - Zone · Email Routing Rules · Edit
->    - Zone · Cache Purge · Purge
-> 5. **Account Resources**: Include All accounts
-> 6. **Zone Resources**: Include All zones
-> 7. Click **"Continue to summary"** → **"Create Token"**
-> 8. Copy the displayed token - **a window will open for you to paste it** (I never see it)
+> 💡 **Astuce** : si vous voulez comprendre comment tout fonctionne avant de vous lancer (la stack technique, les différentes commandes du plugin, le déploiement, etc.), lancez `/prof` - un mode pédagogique qui explique tout en langage clair.
 
-Store it in the vault (masked input in a window, outside Claude's context):
-```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/vault/launch.mjs" add --name CLOUDFLARE --service Cloudflare --fields "api_token:secret"
-```
-
-Then **validate** the token (read from the vault, never displayed):
-```bash
-CFTOK=$(node "${CLAUDE_SKILL_DIR}/../../scripts/vault/vault.mjs" get CLOUDFLARE api_token)
-curl -s -H "Authorization: Bearer $CFTOK" https://api.cloudflare.com/client/v4/user/tokens/verify | grep -q '"success":true' && echo "VALID" || echo "INVALID"
-```
-- **VALID** → ✅ Cloudflare ready (token in the vault).
-- **INVALID** → propose again (token copied wrong / incomplete permissions): re-run the `add` to overwrite, then re-validate.
-
-**Wrangler**: `scripts/wrangler-env-init.mjs` now reads the token from the vault (`CLOUDFLARE.api_token`) and exports it as an env var for the session before calling wrangler.
-
-⚠️ **Check the Wrangler account after login** (in case the user already has a Wrangler logged in to a DIFFERENT account):
-
-```bash
-PLUGIN_DIR="$HOME/.claude/plugins/marketplaces/local-desktop-app-uploads/hypervibe"
-eval "$(node "$PLUGIN_DIR/scripts/wrangler-env-init.mjs")"
-wrangler whoami 2>&1 | head -8
-```
-
-If the displayed email does not match the account on which the token was created → direct the user to `wrangler logout` then `wrangler login` to resync.
-
-- If INVALID → ask the user again (maybe they copied it wrong, or the permissions are incomplete - re-check the checklist above).
-
-#### Shared clock + R2 email alert (auto, at the end of /start)
-
-Once **all the other dependencies are configured** (Wrangler authenticated, Brevo configured with at least one verified sender), provision the **unified shared worker `hypervibe-jobs`**: ONE Cloudflare Worker for all the account-wide scheduled jobs (cron pings, database backups, quota alerts), consuming a single Cloudflare cron slot, with a git-versioned registry in `~/.hypervibe-jobs/`:
-
-```bash
-PLUGIN_DIR="$HOME/.claude/plugins/marketplaces/local-desktop-app-uploads/hypervibe"
-eval "$(node "$PLUGIN_DIR/scripts/wrangler-env-init.mjs")"
-node "$PLUGIN_DIR/scripts/shared-worker/ensure.mjs"
-```
-
-JSON output: `{ ok, status: "created" | "already_present", ... }`. If `ok: false` → report it briefly, do not block (the worker can be provisioned later via `/quotas` or `/add-backup-db`).
-
-**Legacy safety net (users coming from a version older than 2.5)**: right after provisioning, check whether the old standalone mechanisms still exist on the machine:
-
-```bash
-for d in "$HOME/.db-backup-worker" "$HOME/.quota-monitor-worker" "$HOME/.cron-dispatcher"; do
-  [ -f "$d/wrangler.toml" ] && echo "LEGACY: $d"
-done
-```
-
-If there is at least one `LEGACY:` line, tell the user in plain words that you noticed the older background mechanisms from a previous Hypervibe version (running in parallel with the new shared clock), and that you will consolidate them now, safely. Then **invoke the internal `_migrate-workers` helper skill**: it handles the whole consolidation (carry the old configuration over, verify with a real test run, and remove the old mechanisms only after the user consents). When it returns, fold its result into the onboarding summary.
-
-If there is no `LEGACY:` line, say nothing and continue. This is the case for every fresh install, so the check is invisible to new users.
-
-Then register the **quota watch job** (daily check via the CF GraphQL API, email via Brevo on overage; initially Cloudflare R2 storage, threshold 9 GB out of the 10 GB free tier, configurable via `--r2-threshold-gb`):
-
-1. `node "$PLUGIN_DIR/scripts/shared-worker/register.mjs" --list` → if the `jobs` array already contains a job named `quota-monitor`, skip (silent).
-2. Otherwise discover the recipient and the sender:
-   - **Recipient** = the Cloudflare account email: `curl -s -H "Authorization: Bearer $CFTOK" https://api.cloudflare.com/client/v4/user` → take `result.email` (CFTOK read from the vault as above).
-   - **Sender** = the first verified Brevo sender: `BREVO_API_KEY=$(node "$PLUGIN_DIR/scripts/vault/vault.mjs" get BREVO api_key); curl -s https://api.brevo.com/v3/senders -H "api-key: $BREVO_API_KEY"` → take the first entry with `"active": true`. If there is none → ask the user to verify a sender on https://app.brevo.com/senders. Do not block if the user declines, just continue (the job can be registered later via `/quotas`).
-3. Register (also uploads the CLOUDFLARE_API_TOKEN + BREVO_API_KEY secrets, read from the vault): `node "$PLUGIN_DIR/scripts/shared-worker/register.mjs" --kind quota --recipient <email> --sender-email <sender> --put-secrets`
-
-**Why a custom job rather than Cloudflare's native "Billing Alerts"**: Cloudflare's Billing Alerts are reserved for Pro+ plans, and the CF API is under-documented for free accounts (the first version used `billing_usage_alert` but it triggered false alerts because of an ambiguous threshold format). The shared worker does exactly what we want, on a single Cloudflare cron slot for the whole account.
-
-What to say in the onboarding summary:
-- Worker `created` (and/or quota job just registered) → mention once: *"Your shared clock is in place: one mechanism for all your projects' scheduled tasks, database backups and quota alerts. It will email you if you approach the 10 GB of the R2 free tier."*
-- `already_present` and quota job already registered → say nothing (silent).
-- Missing verified sender → covered in point 2 above.
-- Any other error → report it briefly, it is not critical.
-
-### Missing CLIs
-
-If some CLIs (GitHub, Vercel, Wrangler) are missing or not connected, propose:
-
-> I can install and connect the missing CLIs automatically:
-> - **GitHub CLI** - to create the Git repos
-> - **Vercel CLI** - to deploy your app
-> - **Wrangler CLI** - for Cloudflare (Workers + R2). No separate login: it uses the token from the vault.
->
-> A script will open in a new window and do everything in order: for each CLI, it installs then connects you before moving on to the next.
->
-> **Shall I launch it?**
-
-⚠️ **Wait absolutely for the user's confirmation before continuing.**
-
-Only list the CLIs that are actually missing or not connected. (No more Resend CLI: email goes through the Resend API with the vault key, collected in Step 7bis.)
-
-### Everything is already installed and connected
-
-If everything is OK, jump directly to step 6.
-
----
-
-## Step 5 - Launching the CLIs script
-
-Once the user has confirmed, run the plugin's dedicated script based on the OS.
-
-Determine the plugin path:
-```bash
-PLUGIN_DIR="$HOME/.claude/plugins/marketplaces/local-desktop-app-uploads/hypervibe"
-```
-
-### Windows
-
-```bash
-powershell.exe -ExecutionPolicy Bypass -File "${PLUGIN_DIR}/scripts/setup-clis-windows.ps1"
-```
-
-The script opens a CMD window that installs + logs in each CLI sequentially (already installed / already connected → skip). Technical details (CMD escaping, sequence) are commented at the top of the `.ps1`.
-
-> A window just opened. It installs and connects each tool one by one. Follow the on-screen instructions (a browser will open for each login). Come back here when you see "Reviens dans Claude pour continuer."
-
-### macOS
-
-```bash
-chmod +x "${PLUGIN_DIR}/scripts/setup-clis-mac.sh"
-bash "${PLUGIN_DIR}/scripts/setup-clis-mac.sh"
-```
-
-The script opens a macOS Terminal and handles each CLI sequentially.
-
-> A terminal just opened. It installs and connects each tool one by one. Follow the on-screen instructions. Come back here when you see "Reviens dans Claude pour continuer."
-
-⚠️ **ABSOLUTE RULE** (Windows & Mac): after launching the script, **DO NOTHING** until the user comes back to explicitly confirm that it is done. The script is autonomous - Claude must not interfere.
-
----
-
-## Step 6 - Final verification
-
-⚠️ **ABSOLUTE RULE**: No matter what the user says ("it's done", "finished", "I did Ctrl+C", "it crashed", "I closed the window"), **always** run the verification commands below before concluding anything. NEVER assume a tool is OK based on a verbal confirmation - the script may have been interrupted, a login may have failed, etc.
-
-### Mandatory verifications
-
-Run **all** these commands and read the output of **each one** carefully:
-
-```bash
-export PATH="$PATH:/c/Program Files/GitHub CLI:/c/Program Files/nodejs:/c/Users/$USERNAME/AppData/Roaming/npm"
-node "${CLAUDE_SKILL_DIR}/../../scripts/audit-clis.mjs" --json
-node "${CLAUDE_SKILL_DIR}/../../scripts/vault/vault.mjs" status 2>/dev/null
-CFTOK=$(node "${CLAUDE_SKILL_DIR}/../../scripts/vault/vault.mjs" get CLOUDFLARE api_token 2>/dev/null) && curl -s --max-time 15 -H "Authorization: Bearer $CFTOK" https://api.cloudflare.com/client/v4/user/tokens/verify | grep -o '"success":[a-z]*'
-```
-
-The helper caps every CLI check with its own timeout: one unreachable service can no
-longer consume the whole 2-minute Bash budget and leave you with an empty audit. The
-Cloudflare curl is capped with `--max-time` for the same reason.
-
-For **Neon**: no more MCP detection. Verify that the key is in the vault: `node "${CLAUDE_SKILL_DIR}/../../scripts/vault/vault.mjs" get NEON api_key >/dev/null 2>&1 && echo neon-ok || echo neon-missing` (collected in Step 7 if missing).
-
-For **Resend**: `node "${CLAUDE_SKILL_DIR}/../../scripts/vault/vault.mjs" get RESEND api_key >/dev/null 2>&1 && echo resend-ok || echo resend-missing` (collected in Step 7bis if missing).
-
-For the **vault**: `vault.mjs status` must say `unlocked`. If `locked`/`expired` → unlock (`launch.mjs unlock`).
-
-For Wrangler: `wrangler whoami` must display the Cloudflare account email. If it says "not authenticated" → the token is not seen: verify that `wrangler-env-init.mjs` does read the vault (it exports `CLOUDFLARE_API_TOKEN` from the `CLOUDFLARE` item before calling wrangler). If `wrangler whoami` succeeds AND `tokens/verify` = `"success":true` → ✅ Cloudflare ready.
-
-### Strict classification of each tool
-
-Map each `status` from the audit helper directly - do not re-interpret raw output:
-- `ready` → ✅ **installed + connected**
-- `logged-out` → ⚠️ **installed but not connected** (`--version` OK, login missing)
-- `missing` → ❌ **not installed**
-- `timeout` → ⚠️ **not verified** (the check never answered; say so plainly and offer to retry)
-
-**Never tick ✅ a tool that responded with an error, a timeout, or "not logged in".** A displayed version is not enough: you also need the login for the CLIs that require it (gh, vercel) OR the Cloudflare token (from the vault) for wrangler.
-
-### Report presentation (mandatory)
-
-Display an exhaustive report based **strictly** on what was detected:
-
-> **Environment:**
->
-> ✅ Node.js: vX.X.X
-> ✅ pnpm: vX.X.X
-> ✅ Git: vX.X.X
-> ⚠️ GitHub CLI: installed but not connected
-> ❌ Vercel CLI: not installed
-> ✅ Wrangler CLI + Cloudflare token (vault): ready
-> ✅ Vault: operational (unlocked)
-> 🔑 Neon: key in the vault
-> 🔑 Resend: key in the vault
-
-**"Vault" line, to display based on the real detected state** (same ✅/⚠️/❌ logic as the CLIs, based on `vault.mjs status`):
-- ✅ **operational (unlocked)**: `vault.mjs status` = `unlocked`.
-- ⚠️ **installed but locked**: `vault.mjs status` = `locked` or `expired` (account connected, vault closed). Action: `launch.mjs unlock`.
-- ❌ **not yet installed**: `bw` missing or `bw status` = `unauthenticated` (no account). Action: go back through Step 3bis (`install-bw.mjs` + `_add-keyring`).
-
-The unlocked vault (✅) is a **blocking prerequisite** (see Strict branching below): never display ✅ if `vault.mjs status` has not explicitly responded `unlocked`.
-
-### Strict branching
-
-- **If AND ONLY IF the 6 essentials (Node, pnpm, Git, GitHub CLI connected, Vercel connected, Wrangler+Cloudflare token) are ✅** AND the vault is unlocked → move on to step 8. Note the state of Neon and Resend without blocking.
-- **Otherwise (even a single missing or not-connected tool)** → stay here, **NEVER say "everything is installed and connected"**, **NEVER move on to step 8**.
-
-### Case: interrupted script or partial installation
-
-If the verification reveals missing tools (typical case: the user did Ctrl+C, closed the window, the script crashed, or a login was refused), proceed as follows:
-
-1. **List precisely** what was done and what remains, following the script's order (GitHub → Vercel → Wrangler):
-
-   > The script was interrupted before the end. Here is where things stand:
-   >
-   > ✅ GitHub CLI - installed and connected
-   > ⚠️ Vercel CLI - installed but not connected
-   > ❌ Wrangler CLI - not yet installed
-   >
-   > 1 thing remains to do.
-
-2. **Propose a concrete action** - by default, re-run the script (it detects what is already OK and skips it, so it is 100% safe):
-
-   > I can:
-   > - **Re-run the script** (it picks up where it stopped, without touching what is already OK) - recommended
-   > - OR install/connect the missing tools by hand if you prefer
-   >
-   > **What do we do?**
-
-3. **Wait for confirmation** before any action. Once the fix is done, **come back to Step 6** (re-check all the commands) - never jump directly to step 8.
-
----
-
-## Step 7 - Neon API key in the vault
-
-The Neon API key is used for provisioning (`/add-db`) and **automatic backups** (`add-backup-db`). We store it in the vault (item `NEON`, field `api_key`), **once per machine**. Optional here - if the user is not planning to do a DB right away, they can skip it (it will be requested at the first `/add-db`).
-
-### Check whether the key is already in the vault
-
-```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/vault/vault.mjs" get NEON api_key >/dev/null 2>&1 && echo "have-key" || echo "missing-key"
-```
-
-If `have-key` → display *"✅ Your Neon key is already in your vault"* and move on to Step 8.
-
-If `missing-key` → open the page (best-effort) and guide:
-
-```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/open-url.mjs" "https://console.neon.tech/app/settings/api-keys" 2>/dev/null
-```
-
-> **In order to be able to create databases**, I need a Neon key (just once - I store it in your vault).
->
-> 1. On the page that just opened, click **Create new API key**, name it `claude-code`.
-> 2. **Copy the key** (displayed only once).
-> 3. A window will open: paste it in (masked input, I never see it).
->
-> *(No need right now if you are not planning to create a DB right away - I will ask you for it again at your first `/add-db`.)*
-
-Store it in the vault:
-```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/vault/launch.mjs" add --name NEON --service Neon --fields "api_key:secret"
-```
-
-Confirm:
-
-> ✅ Your Neon key is in your vault. You will never have to retype it. The automatic backups will activate on their own at each `/add-db`.
-
----
-
-## Step 7bis: Resend (email) key in the vault
-
-The Resend API key is used for sending emails (`/add-email`, contact page, notifications). We store it in the vault (item `RESEND`, field `api_key`), once per machine.
-
-### Check whether the key is already in the vault
-
-```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/vault/vault.mjs" get RESEND api_key >/dev/null 2>&1 && echo "have-key" || echo "missing-key"
-```
-
-If `have-key` → display *"✅ Your Resend key is already in your vault"* and move on to Step 8.
-
-If `missing-key` → open the page (best-effort) and guide:
-
-```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/open-url.mjs" "https://resend.com/api-keys" 2>/dev/null
-```
-
-> **In order to be able to send emails from your apps**, I need a Resend key (just once, I store it in your vault).
->
-> 1. On the page that just opened, click **Create API Key**, name it `claude-code`, leave **Permission** on **Full access**.
-> 2. **Copy the key** (`re_...`, displayed only once).
-> 3. A window will open: paste it in (masked input, I never see it).
-
-Store it in the vault:
-
-```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/vault/launch.mjs" add --name RESEND --service Resend --fields "api_key:secret"
-```
-
-Validate (read from the vault, never displayed):
-
-```bash
-RKEY=$(node "${CLAUDE_SKILL_DIR}/../../scripts/vault/vault.mjs" get RESEND api_key)
-curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $RKEY" https://api.resend.com/domains | grep -q 200 && echo "VALID" || echo "INVALID"
-```
-
-> ✅ Your Resend key is in your vault. `/add-email` will use it directly.
-
----
-
-## Step 8 - Quick overview
-
-> **Everything is good!** You can launch your first project with:
->
-> `/bootstrap` - Describe what you want to build, I take care of the rest.
->
-> 💡 **Tip**: if you want to understand how everything works before getting started (the technical stack, the various plugin commands, deployment, etc.), run `/prof` - it is an educational mode that explains everything to you in plain language.
-
----
-
-## Step 9 - Global rules for Claude Code
-
-Before finishing, we make sure that Claude Code (on this machine) has a set of rules in its global CLAUDE.md. These rules apply to all projects - they avoid the classic pitfalls (pointless builds, unintended deployments, `any` in TypeScript, forgetting mobile-first responsive, etc.).
-
-⚠️ **Conditional rules**:
-- **Neon** → **always** pass `--with-neon` (adds the rule "Neon = REST API + vault key + run-sql helper").
-- If **Gitleaks** was installed (`OK` or `INSTALLED` in Step 3, not `ERROR`) → pass `--with-gitleaks` (adds the rule explaining the global hook and how to bypass a false positive).
-
-Run this script - it creates the file `~/.claude/CLAUDE.md` if it is missing, and maintains a block delimited by `<!-- hypervibe:rules -->` … `<!-- /hypervibe:rules -->` in it. Idempotent: each rule has its own marker `<!-- rule:<id> -->`, so re-running `/start` later will add ONLY the missing rules (without touching those already present, even if you customized them).
-
-```bash
-PLUGIN_DIR="$HOME/.claude/plugins/marketplaces/local-desktop-app-uploads/hypervibe"
-# Build the list of flags based on the capabilities detected in steps 2 and 3.
-FLAGS=(--with-neon)   # Neon = always REST + vault now
-# If Gitleaks was installed in Step 3 (status_gitleaks = "ok" or "installed"):
-[ "$STATUS_GITLEAKS" = "ok" ] || [ "$STATUS_GITLEAKS" = "installed" ] && FLAGS+=(--with-gitleaks)
-node "$PLUGIN_DIR/scripts/update-global-claude-md.mjs" "${FLAGS[@]}"
-```
-
-(Always pass `--with-neon`. For gitleaks: if the script displayed `OK`/`INSTALLED` → add `--with-gitleaks`, otherwise not.)
-
-Based on the result displayed by the script:
-
-- **`no-change`** → say nothing to the user, move on to step 10.
-- **`created`** → announce:
-
-  > I added a global rules block to your CLAUDE.md (`~/.claude/CLAUDE.md`) that will apply to all your projects: no `pnpm build` to check the code, no `git push` or deployment without your approval, TypeScript never `any`, mobile-first responsive, and several other web conventions.
-
-- **`upgraded`** → announce:
-
-  > I updated the global rules block in your CLAUDE.md (`~/.claude/CLAUDE.md`) - the old format (without per-rule markers) was replaced by the current version.
-
-- **`updated +N`** (where N is a number) → announce:
-
-  > I added N new rule(s) to your global CLAUDE.md (`~/.claude/CLAUDE.md`). The rules you already had were not modified.
-
----
-
-## Step 10 - Conclusion
-
-> **It's ready! ✨** Over to you.
+> **C’est prêt ! ✨** À vous de jouer.

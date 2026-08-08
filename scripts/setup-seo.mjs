@@ -48,11 +48,6 @@ if (!projectName || !description) {
 const htmlLang = locale.split("_")[0]; // "fr_FR" → "fr"
 const actions = [];
 
-// Escape double quotes for embedding in a JSON object literal inside TS source
-function tsQuote(s) {
-  return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-}
-
 // ─── 1. Patch src/app/layout.tsx ───────────────────────────────────────
 function patchLayout() {
   const file = "src/app/layout.tsx";
@@ -66,17 +61,17 @@ function patchLayout() {
 
   // Build the new metadata block
   const newMetadata = `export const metadata: Metadata = {
-  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000"),
+  metadataBase: new URL(process.env.APP_URL ?? "http://localhost:3000"),
   title: {
-    default: "${tsQuote(projectName)}",
-    template: "%s | ${tsQuote(projectName)}",
+    default: ${JSON.stringify(projectName)},
+    template: ${JSON.stringify(`%s | ${projectName}`)},
   },
-  description: "${tsQuote(description)}",
+  description: ${JSON.stringify(description)},
   openGraph: {
     type: "website",
-    locale: "${tsQuote(locale)}",
-    siteName: "${tsQuote(projectName)}",
-    images: [{ url: "/og-image.png", width: 1200, height: 630, alt: "${tsQuote(projectName)}" }],
+    locale: ${JSON.stringify(locale)},
+    siteName: ${JSON.stringify(projectName)},
+    images: [{ url: "/og-image.png", width: 1200, height: 630, alt: ${JSON.stringify(projectName)} }],
   },
   twitter: {
     card: "summary_large_image",
@@ -140,12 +135,14 @@ function patchLayout() {
       `${indent}<script\n` +
       `${indent}  type="application/ld+json"\n` +
       `${indent}  dangerouslySetInnerHTML={{\n` +
+      `${indent}    // Escape "<" so a name containing "</script>" cannot break out\n` +
+      `${indent}    // of the tag and inject markup.\n` +
       `${indent}    __html: JSON.stringify({\n` +
       `${indent}      "@context": "https://schema.org",\n` +
       `${indent}      "@type": "WebSite",\n` +
-      `${indent}      name: "${tsQuote(projectName)}",\n` +
-      `${indent}      url: process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000",\n` +
-      `${indent}    }),\n` +
+      `${indent}      name: ${JSON.stringify(projectName)},\n` +
+      `${indent}      url: process.env.APP_URL ?? "http://localhost:3000",\n` +
+      `${indent}    }).replace(/</g, "\\u003c"),\n` +
       `${indent}  }}\n` +
       `${indent}/>\n`;
 
@@ -210,7 +207,7 @@ function writeSitemap() {
   const content = `import type { MetadataRoute } from "next";
 
 export default function sitemap(): MetadataRoute.Sitemap {
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+  const baseUrl = process.env.APP_URL ?? "http://localhost:3000";
 
   // Add every public page here as it's created. Exclude noindex pages (e.g. admin, preferences).
   const pages = [

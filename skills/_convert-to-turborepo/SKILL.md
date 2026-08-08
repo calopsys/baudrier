@@ -1,15 +1,15 @@
 ---
 name: _convert-to-turborepo
-description: Internal helper to convert a single Next.js project into a Turborepo monorepo. Idempotent - if the project is already a monorepo (apps/web/ exists), returns immediately. Moves the existing project into apps/web/, creates root package.json with workspaces, pnpm-workspace.yaml, turbo.json, and adds turbo as a dev dependency. Optionally extracts a shared packages/db package if a Drizzle DB is detected. Updates imports in apps/web accordingly. Triggered by /add-automation. Not meant to be invoked directly by users.
+description: Internal helper to convert a single Next.js project into a Turborepo monorepo. Idempotent - if the project is already a monorepo (apps/web/ exists), returns immediately. Moves the existing project into apps/web/, creates root package.json with workspaces, pnpm-workspace.yaml, turbo.json, and adds turbo as a dev dependency. Optionally extracts a shared packages/db package if a Drizzle DB is detected. Updates imports in apps/web accordingly. Triggered by /add-agent. Not meant to be invoked directly by users.
 user-invocable: false
 allowed-tools: Bash
-compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (vercel, gh)."
+compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, gh, and scw."
 ---
 
 # Convert to Turborepo - Internal helper
 
 ## Communication
-- Detect the user's language from their messages and ALWAYS reply in that language (default: English). This applies to every user-facing message: questions, progress, confirmations, summaries, errors.
+- Detect the user's language from their messages and ALWAYS reply in that language (default: French for this product's user base). This applies to every user-facing message: questions, progress, confirmations, summaries, errors.
 - Use plain, non-technical business language. Never expose internal script names (*.mjs) or jargon; describe actions in human terms.
 - When generating user-facing content for the scaffolded project (UI labels, emails, copy), write it in the user's language too.
 - Show progress as a short natural-language checklist (in-progress and done states).
@@ -59,7 +59,7 @@ git status --porcelain
 ```
 
 If there are uncommitted changes, refuse:
-> ❌ You have uncommitted changes. Commit or stash them first, then re-run `/add-automation`.
+> ❌ You have uncommitted changes. Commit or stash them first, then re-run `/add-agent`.
 
 Return to caller without doing anything.
 
@@ -229,7 +229,7 @@ git add .
 git commit -m "refactor: convert to Turborepo monorepo"
 ```
 
-⚠️ **Don't push automatically** - let the caller (`/add-automation`) decide when to push.
+⚠️ **Don't push automatically** - let the caller (`/add-agent`) decide when to push.
 
 ## Step 12 - Return to caller
 
@@ -240,4 +240,4 @@ Tell the user:
 >
 > Commit made locally, not pushed - the caller will decide when to push.
 
-Return control to the calling skill (`/add-automation`).
+Return control to the calling skill (`/add-agent`).

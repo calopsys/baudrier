@@ -2,7 +2,7 @@
 name: add-map
 description: Add an interactive vector map to a Next.js project using MapLibre GL JS + OpenFreeMap (free, no API key, no cookies, EU servers). Supports single pin, multi-pin, route, or full map-first layouts. Can be called by /bootstrap or standalone.
 argument-hint: "[brief description of what the map will display]"
-compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (vercel, gh)."
+compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (scw, gh)."
 ---
 
 # Add Map - MapLibre GL JS + OpenFreeMap
@@ -88,7 +88,7 @@ If an address is provided -> make a call to **Nominatim** (free, OSM, EU) to geo
 
 ```bash
 ADDRESS_ENCODED=$(node -e "console.log(encodeURIComponent('<full address>'))")
-curl -sS -A "Hypervibe (https://hypervibe.fr)" \
+curl -sS -A "Baudrier" \
   "https://nominatim.openstreetmap.org/search?q=$ADDRESS_ENCODED&format=json&limit=1" \
   | node -e "
     const r = JSON.parse(require('fs').readFileSync(0,'utf8'))[0];
@@ -124,7 +124,7 @@ This is more open-ended - the app will be centered on the map. Ask the user:
 - Whether the markers come from an existing DB (and if so, which table)
 - The desired filters / categories
 
-If the app is going to read the markers from Neon, check that `/add-db` is installed (check for a real `DATABASE_URL`, not a placeholder). Otherwise -> offer to run `/add-db` first.
+If the app is going to read the markers from the database, check that `/add-db` is installed (check for a real `DATABASE_URL`, not a placeholder). Otherwise -> offer to run `/add-db` first.
 
 ---
 
@@ -142,10 +142,10 @@ The script:
 1. Installs `maplibre-gl` + `react-map-gl` in `<WEB_DIR>`
 2. Always copies `src/components/site/map.tsx` (the client MapView, with ResizeObserver + fitBounds + onLoad resize **baked in**) and `src/components/site/map-loader.tsx` (the SSR-safe wrapper)
 3. If `--layout=mapfirst`, also copies `src/components/site/map-shell.tsx` (generic chassis with viewport lock + sidebar slot + mobile Sheet)
-4. **Automatically detects i18n**: if `next-intl` is in place in the project, the script writes the i18n variant of `map-loader.tsx` (which uses `useTranslations("map")` for the "Loading map…" text) and merges the `map.*` keys into each `messages/<locale>.json`. Otherwise, it writes the plain variant with hardcoded FR strings.
+4. Writes `map-loader.tsx` with hardcoded FR strings (e.g. "Chargement de la carte…") - the app is French-only, no locale handling needed.
 5. Prints a JSON `{ success, layout, mapFile, loaderFile, shellFile, actions, warnings }` parseable on the last line. If `warnings` contains `SHEET_MISSING` (the project does not have the shadcn/ui Sheet component while we are in mapfirst), invoke `npx shadcn@latest add sheet` before continuing to Step 5.
 
-If the script fails (non-zero exit): read the error message, fix it, retry. Typical case: `pnpm add` fails (pnpm not in the PATH) -> run `node "${CLAUDE_SKILL_DIR}/../../scripts/_ensure-tools-path.mjs"` first (it adds pnpm's global bin to the PATH).
+If the script fails (non-zero exit): read the error message, fix it, retry.
 
 ### What the `map.tsx` template does for you (do not reimplement)
 
@@ -341,45 +341,66 @@ export default function HomePage() {
 
 The `map.tsx` template has `scrollZoom={false}` by default (does not steal the page scroll). In `layout = mapfirst`, **always pass `scrollZoom={true}`** on the `MapLoader`: the map IS the page, so spinning the wheel must zoom. In `layout = embedded`, leave it at `false`.
 
-### i18n note - `MapShell` props
+### Note on `MapShell` interface strings
 
-`MapShell` accepts the interface strings as props (`sidebarTriggerLabel`, `sidebarTitle`, `sidebarDescription`) with FR defaults (`"Liste"`, `"Choisis un élément dans la liste."`). **If the project is in i18n mode**, in the page that uses `MapShell` pass the translated values via `useTranslations("map")`:
+`MapShell` accepts the interface strings as props (`sidebarTriggerLabel`, `sidebarTitle`, `sidebarDescription`) with FR defaults (`"Liste"`, `"Choisis un élément dans la liste."`). Override them directly with hardcoded French copy when the page needs custom wording:
 
 ```tsx
-"use client";
-import { useTranslations } from "next-intl";
-import { MapShell } from "~/components/site/map-shell";
-// …
-
-export function LocationsView({ locations }) {
-  const t = useTranslations("map");
-  return (
-    <MapShell
-      map={<MapLoader markers={locations} height="100%" scrollZoom />}
-      sidebar={<LocationsSidebar items={locations} />}
-      sidebarTriggerLabel={`${t("listLabel")} · ${locations.length}`}
-      sidebarTitle={t("sidebarTitle")}
-      sidebarDescription={t("sidebarDescription")}
-    />
-  );
-}
+<MapShell
+  map={<MapLoader markers={locations} height="100%" scrollZoom />}
+  sidebar={<LocationsSidebar items={locations} />}
+  sidebarTriggerLabel={`Liste · ${locations.length}`}
+/>
 ```
-
-The keys `map.listLabel`, `map.sidebarTitle`, `map.sidebarDescription` were merged automatically into `messages/<locale>.json` by `setup-map.mjs` when i18n is active. The i18n variant of `map-loader.tsx` (which handles "Loading map…") is also written automatically by the script.
 
 ---
 
 ## Step 6 - Subprocessor + CLAUDE.md
 
-Invoke `_update-privacy-policy` to add OpenFreeMap to the registry:
+`_update-privacy-policy` only accepts `--add <key>` against a fixed catalog
+hardcoded in `scripts/update-privacy-policy.mjs` (currently `scaleway`,
+`scaleway-sdb`, `scaleway-object-storage`, `scaleway-tem`, `matomo`). It has
+no `openfreemap` entry and does not accept freeform fields, so it cannot
+register OpenFreeMap. Do not invoke it for this step.
 
-- **name**: `OpenFreeMap`
-- **purpose**: `Affichage de cartes vectorielles (tiles)`
-- **dataShared**: `Adresse IP du visiteur au chargement des tiles (requis pour servir les tiles)`
-- **country**: `Hongrie` (dedicated Btrfs servers, EU)
-- **cookies**: `Non` (OpenFreeMap does not set a cookie)
-- **dpaUrl**: `https://openfreemap.org/` (no formal DPA - small OSS project)
-- **optionalUsage**: `false` (the map is rendered as soon as the page that contains it loads)
+Instead, register OpenFreeMap yourself, directly in the data file, using the
+exact same shape as every other entry (see the `Subprocessor` type exported by
+`src/lib/subprocessors.ts`):
+
+1. Read `src/lib/subprocessors.json`. If an entry with `"key": "openfreemap"`
+   already exists, skip (idempotent - do not duplicate).
+2. Otherwise append this entry and write the file back
+   (`JSON.stringify(registry, null, 2) + "\n"`, matching the existing
+   formatting):
+
+```json
+{
+  "key": "openfreemap",
+  "name": "OpenFreeMap",
+  "address": "Non applicable (projet open source, infrastructure distribuée)",
+  "country": "HU",
+  "purpose": "Affichage de cartes vectorielles (tiles)",
+  "dataTypes": ["Adresse IP du visiteur au chargement des tiles (requis pour servir les tiles)"],
+  "retention": "Non documentée par OpenFreeMap (projet open source, pas de tableau de bord de rétention)",
+  "legalBasis": "Intérêt légitime (fourniture de la fonctionnalité cartographique demandée par l'utilisateur)",
+  "isEUResident": true,
+  "transferMechanism": null,
+  "privacyUrl": "https://openfreemap.org/",
+  "requiresConsent": false,
+  "manual": true
+}
+```
+
+(`isEUResident: true` and `transferMechanism: null` because tiles are served
+from dedicated servers in Hungary, EU - no formal DPA exists, this is a
+one-person OSS project funded by donations. `"manual": true` matters: this
+entry has no dependency, no env var, and no source string that
+`rgpd-audit.mjs` could grep for - without the flag, its stale filter would
+report `openfreemap` as no-longer-detected and offer to remove it the very
+first time `/rgpd-audit` runs on this project.)
+
+Do not touch `src/lib/subprocessors.ts` - it is a generic wrapper that already
+reads every entry in the JSON file, so it needs no change for a new key.
 
 Invoke `_update-claude-md`:
 
@@ -395,7 +416,8 @@ Invoke `_update-claude-md`:
   haut du fichier - fallbacks documentés dans le commentaire) :
     • MapTiler         - 100K loads/mois gratuit, signup requis
     • Stadia Maps      - 200K loads/mois gratuit en dev, signup requis
-    • PMTiles self-host - ~$3/mois sur Cloudflare R2
+    • PMTiles self-host - stockage S3-compatible (ex. Scaleway Object Storage),
+      guide pas à pas avec estimations d'effort : docs/self-host-tiles.md
   Aucun refacto code requis pour le swap, juste l'URL.
 
   **SEO + a11y** : chaque page qui rend une carte DOIT avoir un `<noscript>`
@@ -483,7 +505,7 @@ Show the recap:
 >
 > ⚠️ If OpenFreeMap ever goes down (maintained by 1 person, no SLA), the fallbacks are documented in a comment in the same file - swap in 1 line.
 
-If the user ran an `/add-domain` that pushes the NEXT_PUBLIC_APP_URL, remind them that no env var is required for the map - this is intentional.
+If the user ran an `/add-domain` that pushes `APP_URL`, remind them that no env var is required for the map - this is intentional.
 
 ---
 

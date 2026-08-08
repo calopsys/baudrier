@@ -1,9 +1,9 @@
 "use client";
 
-// SSR-safe wrapper. MapLibre GL JS touche `window` à l'import, donc le
+// SSR-safe wrapper. MapLibre GL JS touche `window` à l’import, donc le
 // composant <Map> ne peut PAS être rendu côté serveur. `next/dynamic` avec
 // `ssr: false` ne peut être utilisé que depuis un client component (Next.js 14+),
-// d'où ce fichier dédié - il sert de point d'entrée pour les pages serveur
+// d’où ce fichier dédié - il sert de point d’entrée pour les pages serveur
 // qui veulent afficher la carte :
 //
 //   // dans une page (server component) :
@@ -11,7 +11,7 @@
 //   // …
 //   <MapLoader markers={markers} />
 //
-// Pour le SEO / accessibilité, n'oublie pas d'ajouter un <noscript> dans la
+// Pour le SEO / accessibilité, n’oublie pas d’ajouter un <noscript> dans la
 // page parent avec une liste textuelle des markers + lien Google Maps externe.
 
 import dynamic from "next/dynamic";

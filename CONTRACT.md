@@ -1,0 +1,1186 @@
+# Baudrier - internal contract
+
+**Every agent working on this repo must read this file first and code against it
+exactly.** It exists so that work done in parallel composes instead of diverging.
+If you believe something here is wrong, say so in your report — do **not** quietly
+invent a different convention.
+
+---
+
+## 1. Architecture
+
+A Claude Code plugin that scaffolds and deploys Next.js webapps entirely on
+Scaleway, for non-technical French users.
+
+| Concern | Implementation |
+|---|---|
+| App stack | Next.js 16 App Router (T3), TypeScript, tRPC v11, Drizzle, Tailwind v4, shadcn/ui |
+| Hosting | Scaleway Serverless Containers, region `fr-par` |
+| Image build | Direct `docker build`/`push`, run by the harness itself (no CI) → Scaleway Container Registry |
+| Deploy orchestration | `/deploy` skill (direct build+push, runs migration Job, updates container via SDK) |
+| Database | Scaleway Serverless SQL Database (PostgreSQL 16), `pg` + `drizzle-orm/node-postgres` |
+| Cache/sessions | PostgreSQL (no Redis) |
+| Object storage | Scaleway Object Storage (S3-compatible, `@aws-sdk/client-s3`) |
+| DNS | Scaleway Domains & DNS — **external domains only** |
+| Email | Scaleway Transactional Email (TEM) |
+| Scheduling, agents | Scaleway Serverless Jobs |
+| LLM + embeddings | Scaleway Generative APIs (OpenAI-compatible) |
+| Analytics | Matomo |
+| Secrets | Scaleway Secret Manager |
+| Logs | Scaleway Cockpit (Loki-compatible, LogQL) |
+
+The product is **French-only**. There is no i18n. All user-facing strings in
+templates are hardcoded French.
+
+### Constants
+
+```
+REGION                = "fr-par"          // everything, always
+DEFAULT_CPU_LIMIT     = 250               // mvCPU
+DEFAULT_MEMORY_LIMIT  = 512               // MB
+DEFAULT_MAX_CONCURRENCY = 8
+DEFAULT_MIN_SCALE     = 0                 // scale to zero
+DEFAULT_MAX_SCALE     = 5
+CONTAINER_PORT        = 8080
+DB_CPU_MIN_DEFAULT    = 0                 // Serverless SQL autoscaling floor (sleeps when idle)
+DB_CPU_MAX_DEFAULT    = 5                 // Serverless SQL autoscaling cap (API's own default is 15);
+                                          // /scale db-apply changes both, bounded 0 <= min <= max <= 15
+```
+
+There is no built-in IP allowlist constant. `bootstrap-init.mjs` detects the
+operator's egress address at container creation and writes it into
+`ACCESS_ALLOWED_IPS`; a hardcoded default shipped every new project reachable
+only from the original author's VPN (verified on a live run).
+
+### Hard platform facts you must respect
+
+- Serverless Containers accept **`amd64` images only**. Every `docker build`
+  must pass `--platform linux/amd64` unconditionally.
+- The container must listen on `0.0.0.0:8080`. Binding `127.0.0.1` breaks
+  Scaleway's health probes.
+- **Health checks do not wake a scaled-to-zero container.** Only real traffic
+  does. Keep-warm must be a Serverless Job issuing a real HTTP request.
+- Serverless Containers **cannot reference Secret Manager**. The harness reads
+  from Secret Manager and writes values into the container's
+  `secret_environment_variables`. Rotation therefore requires a redeploy.
+- **A container's secrets cannot be read, only written — Secret Manager is
+  the single readable source of truth.** Live-verified against Containers
+  **v1**: `GET` on a container returns each `secret_environment_variables`
+  entry as an argon2 hash, never plaintext, e.g.
+  `{"key":"ACCESS_ALLOWED_IPS","value":"$argon2id$v=19$m=65536,t=1,p=64$H1X/8Dyn..."}`
+  (an array of `{key,value}` pairs on read, not the `Record<string,string>`
+  the SDK's field doc implies). No client-side read-modify-write is possible:
+  there is nothing plaintext to merge with. `PATCH` still **replaces the
+  whole map** — an earlier revision of this file claimed `container.mjs` did
+  a read-merge-write that "gives callers merge semantics"; that was wrong,
+  because the "read" half returns hashes, not values, so any earlier code
+  that treated a GET result as plaintext and wrote it back destroyed the
+  secret it thought it was preserving (this happened live: `ACCESS_ALLOWED_IPS`
+  got hashed over its real value and every operator was locked out with a
+  403).
+  The fix: `container.mjs#syncContainerSecrets(containerId, {overrides,
+  databaseUrlFrom, projectId})` is now the **only** sanctioned way to update a
+  container's secrets. It builds the complete map from Secret Manager
+  (`buildContainerSecretMap`, skipping `CONTAINER_EXCLUDED_SECRETS`), applies
+  `overrides` for container-only values never persisted to Secret Manager,
+  and writes that full map with `setContainerSecrets` (still available, but
+  now documented as taking the COMPLETE desired map — a key it omits is
+  deleted, `null`/`undefined` in the map also deletes a key). Nothing outside
+  `container.mjs` may call `setContainerSecrets` directly for a container's
+  app-facing secrets; `tools/verify.mjs` enforces this.
+  Preview containers fail closed: `ACCESS_RESTRICTED` and `APP_URL` are
+  never written to Secret Manager for a preview (that would clobber
+  production's canonical value) — they are `syncContainerSecrets` overrides,
+  reapplied by `/deploy` on every preview deploy. A preview a human published
+  by hand therefore reverts to restricted the next time that branch deploys;
+  this is deliberate, not a bug.
+- **The harness never deletes a database or an Object Storage bucket.** Both are
+  behind `scripts/scaleway/_destructive-guard.mjs`, which refuses unless a human
+  sets `BAUDRIER_ALLOW_DESTRUCTIVE="<kind>:<exact-resource-name>"` in their own
+  shell. A generic value is rejected by design. `/delete-project` has no code
+  path to either function and hands the user console links instead. Rationale:
+  the bucket's version history is the only backup of file data, and Serverless
+  SQL has no on-demand backup *creation* API.
+- **Buckets are created with versioning enabled** plus a lifecycle rule
+  expiring noncurrent versions. Scaleway does **not** support S3's
+  `NewerNoncurrentVersions` (count-based) field — only time-based
+  `NoncurrentDays` — so the retention bound is temporal, not a version count.
+- Serverless **Jobs can** reference Secret Manager natively.
+- **Serverless Jobs definitions require `local_storage_capacity > 0`** -
+  live-verified: the API rejects a definition with no local storage
+  (`"local_storage_capacity does not respect constraint, value must be
+  greater than 0"`). The harness default is **1024 MiB**
+  (`jobs.mjs`'s `ensureJobDefinition`, passed to both `createJobDefinition`
+  and `updateJobDefinition`). Job secrets do not merge either: re-adding an
+  existing `env_var_name`/`path` 409s (`"secret path or env_var_name is
+  duplicated"`), so `ensureJobDefinition` lists and deletes every existing
+  secret on the definition before it calls `createSecrets` again.
+- Secret Manager is **region-scoped**; a Job can only read secrets in its own
+  region. Pin everything to `fr-par`.
+- Custom-domain TLS uses an HTTP-01 challenge with a hard **3-minute window**;
+  failure is an unrecoverable `error` state. Always verify DNS propagation
+  **before** calling the add-domain endpoint.
+- Container Registry has **no retention policy**. Prune old tags explicitly.
+- **Scaleway validates the registry image at container-creation time** -
+  verified on a live run. `createContainer({registryImage})` with a tag that
+  does not exist yet fails outright (`ScwError: resource registry image with
+  ID <slug> is not found`); a container cannot be created against a
+  placeholder tag and repointed at the real one later. `bootstrap-init.mjs`
+  therefore runs `firstBuild` (pushes the image under its commit-SHA tag via
+  the direct `docker build`/`push` pipeline, §5) before `scwContainer`
+  (creates the container against that real tag).
+- **A container in a transient state refuses writes** (`409
+  TransientStateError` while `creating`/`deploying` - verified on a live
+  run), and a secret write itself triggers a new deployment. The rhythm for
+  every container mutation is wait-write-wait:
+  `waitForContainerReady` before the write, and again after it before the
+  next write or check.
+- **The production image is Next's `standalone` output only** - no
+  devDependencies, no `drizzle-kit`, no `package.json` scripts survive the
+  runner stage - live-verified via a truncated OCI start error when the
+  migration Job tried to run `drizzle-kit migrate` on it. Migrations
+  therefore ship as `templates/deploy/migrate.mjs`, a dependency-light
+  runner (node builtins + `pg` only) copied into the image alongside
+  `drizzle/`. It executes **exclusively** inside the `/deploy` Serverless
+  Job, exactly once per deploy - the Dockerfile `CMD` stays
+  `["node","server.js"]` and must never reference `migrate.mjs`, so a
+  scaling app container can never trigger a migration.
+- Serverless SQL: `pg_advisory_lock` is **not guaranteed**, and a migration
+  runner has no concurrency protection of its own without care. Migrations
+  run in exactly one place: a Serverless Job invoked by `/deploy`, never at
+  container start.
+- Serverless SQL: session `SET` / `search_path` leak across the shared
+  connection pool — wrap in a transaction. 1 MB max SQL statement size.
+  No temp tables. No `CREATE DATABASE` / `CREATE ROLE` via SQL.
+- `scw` has **no OAuth or device-code login**. The user pastes an API key.
+
+### Claude Code web sessions (live-verified 2026-08-05)
+
+Claude Code web (claude.ai/code) is a primary platform for this harness, not
+a fallback: each session is a **fresh, ephemeral, root Ubuntu 24.04 VM** with
+no persistent home directory, the repo already cloned from GitHub.
+`CLAUDE_CODE_REMOTE=true` and `CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE` (e.g.
+`cloud_default`) identify it; `scripts/_platform.mjs#isRemoteSandbox()` is
+the single place that checks this (`BAUDRIER_FORCE_REMOTE=1` overrides it
+for tests).
+
+- **The proxy network allowlist is Custom-level, not additive.** A Custom
+  domain list **replaces** the Trusted defaults outright, unless the
+  environment dialog's "Also include default list of common package
+  managers" box is checked - leaving it unchecked breaks `npm`/`pnpm`
+  entirely. The README's `## Installation` chapter must name the checkbox
+  explicitly.
+- **The shell GitHub token is narrowly scoped:**
+
+  | Scope area | Shell `git`/`gh` token |
+  |---|---|
+  | repo metadata, contents | read/write (clone, push) |
+  | Issues, PRs | read |
+  | Actions - workflows, runs, secrets, variables | 403 |
+  | environments, deployments, webhooks | 403 |
+  | ref create | allowed |
+  | ref delete | 403 |
+
+  `gh auth status` exits 1 even when this token works end-to-end
+  (live-verified) - never gate anything on it (§7).
+- **MCP sees more than the shell does.** The session's own GitHub MCP
+  tooling CAN read Actions (the workflow file and its runs) - that
+  capability exists model-side only. A `scripts/*.mjs` file runs as a
+  plain shell subprocess and can never call MCP, so it can never reach
+  what MCP can.
+- **`CLAUDE_ENV_FILE` is unset in every Bash tool call** (round-trip
+  verified: a variable written there never comes back). That persistence
+  route is unusable on web; use a session-scoped `/tmp` file instead - the
+  VM lives for the whole session, so `/tmp` is a safe cache (§2, §7).
+- **`dockerd` exists but is not started at session boot.** The binaries are
+  present; nothing launches the daemon (live-verified on a fresh session).
+  `scripts/ensure-dockerd.mjs` starts it lazily, on first need, and polls
+  the socket - a snapshot cannot preserve a running process, so this must
+  happen every session.
+- **`docker pull` is blocked by the default network policy** until the
+  Docker Hub domain family is reachable. The README's `## Installation`
+  chapter recommends the **Full** network access level, « Complet » in the
+  French doc (live experience: the set of domains a real build touches
+  keeps growing - Alpine's `dl-cdn.alpinelinux.org`, npm, Docker Hub,
+  fonts - and every missing domain breaks a step with a hard-to-read
+  error). A hardened Custom allowlist works but is deliberately NOT in the
+  user-facing README (decision 2026-08-08: one recommended setting, no
+  menu); this table is its documentation of record. Check the
+  `"Also include default list of common package managers"` box (an
+  unchecked box REPLACES the default list and npm dies), then allow at
+  least: `api.scaleway.com`, `rg.fr-par.scw.cloud`, `s3.fr-par.scw.cloud`,
+  `logs.cockpit.fr-par.scw.cloud`, `api.scaleway.ai`,
+  `registry-1.docker.io`, `auth.docker.io`,
+  `production.cloudfront.docker.com`, `docker.io`,
+  `dl-cdn.alpinelinux.org`, `*.fnc.fr-par.scw.cloud`,
+  `www.googleapis.com`, `api.indexnow.org`.
+- **The egress proxy re-terminates TLS, and docker builds do not trust it**
+  (live-verified 2026-08-06). All outbound HTTPS goes through the agent
+  proxy at `$HTTPS_PROXY` (a `127.0.0.1:<port>` address); host tools trust
+  its CA via `/root/.ccr/ca-bundle.crt`. Processes INSIDE a `docker build`
+  can neither reach `127.0.0.1:<port>` nor trust that CA - `apk add` fails
+  with "server certificate not trusted". The pipeline therefore does three
+  things on web (`scripts/_docker-build.mjs` + the Dockerfile template):
+  build with `--network host`, pass the proxy env through the predefined
+  `--build-arg`s, and ship `proxy-ca.crt` into the build context where the
+  Dockerfile's network-active stages append it to the system CA bundle
+  (`NODE_EXTRA_CA_CERTS` points at that bundle for node-based fetchers).
+  Off web the file is empty and every part of this is a no-op. The runner
+  stage never inherits the appended bundle.
+- **Plugin auto-install from `settings.json` is half-broken** (live-verified
+  across three consecutive startups: install-nothing, then
+  installed-but-empty-folder, then empty-folder-no-skills). Explicit
+  `claude plugin marketplace add` + `claude plugin install` works reliably
+  and is the only install path this harness relies on. It only *persists*
+  when run from the environment's **setup script**
+  (`scripts/setup-clis-web.sh`), since that script's result is what gets
+  baked into the environment's filesystem snapshot; a mid-session install
+  dies with the container.
+
+- **Node ignores the egress proxy by default, and the two routes have two
+  identities** (live-verified 2026-08-08). Bare node `fetch()` leaves the
+  sandbox DIRECTLY and still works (`api.scaleway.com` answers 200), but it
+  egresses from the sandbox host's own pool (a Google Cloud address,
+  `34.x.x.x`, changing). `curl` and everything honoring `$HTTPS_PROXY`
+  egresses from the Anthropic proxy pool (`160.79.106.x`, also changing per
+  request). IP-gate reasoning must never assume node traffic and curl
+  traffic present the same address. `scripts/setup-clis-web.sh` exports
+  `NODE_USE_ENV_PROXY=1` in the profile (supported since node 22.18) so
+  node `fetch()` takes the proxy route too; the platform already sets
+  `NODE_EXTRA_CA_CERTS=/root/.ccr/ca-bundle.crt` globally, so the proxy's
+  re-terminated TLS is trusted with no extra step. Neither pool can be
+  allowlisted meaningfully in `ACCESS_ALLOWED_IPS` - that is what
+  `ACCESS_BYPASS_TOKEN` (§6) exists for.
+
+Toolchain in a fresh session (live-verified 2026-08-05): root, node
+v22.22.2, pnpm 10.33.0, git 2.43.0, docker 29.3.1.
+
+### IAM permission sets the operator's key must carry
+
+An account **owner** implicitly has every permission below - the table matters
+for an **organization member**, and for the narrow, single-purpose IAM
+applications an organization admin creates by hand when fulfilling a delegated
+request (`docs/ADMIN-SCALEWAY.md`). Verify the exact set names against
+https://www.scaleway.com/en/docs/iam/reference-content/permission-sets/ at the
+first live run; Scaleway can rename or split a set.
+
+| Permission set | Scope | Called by |
+|---|---|---|
+| `ProjectManager` | organization | `bootstrap-init.mjs` (per-app Project creation), `check-name-collision.mjs` |
+| `IAMManager` | organization | `iam.mjs` callers: `setup-db.mjs`, `deploy.mjs`, `setup-agent.mjs`, `rotate-secret.mjs`, skills `add-db`, `add-storage`, `add-workflow` |
+| `SecretManagerFullAccess` | project | `secrets.mjs` |
+| `ContainersFullAccess` | project | `container.mjs` |
+| `ContainerRegistryFullAccess` | project | `registry.mjs` |
+| `ServerlessSQLDatabaseFullAccess` | project | `sdb.mjs` |
+| `ServerlessJobsFullAccess` | project | `jobs.mjs` |
+| `ObjectStorageFullAccess` | project | `object-storage.mjs` |
+| `DomainsDNSFullAccess` | project | `dns.mjs` |
+| `TransactionalEmailFullAccess` | project | `tem.mjs` |
+| `GenerativeApisFullAccess` | project | `setup-agent.mjs` policy target |
+| `BillingReadOnly` | organization | `billing.mjs` |
+| `ObservabilityFullAccess` | project | `cockpit.mjs` |
+
+`ProjectManager` and `IAMManager` are organization-scoped because the harness
+creates a new Project per app - a project-scoped rule could not reach a
+Project that does not exist yet.
+
+Both sets are **optional** on the operator's own key. Their presence or
+absence selects one of three explicit modes, tracked by the
+`BAUDRIER_SCW_MODE` env var (§2, §7):
+
+- **`full`** - the operator's key carries both `ProjectManager` and
+  `IAMManager`. `/bootstrap` creates one Scaleway Project per app
+  (`scwProject()`, `createProject`) and mints every service credential
+  itself: a scoped IAM key per capability
+  (`SCW_GENERATIVE_API_KEY`, `TEM_API_SECRET_KEY`,
+  `STORAGE_ACCESS_KEY`/`STORAGE_SECRET_KEY`, the delegated-database pair).
+- **`poc`** - set by exporting `BAUDRIER_SCW_MODE=poc` (§2) when the
+  operator's key lacks `ProjectManager` and/or `IAMManager`.
+  `check-scw-permissions.mjs` is a read-only advisory probe that recommends
+  the value; it does not persist anything, and there is no operator-level
+  default file - the env var is read fresh every run and defaults to `full`
+  when unset. In `poc` mode `/bootstrap` never calls `createProject`: it
+  asks the user for an existing Project id (`--scw-project-id`, or
+  `SCW_DEFAULT_PROJECT_ID` set directly, §2) instead, and refuses a Project
+  that already holds a known Baudrier secret name - accepting it would break
+  the name-equals-var invariant (§2) by colliding two apps' secrets in one
+  Project. This is exactly the condition `SCW_DEFAULT_PROJECT_ID` (§2)
+  exists to declare up front: a `poc`-mode key is not expected to be able to
+  list or create Projects by name at all. Service secrets fall back to the
+  operator's own personal key, tracked by fingerprint, exactly as described
+  below.
+- **`delegated`** - entered per app, not chosen up front: `/publish`'s
+  adoption step live-validates an admin-provisioned `BAUDRIER_APP_KEY`
+  (one `listSecrets` call under the candidate key, §2). On success it prints
+  the `SCW_*` env lines the operator must set (the secret value is never
+  echoed) and persists nothing. The delegated state is not a stored flag:
+  it exists when the operator's env holds the app-scoped key instead of a
+  personal key. On web the operator sets the lines in the cloud environment
+  dialog; on Linux, in their gitignored env file.
+
+Project creation is unchanged by this split: `bootstrap-init.mjs` still
+needs `ProjectManager` at the moment it runs in `full` mode, nothing can
+fake it, and a 403 there still fails immediately with `ScwError type
+"needs_admin"` carrying a forwardable French request
+(`docs/ADMIN-SCALEWAY.md`, « Recette « projet » »).
+
+Service credentials (`BAUDRIER_DB_KEY`, `SCW_GENERATIVE_API_KEY`,
+`TEM_API_SECRET_KEY`, `STORAGE_ACCESS_KEY`/`STORAGE_SECRET_KEY`) no longer
+interrupt per request in `poc` mode, where `IAMManager` is absent. On a 403
+from an IAM mint the script tries, in order: the delegated secret an
+organization admin provisioned by hand; then, silently, the operator's own
+personal Scaleway key, recorded as dev-backed in the
+`BAUDRIER_DEV_FINGERPRINTS` manifest secret (§2, §3 `dev-credentials.mjs`);
+`"needs_admin"` fires only as a rare last resort, when even the personal-key
+fallback is unavailable. Object Storage is the one exception still handled
+per request: `scripts/scaleway/dev-credentials.mjs` has no fill command for
+it, so `/add-storage` keeps relaying a `docs/ADMIN-SCALEWAY.md` request
+immediately on a `permission_denied` from its IAM mint.
+
+Every request that *did* fall back to the operator's personal key is
+batched, not silent forever: `/publish` (`skills/publish/SKILL.md`) refuses
+to make an app public while `dev-credentials.mjs check --json` still reports
+any `devBacked` secret for it, and prints one consolidated French request
+covering every addon at once. This is the security rationale for the gate:
+the personal key is acceptable only while the app stays IP-restricted.
+
+**Known 1.x trade-off: there is no per-project harness control-plane key.**
+Even in `full` mode, every harness-side mint and every `createProject` call
+runs under the operator's own, human-held key - never under a separate,
+narrower credential scoped to one project. A control-plane key of that
+shape would need `ProjectManager` and `IAMManager`, and both are
+organization-scoped by construction (above): granting them to anything
+still means granting org-wide rights, this time to a non-human credential
+sitting in Secret Manager, which is the exposure the harness exists to
+avoid, not a way around it. A second, technical constraint reinforces the
+same choice: `_scw-auth.mjs#api()` memoises one SDK instance per
+`(product, version, cls)` for the process's one active identity, so juggling
+a second, per-project identity alongside the operator's own inside a single
+script run is not something the current code supports. PoC adoption
+(`delegated` mode) needs no such juggling: a `poc` operator's key never
+carried `ProjectManager`/`IAMManager` to begin with, so every org-scoped
+call it makes already 403s and already routes into the fallback chain above
+- by design, not by accident.
+
+---
+
+## 2. Environment variables — canonical names
+
+### Operator machine (harness credentials, never in a PUBLISHED app)
+
+**Environment variables are the only credential mechanism, on every
+platform.** There is no repo-local credentials file, no `scw` config-file
+fallback, and no multi-tier resolution: the harness reads `SCW_*` straight
+from `process.env` (§7). On Claude Code web the operator sets them once in
+the "Baudrier" cloud environment's own env-var dialog; on Linux the operator
+keeps them in a **gitignored** env file they maintain themself and source
+before running Claude Code. The harness never writes a credential to disk on
+any platform.
+
+| Var | Meaning |
+|---|---|
+| `SCW_ACCESS_KEY` | IAM API key access key |
+| `SCW_SECRET_KEY` | IAM API key secret key |
+| `SCW_DEFAULT_ORGANIZATION_ID` | Scaleway Organization |
+| `SCW_DEFAULT_REGION` | always `fr-par`; this is the default applied when unset |
+| `SCW_DEFAULT_PROJECT_ID` | optional override: skip the by-name Project lookup below and target this Project id directly |
+| `BAUDRIER_SCW_PROJECTS_IDS` | optional per-app map for a key that cannot list the organization's Projects (README « Cas B »): `app-un:id1,app-deux:id2`; a matching entry wins over `SCW_DEFAULT_PROJECT_ID`, so one cloud environment serves several apps |
+| `BAUDRIER_SCW_MODE` | `full` \| `poc` (§1); defaults to `full` when unset |
+
+**Per-app scope resolves by Scaleway Project name, never by a stored id.**
+App repos carry **no Scaleway metadata at all** - `.scaleway/container.json`
+no longer exists. A Project's name is always the app name, which is always
+the repo name, so `_scw-auth.mjs` resolves the active Project in this order:
+a `BAUDRIER_SCW_PROJECTS_IDS` entry matching the app name → the
+`SCW_DEFAULT_PROJECT_ID` env override → a session-scoped `/tmp` cache keyed
+by app name → an SDK `listProjects` call filtered by name, which then writes
+that cache. **The operator's API key must therefore carry org-level Project
+`list`/`create` rights** (`ProjectManager`, §1) whenever neither env var is
+set; a key that lacks them must set `BAUDRIER_SCW_PROJECTS_IDS` (several
+apps, one environment) or `SCW_DEFAULT_PROJECT_ID` (one app) instead of
+relying on the lookup - this is exactly the `BAUDRIER_SCW_MODE=poc` case
+(§1). An env-var edit only reaches a NEW session; for the current session
+the `cache-project` command of `_scw-auth.mjs` (§3) seeds the session cache
+from a Project id the user gives in the chat - an id is an identifier, not a
+secret, so the chat is an acceptable channel for it. Containers and registry
+namespaces are likewise found by name, never by a stored id.
+
+In `poc` mode (§1), the operator's own personal key MAY back one or more
+of a restricted app's own secrets while that app is still under development -
+until `/publish` runs. Every such fallback is tracked by fingerprint (never
+the raw key) in the `BAUDRIER_DEV_FINGERPRINTS` manifest secret (see the
+named secret exceptions below). `/publish` refuses to proceed while any
+secret for the target app is still dev-backed, so the personal key never
+reaches a published app.
+
+**Runtime credentials are always scoped.** A generated app never receives
+`SCW_SECRET_KEY` — that key can administer the whole Project. Each capability
+gets its own IAM-scoped key instead: `TEM_API_SECRET_KEY` for email,
+`STORAGE_ACCESS_KEY`/`STORAGE_SECRET_KEY` for Object Storage,
+`SCW_GENERATIVE_API_KEY` for Generative APIs, and the IAM application id +
+secret embedded in `DATABASE_URL` for the database.
+
+### Generated app (`.env` locally, `secret_environment_variables` in the container)
+
+Secret Manager is the canonical, readable store for every one of these
+(§1: a container's `secret_environment_variables` can only be written, never
+read back). `container.mjs#buildContainerSecretMap` projects the whole
+Secret Manager set into a container, **except** `CONTAINER_EXCLUDED_SECRETS`
+(the `BAUDRIER_*` and `DATABASE_URL_PREVIEW_*` prefixes, plus
+`MATOMO_TOKEN`, `PAGESPEED_API_KEY`, `GSC_SERVICE_ACCOUNT` — operator-side
+values a generated app must never receive).
+
+`ACCESS_RESTRICTED` and `APP_URL` are Secret-Manager-canonical for
+**production** only (`bootstrap-init.mjs` seeds both, plus
+`ACCESS_ALLOWED_IPS` and a `DATABASE_URL` placeholder, at project creation).
+A **preview** container's `ACCESS_RESTRICTED`/`APP_URL` are container-only
+`syncContainerSecrets` `overrides` — deliberately never written to Secret
+Manager, since that value is production's — reapplied by `/deploy` on every
+preview deploy (§1: fails closed).
+
+| Var | Purpose |
+|---|---|
+| `DATABASE_URL` | Serverless SQL connection string (see §4); `bootstrap-init.mjs` seeds a placeholder in Secret Manager before a database exists, `/add-db`/`/deploy` overwrite it with the real value |
+| `APP_URL` | public URL of the app (replaces the old Vercel URL var); Secret-Manager-canonical for production, a container-only override for preview |
+| `AUTH_SECRET` | NextAuth/Auth.js secret |
+| `ACCESS_RESTRICTED` | `"true"` \| `"false"` — the VPN IP gate; Secret-Manager-canonical for production, a container-only override for preview |
+| `ACCESS_ALLOWED_IPS` | comma-separated CIDRs; no default - unset means nobody passes the gate while `ACCESS_RESTRICTED` is on; `bootstrap-init.mjs` seeds it in Secret Manager with the operator's detected egress address |
+| `ACCESS_BYPASS_TOKEN` | pre-shared harness token (hex, 64 chars); a request carrying it in `x-baudrier-access-token` passes the IP gate for every method (§6); `bootstrap-init.mjs` mints it, `deploy.mjs` mints it when absent (pre-token app) |
+| `STORAGE_ENDPOINT` | `https://s3.fr-par.scw.cloud` |
+| `STORAGE_REGION` | `fr-par` |
+| `STORAGE_BUCKET` | bucket name |
+| `STORAGE_ACCESS_KEY` | IAM key for Object Storage |
+| `STORAGE_SECRET_KEY` | IAM secret for Object Storage |
+| `STORAGE_PUBLIC_URL` | public base URL for public buckets |
+| `TEM_SENDER_EMAIL` | verified TEM sender |
+| `TEM_SENDER_NAME` | display name |
+| `TEM_API_SECRET_KEY` | IAM-scoped key for the TEM send API (**not** the operator's key) |
+| `SCW_GENERATIVE_API_KEY` | Generative APIs key |
+| `SCW_GENERATIVE_BASE_URL` | `https://api.scaleway.ai/v1` |
+| `SCW_GENERATIVE_MODEL` | chat model id |
+| `SCW_EMBEDDING_MODEL` | `qwen3-embedding-8b` (2000 dims) |
+| `NEXT_PUBLIC_MATOMO_URL` | Matomo instance URL |
+| `NEXT_PUBLIC_MATOMO_SITE_ID` | Matomo site id |
+| `CRON_SECRET` | shared secret protecting `/api/cron/*` |
+| `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | Web Push |
+
+**Never introduce a variable not listed here without saying so in your report.**
+Banned (removed providers): anything matching `VERCEL_*`, `NEON_*`,
+`CLOUDFLARE_*`, `CF_*`, `R2_*`, `RESEND_*`, `BREVO_*`, `RENDER_*`, `STRIPE_*`,
+`ANTHROPIC_API_KEY`, `NEXT_PUBLIC_GA_*`.
+
+### Secret Manager naming
+
+One Scaleway Project per app, so a secret's name **is** the env var name
+(`DATABASE_URL`, `AUTH_SECRET`, …). `MATOMO_TOKEN`, `PAGESPEED_API_KEY` and
+`GSC_SERVICE_ACCOUNT` are per-app secrets like every other one: each app's own
+Project holds its own copy, and the user pastes the value again for a new
+project. `GITHUB_TOKEN` is **not stored at all** — the harness holds no
+GitHub credential of its own. Repo access is native git auth (the web
+session's own git credential, or the operator's git auth on Linux, §7); the
+repo-access gate is `git ls-remote origin`, never `gh auth status` or
+`gh api /user` (§1, §7). No script in this repo reads a `GITHUB_TOKEN`
+secret, and `gh` is no longer part of the toolchain at all (§5, §7).
+
+Four exceptions to the name-equals-var rule:
+
+1. Preview environments each need their own database, so `/deploy` stores
+   preview connection strings as `DATABASE_URL_PREVIEW_<BRANCH_SLUG>` and maps
+   them onto the literal `DATABASE_URL` at point of use (the Job's
+   `secretRefs` and the container's `secret_environment_variables`).
+2. `BAUDRIER_DB_KEY`: its body is JSON with two fields (`application_id`,
+   `secret_key`) - the delegated IAM Application id and API secret key an
+   organization admin provisions by hand for the database, one pair per app
+   Project (`docs/ADMIN-SCALEWAY.md`, « Recette « base de données » »). It
+   lives in the app's own Project, like every other secret, but is read
+   **in-process only** by `setup-db.mjs`, `deploy.mjs` (preview databases -
+   same pair) and `rotate-secret.mjs` on a `permission_denied` fallback -
+   never via the `secrets.mjs` CLI `get` command, which would print it. Its
+   name is exported as `DELEGATED_DB_KEY_SECRET_NAME` from
+   `scripts/scaleway/iam.mjs`.
+3. `BAUDRIER_DEV_FINGERPRINTS`: a hashes-only manifest secret, one per app
+   Project, that `scripts/scaleway/dev-credentials.mjs` writes and reads. It
+   records which service credentials (§1) are currently backed by the
+   operator's own personal Scaleway key instead of a delegated or scoped one
+   - by fingerprint, never the raw key value. `dev-credentials.mjs check
+   --json` reads it to answer "which secrets are dev-backed"; `/publish`
+   (`skills/publish/SKILL.md`) is the caller that acts on the answer. Its
+   name is exported as `DEV_FINGERPRINTS_SECRET_NAME` from
+   `scripts/scaleway/dev-credentials.mjs`.
+4. `BAUDRIER_APP_KEY`: body is JSON with two fields (`access_key`,
+   `secret_key`) - an admin-minted IAM application carrying the project's
+   service permission sets (never `ProjectManager`/`IAMManager`, §1).
+   `/publish`'s adoption step live-validates it with one `listSecrets` call
+   under the candidate key, then prints the `SCW_*` env lines the operator
+   must set (§1). Nothing is persisted; the operator's env is the only
+   credential store (§7).
+
+`BAUDRIER_APP_KEY` is covered by the existing `BAUDRIER_*` container-exclusion
+prefix (`CONTAINER_EXCLUDED_SECRETS`, §1) like every other operator-side
+secret - it is never projected into a container.
+
+### Additional app vars set by addon skills
+
+Not every generated app has these; each is written only by the skill that owns
+it. Listed so `/delete-project` and `/clean` do not misreport them as
+user-added: `ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH_DEV`, `ADMIN_PASSWORD_HASH_PROD`,
+`ADMIN_TOTP_SECRET`, `ADMIN_2FA_BACKUP_HASHES`, `ADMIN_EMAIL`,
+`CONTACT_RECIPIENT_EMAIL`, `VAPID_SUBJECT`, `AGENT_TRIGGER_MODE`,
+`AGENT_CRON_PROMPT`, `AGENT_DAILY_BUDGET_EUR`, `AGENT_MONTHLY_BUDGET_EUR`,
+`AGENT_EMAIL_ALLOWED_RECIPIENTS` (comma-separated allowlist for the agent's
+`send_email` tool; unset falls back to `ADMIN_EMAIL`, absent both the tool
+refuses to send).
+
+---
+
+## 3. `scripts/scaleway/` module API
+
+**These modules are thin adapters over the official `@scaleway/sdk`.** They are
+not hand-written REST clients any more. Their exported signatures are frozen —
+~80 call sites across `skills/` and `scripts/` depend on them — but the bodies
+delegate to the SDK.
+
+### How dependencies reach the code
+
+A plugin's own directory (`${CLAUDE_PLUGIN_ROOT}`) is a **read-only cache**, so
+`node_modules` cannot live there. Dependencies are installed into
+`${CLAUDE_PLUGIN_DATA}` (writable, survives plugin updates) by
+`tools/bootstrap-deps.mjs`, run from the `SessionStart` hook in `hooks/hooks.json`.
+
+**`${CLAUDE_PLUGIN_DATA}` only exists for hooks and MCP/LSP subprocesses.** A
+**Bash tool call does not get it** — verified empirically: a Bash call sees
+`CLAUDE_CODE_*`, `CLAUDE_PID`, `CLAUDE_EFFORT` and no `CLAUDE_PLUGIN_DATA`. The
+installer is a hook and knows the directory; every `scripts/scaleway/*.mjs` runs
+under Bash and does not. Nor can the directory be hardcoded: its name is the
+plugin identifier with characters outside `[a-zA-Z0-9_-]` replaced by `-`, so
+`baudrier@<marketplace>` becomes `baudrier-<marketplace>` and the marketplace half
+is chosen by whoever installs the plugin.
+
+**`tools/deps-dir.mjs` is the one resolver**, imported by both sides. Reading
+order, first hit wins (a candidate counts only if `<dir>/node_modules` exists):
+
+| # | Source | Where it comes from |
+|---|---|---|
+| a | `env-override` | `BAUDRIER_DEPS_DIR` — **authoritative**: when set it is the only candidate, so a typo fails loudly instead of silently loading some other install |
+| b | `plugin-data-env` | `${CLAUDE_PLUGIN_DATA}` (hooks, MCP) |
+| c | `pointer` | `~/.claude/baudrier/deps-dir.txt` |
+| d | `scan` | any `~/.claude/plugins/data/*` whose `package.json` has `"name": "baudrier"` — best match first: byte-identical to the plugin's own manifest, then most recently modified |
+| e | `repo` | the plugin root itself, for dev checkouts |
+
+The **pointer file** is the bridge: `bootstrap-deps.mjs` runs as a hook, so it is
+the one process that knows the truth, and it writes the absolute directory to
+`~/.claude/baudrier/deps-dir.txt` after both the install and the already-up-to-date
+path. It lives outside `plugins/data` so a plugin update or marketplace rename
+cannot take it with it. Failing to write it is non-fatal — resolution falls back
+to the scan, which is the reason the scan exists.
+
+`installTargetDir()` picks where to install *into*: `BAUDRIER_DEPS_DIR`,
+`${CLAUDE_PLUGIN_DATA}`, an existing scan hit, then
+`~/.claude/plugins/data/baudrier-fallback`, then the repo root. It never
+invents `~/.claude/plugins/data/baudrier` — that was the old wrong guess.
+
+`bootstrap-deps.mjs --json` prints exactly one JSON line on stdout (human logs go
+to stderr) and exits non-zero on failure, for `/start` to parse:
+
+```json
+{"ok":true,"dir":"...","source":"scan","action":"installed|up-to-date|failed|check",
+ "pointerWritten":true,"nodeVersion":"v22.x.x","health":"ok|broken|skipped","error":null}
+```
+
+`--check` implies `--json`, resolves and health-checks only, installs nothing and
+writes nothing (its `pointerWritten` reports whether the pointer already agrees) —
+it is the cheap gate. Without `--json`, failure still exits 0: a dependency problem
+must never block a session from starting. The `engines.node` floor is enforced
+before any install, because a doomed `npm install` failing with `EBADENGINE` reads
+like a harness bug rather than "update Node".
+
+**`NODE_PATH` does not work for this.** Node honours it only for CommonJS
+`require`, never for ESM `import`, and every script here is ESM. There is no
+documented alternative, so `scripts/scaleway/_deps.mjs` resolves explicitly:
+`createRequire` rooted in the resolved directory → `require.resolve(spec)` →
+`import(pathToFileURL(abs))`. **Always import dependencies through `_deps.mjs`**
+(`loadScalewaySdk`, `loadScalewayClient`, `loadS3`, `loadS3Presigner`) — never a
+bare specifier, which would fail at runtime.
+
+### Pinned versions, and why exactly
+
+`package.json` pins `@scaleway/sdk@3.11.1` and `@scaleway/sdk-client@2.4.2`
+**exactly, not as ranges**. Scaleway's npm release pipeline is currently
+publishing packages with no `dist/` directory while still declaring `exports`
+that point into it — verified against `registry.npmjs.org` (`fileCount: 3`).
+3.11.2, 4.0.0 and `sdk-client` 2.5.0 are all broken this way. A caret range
+resolves to a broken release and fails with a confusing `ERR_MODULE_NOT_FOUND`
+inside `node_modules`. `tools/check-deps-health.mjs` detects exactly this and
+must pass before relaxing a pin.
+
+### Supply chain: the two install paths
+
+The harness installs its own runtime deps from the committed lockfile, with
+`npm ci --ignore-scripts` (`tools/bootstrap-deps.mjs`), so a dependency's
+install script never runs here.
+
+A generated project cannot use that mechanism: `/bootstrap` and every `add-*`
+skill run `pnpm add <pkg>@latest`, and `bootstrap-init.mjs` passes
+`--config.dangerously-allow-all-builds=true` on pnpm ≥ 11, so build scripts do
+run there. The age floor is the guard instead. `shadcn()` writes
+`minimumReleaseAge: 4320` (3 days, in minutes) and
+`minimumReleaseAgeStrict: false` into the project's `pnpm-workspace.yaml`, which
+is the single writer of that file — anything added to the earlier
+normalisation block in `scaffoldT3()` is overwritten later and does nothing.
+Two limits are deliberate and must stay understood, not silently "fixed":
+
+- **`minimumReleaseAgeStrict` stays `false`.** pnpm flips it to `true` by itself
+  as soon as `minimumReleaseAge` is set explicitly. Strict turns "the only
+  version matching the range is too new" into a failed install in front of a
+  non-technical user; false makes pnpm pick an older qualifying version instead.
+- **The first `pnpm install` in `scaffoldT3()` predates the file** and gets only
+  pnpm 11's own 1440-minute default (0 on pnpm ≤ 10). Every later `pnpm add`
+  is covered.
+
+Check 52 guards both values. `skills/security/SKILL.md` §1g carries the
+lockfile sweep for a named-advisory check.
+
+### Getting an API instance
+
+```js
+import { api, sdkCall, ScwError } from "./_scw-auth.mjs";
+const containers = await api("Container", "v1");
+const result = await sdkCall(() => containers.listNamespaces({ projectId }));
+```
+
+`api(product, version, cls = "API")` returns a memoised SDK API. `sdkCall()`
+wraps a call to translate the SDK's typed errors into `ScwError` and to apply
+backoff on `TooManyRequestsError`/5xx — the SDK does **not** retry on its own.
+
+Version choices that matter: **Container `v1`** (v1beta1 was deprecated
+2026-07-09; the SDK exposes both, so there is no reason to stay on it),
+**Jobs `v1alpha2`**, **Billing `v2beta1`** (v2 has only budgets; consumption is
+in v2beta1), and **Cockpit** uses `GlobalAPI`/`RegionalAPI` rather than `API`.
+
+Prefer the SDK's **built-in waiters** (`waitForContainer`, `waitForNamespace`,
+`waitForDomain`) over hand-rolled polling — they also remove the need to
+hard-code status enums, which is where a previous revision guessed wrong.
+
+### The three documented exceptions
+
+`scwFetch`/`scwPaginate` survive in `_scw-auth.mjs` as an escape hatch, and are
+legitimate **only** for:
+1. **Cockpit log queries** — a Loki-compatible endpoint on a different host, with
+   no SDK method.
+2. **Object Storage** — S3-protocol only, so it uses `@aws-sdk/client-s3`
+   (see `object-storage.mjs`), not the Scaleway SDK and not raw fetch.
+3. Any API Scaleway ships before the SDK catches up.
+
+Anything else must go through the SDK.
+
+### `_scw-auth.mjs` (already written — read it, do not change its exports)
+
+```js
+export const REGION;                       // "fr-par"
+export class ScwError extends Error {}     // .status .type .details
+export function loadCredentials();          // {accessKey,secretKey,projectId,organizationId,region}
+export function requireCredentials();       // same, throws a friendly error if absent
+export async function scwFetch(apiPath, {method, body, query, headers, raw});
+export async function scwPaginate(apiPath, {query, key});  // yields all pages of key
+```
+
+The file also carries one CLI command:
+`node scripts/scaleway/_scw-auth.mjs cache-project <project-id> [app-name]`
+writes the session-scoped Project cache. It exists for one flow only: a
+« Cas B » user gave a Project id in the chat, and the current session cannot
+reread the environment variables (§2).
+
+### `secrets.mjs` — Secret Manager
+
+```js
+export async function getSecret(name, opts?);        // -> string (latest enabled version)
+export async function putSecret(name, value, opts?); // create-or-new-version -> {id,revision}
+export async function secretExists(name, opts?);     // -> boolean
+export async function listSecrets(opts?);            // -> [{id,name,versionCount}]
+export async function deleteSecret(name, opts?);
+```
+
+### `iam.mjs` — IAM applications, policies, API keys
+
+```js
+export const DELEGATED_DB_KEY_SECRET_NAME;                     // "BAUDRIER_DB_KEY"
+export async function ensureApplication(name, opts?);          // -> {id,name}
+export async function ensurePolicy({applicationId, projectId, permissionSetNames});
+export async function createApiKey({applicationId, projectId, description});
+                                                               // -> {accessKey,secretKey}
+export async function listApiKeys(applicationId);
+export async function deleteApiKey(accessKey);
+```
+
+A 403 on a mint operation (`ensureApplication`, `ensurePolicy`, `createApiKey`)
+maps to `ScwError type "permission_denied"` - the delegation signal callers
+fall back on (§1, §7).
+
+### `dev-credentials.mjs` — dev-key fallback tracking (batch-at-publish, §1)
+
+```js
+export const DEV_FINGERPRINTS_SECRET_NAME;  // "BAUDRIER_DEV_FINGERPRINTS"
+```
+
+CLI, one JSON line each: `check --json` → `{"ok":true,"devBacked":[...],"cleared":[...]}`;
+`swap-db --project-name <name> --json` → `{"ok":true,"swapped":true|false,...}` (retries a
+`DATABASE_URL` already dev-backed against a `BAUDRIER_DB_KEY` an admin may since have
+stored). `/publish` (`skills/publish/SKILL.md`) is its only caller.
+
+### `registry.mjs`
+
+```js
+export async function ensureRegistryNamespace(name, opts?);  // -> {id,name,endpoint}
+export async function listImages(namespaceId);
+export async function listTags(imageId);
+export async function pruneTags(imageId, {keep});            // -> {deleted:[tag]}
+```
+
+### `container.mjs`
+
+```js
+export const SCALE_PRESETS;  // {S:{cpuLimit,memoryLimit,maxConcurrency}, M, L, XL}
+export const CONTAINER_EXCLUDED_SECRETS;  // Secret Manager names never projected into a container
+export async function ensureNamespace(name, opts?);       // -> {id,name}
+export async function findContainerByName(namespaceId, name);
+export async function createContainer({namespaceId, name, registryImage, ...});
+export async function updateContainer(containerId, patch);
+export async function deployContainer(containerId);
+export async function getContainer(containerId);
+export async function waitForContainerReady(containerId, {timeoutMs});
+export async function setContainerSecrets(containerId, obj);  // low-level PATCH; obj MUST be the
+                                                                // complete desired map - a key it
+                                                                // omits is DELETED (§1). Do not call
+                                                                // this from outside container.mjs.
+export async function buildContainerSecretMap({overrides, databaseUrlFrom, projectId});
+                                                                // -> complete map, from Secret
+                                                                // Manager, minus CONTAINER_EXCLUDED_SECRETS,
+                                                                // plus overrides (§1, §2)
+export async function syncContainerSecrets(containerId, {overrides, databaseUrlFrom, projectId, timeoutMs});
+                                                                // THE canonical entry point (§1):
+                                                                // wait-ready, write the full map,
+                                                                // wait-ready. Every caller outside
+                                                                // this module goes through this,
+                                                                // never setContainerSecrets directly.
+export async function addCustomDomain(containerId, hostname);
+export async function listCustomDomains(containerId);
+export async function deleteCustomDomain(domainId);
+```
+
+### `jobs.mjs`
+
+```js
+export async function ensureJobDefinition({name, imageUri, command, env, secretRefs,
+                                           cpuLimit, memoryLimit, timeout, opts});
+export async function startJob(definitionId, {env, command, replicas});  // -> runId
+export async function waitForJobRun(runId, {timeoutMs});   // -> {state, exitCode}
+export async function setSchedule(definitionId, {cron, timezone});
+export async function listJobDefinitions(opts?);
+export async function deleteJobDefinition(definitionId);
+```
+
+### `sdb.mjs` — Serverless SQL Database
+
+```js
+export async function ensureDatabase(name, {minCpu, maxCpu, opts});  // -> {id,name,endpoint,port,dbName}
+export async function getDatabase(name, opts?);
+export async function waitForDatabaseReady(id, {timeoutMs});
+export async function deleteDatabase(id);
+export function buildConnectionString({endpoint, port, dbName, applicationId, secretKey});
+       // -> postgres://<applicationId>:<secretKey>@<endpoint>:<port>/<dbName>?sslmode=require
+```
+
+### `dns.mjs`
+
+```js
+export async function zoneExists(domain);
+export async function isDelegatedToScaleway(domain);  // NS lookup -> boolean
+export async function listRecords(domain);
+export async function upsertRecords(domain, records);  // [{name,type,data,ttl}]
+export async function deleteRecords(domain, records);
+export async function waitForPropagation(fqdn, {type, expect, timeoutMs});
+```
+
+### `tem.mjs`
+
+```js
+export async function ensureDomain(domain, opts?);   // -> {id,status}
+export async function getDomainRecords(domainId);    // -> [{name,type,value}] SPF/DKIM/DMARC/MX
+export async function checkDomain(domainId);
+export async function sendEmail({from, to, subject, text, html, opts});
+export async function getConsumption(opts?);
+```
+
+TEM constraints to enforce in code and surface to the user: subject **≥ 10
+characters**, **max 10 recipients** per email (Scaleway's documented default;
+raisable on request), and no templating engine — you render HTML yourself.
+
+Quotas are **plan-based, not KYC-gated**: Essential gives 300 free emails/month
+and up to 5 sending domains, pay-as-you-go beyond; Scale is fixed-price with
+100k emails/month and unlimited domains. An earlier revision of this contract
+claimed a KYC-gated 500/2 → 5,000/5 tier system; that was not supported by any
+Scaleway documentation and has been removed.
+
+### `object-storage.mjs` — S3-compatible Object Storage
+
+Object Storage has no bearer-token REST API, only the S3 API with AWS SigV4, so
+this module carries a hand-rolled signer (verified against botocore's
+`aws4_testsuite` fixtures). Always uses path-style addressing, because bucket
+names containing a dot break the non-recursive `*.s3.<region>.scw.cloud`
+wildcard certificate.
+
+```js
+export function endpointFor(opts?);                          // https://s3.<region>.scw.cloud
+export async function bucketExists(name, opts?);
+export async function ensureBucket(name, opts?);
+export async function deleteBucket(name, opts?);             // bucket must be empty first
+export async function setBucketPolicy(name, policy, opts?);
+export function buildPublicReadPolicy(name);
+```
+
+Scope: **provisioning only.** Object-level work (listing, uploading, emptying a
+bucket before deletion) is done with `@aws-sdk/client-s3` from the generated
+app, which already depends on it once `/add-storage` has run — do not duplicate
+an object API here.
+
+Not supported by Scaleway: bucket notifications (`PutBucketNotification`). Any
+"on upload" behaviour must live in application code, never a bucket-side trigger.
+
+### `billing.mjs`
+
+```js
+export async function getProjectCosts({projectId, from, to});
+export async function getConsumption();
+```
+
+### `cockpit.mjs`
+
+```js
+export async function ensureToken(opts?);            // -> {token, logsUrl}
+export async function queryLogs({query, since, limit, opts});  // LogQL via Loki API
+```
+
+### Operator credential scripts (top-level `scripts/`, not `scripts/scaleway/`)
+
+`/start` validates the operator's env-only credentials (§2, §7) and prints
+platform-specific instructions when one is missing: the cloud environment
+dialog on web, or the gitignored env file example on Linux - it never
+prompts for a secret in chat. The credential-writing scripts this section
+used to describe (`_persist-scw-credentials.mjs`, `collect-scw-credentials.mjs`,
+`persist-scw-mode.mjs`) are gone along with the tiers they wrote (§7): there
+is nothing left for `/start` to persist.
+
+| Script | Role |
+|---|---|
+| `scripts/check-scw-permissions.mjs` | read-only probe for `ProjectManager`/`IAMManager`; a 403 is a hard "missing" signal, a clean probe is not a create-rights guarantee. Advisory only - it recommends a `BAUDRIER_SCW_MODE` value (§1, §2), it does not set one. |
+
+Credential adoption exists in exactly one place: `/publish`'s `poc`-to-`delegated`
+migration, `dev-credentials.mjs swap-all` (§1, `dev-credentials.mjs` above). It is
+admin-initiated - an organization admin provisions `BAUDRIER_APP_KEY` in Secret
+Manager first, the harness never asks for org-wide rights on its own behalf -
+it live-validates the candidate key, then prints the `SCW_*` env lines for the
+operator to set (§1). It writes nothing to disk. It can never grant
+organization-wide rights: the key it adopts is itself project-scoped (§1, §2).
+See `docs/ADMIN-SCALEWAY.md`.
+
+---
+
+## 4. Database connection
+
+```
+postgres://<IAM_APPLICATION_ID>:<IAM_API_SECRET_KEY>@<endpoint>:5432/<db>?sslmode=require
+```
+
+Auth is IAM: the "user" is an IAM **Application** id, the "password" is that
+application's API **secret key**. Create the key with **no expiry** so the
+connection string is stable.
+
+Do **not** ship `ssl: { rejectUnauthorized: false }` in generated code, even
+though Scaleway's own tutorial does. Use proper CA verification.
+
+Drizzle wiring: `pg` + `drizzle-orm/node-postgres`. No `pgTableCreator` prefix
+hack — each app has its own database.
+
+**The operator never connects to a database.** `drizzle-kit generate` (writes
+SQL files, no connection) runs locally; the migration Serverless Job applies
+them with `templates/deploy/migrate.mjs` (§1), not `drizzle-kit migrate` -
+the production image carries no devDependencies to run it. No REAL
+`DATABASE_URL` ever exists on the operator's machine - the local `.env`
+carries a syntactically valid placeholder
+(`postgresql://placeholder:placeholder@localhost:5432/placeholder`) that
+satisfies Zod validation and `drizzle.config.ts`'s import chain without
+opening a connection. The placeholder is required, not a leftover: deleting
+it breaks `drizzle-kit generate`. The real value lives only in Secret
+Manager and the containers it is synced into.
+
+**Stored data is an optimisation, not a dependency.** Because there is no
+REAL `DATABASE_URL` on the operator's machine (only the harmless
+placeholder above), every DB-reading page in local dev has always had to
+survive a missing database — the same failure shape a live
+database outage produces in production. `templates/db/safe.ts` generalises
+the pattern: `tryDb(fn, fallback)` runs `fn` and, on any error, logs one
+`console.warn` line (never the connection string) and returns `fallback`
+(calling it if it is a function) instead of throwing. `scripts/setup-db.mjs`
+writes it alongside the Drizzle client swap, so every app with a database has
+it from `/add-db` onward. Route a read whose value can be recomputed or
+defaulted (a list, a counter, a recommendation) through `tryDb`; a genuine
+hard dependency (an auth lookup) may stay a direct call but must render a
+clear error, never crash the page - see `skills/add-db/SKILL.md`.
+
+---
+
+## 5. Deploy pipeline
+
+**The pipeline is direct: no GitHub Actions, no `build.yml`, no repo
+secrets.** The machine running the harness - the Claude Code web VM or the
+operator's own Linux box - builds the image itself and pushes it straight
+to the registry: `docker login rg.fr-par.scw.cloud` with the operator's own
+`SCW_SECRET_KEY`, `docker build --platform linux/amd64` (Serverless
+Containers accept `amd64` only, §1's hard facts), then `docker push` tagged
+with the commit SHA. `scripts/ensure-dockerd.mjs` starts `dockerd` first
+when it is not already running (live-verified on web: the daemon exists but
+nothing starts it at session boot, §1). `/deploy` and `/bootstrap` both skip
+the rebuild when that exact SHA tag already exists in the registry, so
+re-running `/deploy` on an unchanged commit does not pay for a second image
+build. This is the same pipeline on every platform - Linux needs Docker
+installed, web has it preinstalled. GitHub is code hosting only in the build
+path: no build or deploy workflow is generated into a new app, and no
+Scaleway credential is ever written to a GitHub secret.
+
+**One workflow exists outside the build path:**
+`.github/workflows/clean-merged-branches.yml`, a maintenance workflow that
+the repository owner starts by hand (`workflow_dispatch` only, guarded by
+`github.actor == github.repository_owner`). It deletes remote branches that
+are already merged into the default branch, because a session's git
+credential cannot delete a remote ref (§7). It reads no repo secret - it
+uses only the default `GITHUB_TOKEN` through `permissions: contents:
+write`. New projects get it from `bootstrap-init.mjs`; existing projects
+get it from `scripts/add-cleanup-workflow.mjs` (the `/deploy` skill runs it
+when the file is missing). Check 60 pins its shape; checks 31, 38, 44 and
+56 keep the build pipeline free of Actions.
+
+**Development loop, and when a deploy happens at all.** The harness's default
+is **local**: `pnpm dev` on `http://localhost:3000`, validated with
+`pnpm tsc --noEmit`/`pnpm lint` plus actually running the app - typecheck and
+lint alone catch types and style, never a runtime or logic bug. A deploy is
+never the silent automatic next step after a change; it is for **review** or
+an **explicit user request**, and it costs a full image build, so
+`skills/deploy/SKILL.md` confirms one is wanted at all before proceeding,
+unless the user's own message already asked for it. `/deploy` always asks
+what the user wants, never inferred, and offers exactly two choices:
+**`Revue locale`** (the local loop above - no commit, no build, no Scaleway
+call) and **`Production`**. When production is chosen on an app that is
+already **published** (`ACCESS_RESTRICTED = "false"` in Secret Manager -
+real users, not just the operator's VPN), it steers to the **local review**
+first and requires an explicit, risk-named confirmation before deploying
+straight to a live production site.
+
+**`--target preview` is deliberately not proposed.** The per-branch
+environment still exists and still works (one container plus one Serverless
+SQL database per branch, everything below), but this harness does not
+productise it: `/deploy` uses it only when the user names it. A per-branch
+environment is a fine thing to build on top of this harness; it is not a
+thing this harness offers by itself. `/bootstrap`'s own
+closing deploy (its Step 8b) is the one documented exception to all of the
+above - the user's initial request to build the whole app already is that
+consent.
+
+**`/deploy`**:
+0. Confirm a deploy is actually wanted (see above), unless the user's own
+   message this turn already asked for one.
+1. Ask the target: **production or preview** — always ask, never infer. If
+   production and the app is already published, steer to preview first.
+2. Commit and push the branch.
+3. Build the image (`docker build --platform linux/amd64`) and push it to
+   `rg.fr-par.scw.cloud` tagged with the commit SHA; skip the build when
+   that tag already exists in the registry.
+4. Start the migration Job on the new image with an overridden command
+   (`node migrate.mjs`, `templates/deploy/migrate.mjs` - see §1), wait for success.
+5. Update the container's `registry_image`, wait until ready.
+6. Prune old registry tags.
+7. Smoke-test `<url>/api/healthz` - the exact path `src/proxy.ts` exempts
+   from the IP gate (§6), so it must answer `200 {"ok":true}` from any
+   machine; a 403 there means the exemption is broken. Then fetch the
+   homepage with the `ACCESS_BYPASS_TOKEN` header (§6) and require `200`.
+   Sole downgrade: a 403 despite the token means the app's `src/proxy.ts`
+   predates the bypass check - warn with the migration path, do not block
+   the deploy of a pre-token app.
+
+`main` → production. Any other branch → its own preview container **and its own
+preview Serverless SQL database**, named from a sanitised branch slug.
+
+---
+
+## 6. Access control
+
+Every app ships IP-restricted. Implemented in `src/proxy.ts`: read
+`X-Forwarded-For`, take the **first** CSV entry, match against
+`ACCESS_ALLOWED_IPS`, else `403`. Gated by `ACCESS_RESTRICTED`. Next 16
+renamed Next.js `middleware.ts` to `proxy.ts`, with the export named
+`proxy` - same `NextRequest` signature, same `config.matcher`.
+
+**Always exempt** `/.well-known/acme-challenge/*` and the health-check path,
+regardless of state. A blocked ACME challenge makes the custom domain
+unrecoverable; a blocked health probe kills all traffic.
+
+**`ACCESS_BYPASS_TOKEN` is the harness's own pass through the gate.** The
+web sandbox egresses from shared, changing address pools (§1), so the smoke
+tests can never be allowlisted by IP. A request carrying the token's exact
+value in the `x-baudrier-access-token` header passes for **every method**,
+exactly like an allowed IP - treat the token accordingly (it is a container
+secret, auto-projected like the rest, rotatable via `/rotate-secret`,
+category « interne »). Fail closed: `proxy.ts` refuses the bypass when the
+env var is unset or shorter than 32 characters, and compares with a
+constant-time XOR loop (no `node:crypto` import - the file must stay
+runtime-agnostic). `bootstrap-init.mjs` mints it at project creation;
+`deploy.mjs` mints it for pre-token apps and downgrades their
+403-despite-token homepage probe to a warning.
+
+This is a **soft boundary**, not a firewall — Scaleway has no network-level IP
+filtering for Serverless Containers. Do not describe it as one in user-facing
+text. `seo-perf`, `eco-audit` and `gsc` cannot work while restricted; each must
+detect the state and say so rather than reporting a spurious failure.
+
+**`ACCESS_ALLOWED_IPS` is production's list, and only `bootstrap-init.mjs`
+writes it.** One Secret Manager entry per project feeds every container
+(`buildContainerSecretMap` projects the whole set), so an address added for
+any other purpose also passes **production's** gate. That grant is permanent
+and invisible, and it arms itself again the moment `/unpublish` restores the
+gate — a published production ignores the list, which is exactly what makes
+the write look free at the time. Therefore: no preview flow, and no
+per-branch environment built on top of this harness, may write this secret.
+Changing who can reach production is a `/publish`-level decision, never a
+side effect of deploying something else. Check 30 enforces the write scope.
+
+---
+
+## 7. Skill authoring conventions
+
+Preserve upstream's structure — it works and users rely on it.
+
+- **Frontmatter**: `name`, `description`, `argument-hint` (public skills),
+  `compatibility`. Internal skills add `user-invocable: false` and may add
+  `allowed-tools`.
+- Internal skills are prefixed `_` and have **no** `DOC.md`. Public skills ship
+  `DOC.md` **and** `DOC.fr.md`.
+- Every skill opens with the standard `## Communication` block (detect the
+  user's language, plain language, no jargon, never name scripts or `_`-prefixed
+  skills to the user). Copy it verbatim from a surviving skill.
+- Body is `## Step N - ...` sections. Step numbers are internal bookkeeping and
+  must never be shown to the user.
+- Invoke scripts as:
+  `node "${CLAUDE_SKILL_DIR}/../../scripts/<name>.mjs" --flag value`
+- Scripts print `▸ step`, `✅ result`, `⚠️ warning` and end with a parseable
+  JSON line or a handoff banner.
+- **Autonomy principle**: do everything you can yourself; ask the user only when
+  genuinely impossible.
+- All user-facing copy is **French**.
+
+### Code hygiene rules
+
+- Shell out with `spawn(cmd, argsArray)` — **never** `exec`/`execSync` with an
+  interpolated string. An argv array prevents shell injection.
+- Keep the `import.meta.url === pathToFileURL(process.argv[1] ?? "").href`
+  main-module guard exactly as written; it is the one canonical form.
+- Any generated shell script must be written with **LF only**. A CRLF shebang
+  produces `exec /entrypoint.sh: no such file or directory` while the file
+  visibly exists — LF everywhere protects the shebang in the operator's Linux
+  VM and in the containers the harness builds.
+- Use `COPY --chmod=755` in Dockerfiles rather than trusting the build context's
+  executable bit.
+- Dockerfile `COPY` paths always use forward slashes.
+- Environment variables are the **only** Scaleway credential mechanism (§2)
+  - the harness never reads the `scw` config file.
+
+### Web session rules (Claude Code web, added 2026-08-05)
+
+- **No persistence outside `/tmp`.** The harness never writes a credential
+  or any piece of state to disk on web outside a session-scoped `/tmp` file
+  (§2's Project-id cache is the only example). Nothing is meant to survive
+  to the next session - the VM itself does not.
+- **`CLAUDE_ENV_FILE` does not reach a Bash tool call** (§1, live-verified).
+  Never rely on it for anything; a session-scoped `/tmp` file is the only
+  cache mechanism that actually works.
+- **Bootstrap is in-place only.** `/bootstrap` scaffolds into the checkout
+  it is run from; there is no sibling-directory mode and no `gh repo create`
+  path - the repo pre-exists (§1's architecture, §4 below describes pushing
+  into it).
+- **Never gate GitHub auth on `gh auth status` or `gh api /user`.** Both are
+  unreliable on web (§1: `gh auth status` exits 1 even against a working
+  token) and `gh` is no longer part of the toolchain at all. Use
+  `git ls-remote origin` as the repo-access gate everywhere.
+- **Never delete a remote ref.** The web git credential 403s on ref delete
+  (§1, live-verified); treat that as a hard platform limit, not a bug to
+  route around. The one sanctioned cleanup path is the
+  `clean-merged-branches.yml` maintenance workflow (§5): the owner
+  dispatches it on GitHub, where the deletion runs with GitHub's own token,
+  outside the session credential.
+- **Every `docker build` passes `--platform linux/amd64` unconditionally**
+  (already a hard fact, §1) - this covers the web VM's own build too, not
+  only a generated app's old CI.
+- **The direct build pipeline (docker build + push, SDK container
+  create/deploy, SDK status polling, §5) is canonical on every platform,**
+  not a web-only shortcut. GitHub Actions is not part of the build pipeline
+  anywhere; the only workflow a generated app carries is the dispatch-only
+  branch-cleanup maintenance workflow (§5).
+- **The host's Node major may trail the Dockerfile's base image.** A
+  production build runs `pnpm build` inside the image, on the image's own
+  Node - only host-side checks (`tools/verify.mjs`, `engines.node`) ever see
+  a version skew between the two.
+
+### Credential resolution (env-only)
+
+`_scw-auth.mjs#loadCredentials()` reads `SCW_ACCESS_KEY`, `SCW_SECRET_KEY`,
+`SCW_DEFAULT_ORGANIZATION_ID`, `SCW_DEFAULT_REGION` (default `fr-par`), and
+the optional `SCW_DEFAULT_PROJECT_ID` override straight from `process.env`
+(§2). `resolveProjectId()` additionally reads the optional per-app map
+`BAUDRIER_SCW_PROJECTS_IDS` (§2), also straight from `process.env`.
+**There is no other tier.** The old three-tier system - a repo-local
+`<repo>/.baudrier/credentials.json`, then env vars, then the `scw` config
+file - is gone, along with the scripts that wrote it
+(`_persist-scw-credentials.mjs`, `collect-scw-credentials.mjs`,
+`persist-scw-mode.mjs`). A generated app repo carries no Scaleway metadata
+of any kind: no `.scaleway/container.json`, no repo-local credentials file.
+The active Project resolves at call time, by name, as described in §2 -
+never from a file the harness wrote earlier.
+
+`BAUDRIER_SCW_MODE` (`full` \| `poc`, §1, §2) is likewise a plain env var,
+read fresh on every run. There is no persisted operator-level default file
+(`~/.claude/baudrier/defaults.json` is gone) and no `readMode()` fallback
+chain: the env var is the only source, defaulting to `full` when unset.
+`check-scw-permissions.mjs` remains as a read-only advisory probe - it
+recommends a value, it never sets one.
+
+**Every consumer resolves through `loadCredentials()`.** A script must not
+read `SCW_ACCESS_KEY`/`SCW_SECRET_KEY` from `process.env` directly: going
+through the resolver is what keeps `SCW_DEFAULT_REGION`'s default and the
+by-name Project lookup in one place. A dedicated pair such as
+`STORAGE_ACCESS_KEY`/`STORAGE_SECRET_KEY` can win over the resolver, but only
+as a complete pair — one half of it signed with the other tier's secret
+produces a `SignatureDoesNotMatch` that reads like a permission problem
+(`object-storage.mjs`'s CLI block; check 26 guards the same rule for
+`check-name-collision.mjs`).
+
+**Leak guards.** No script writes a credential to disk, so there is no
+repo-local file to guard. `.baudrier/` does not exist in the env-only model
+and the templates no longer list it.
+
+---
+
+## 8. Definition of done
+
+`node tools/verify.mjs` must exit 0. It checks: every `.mjs` parses, every
+relative import resolves, every `scripts/...` path named in a `SKILL.md` exists,
+every referenced skill exists and no deleted skill is referenced, template
+manifests are valid, and no removed-provider token or env var survives outside
+allowlisted attribution docs. It also checks: `BAUDRIER_SCW_MODE` resolves
+from the environment only, with no persisted default file (§1, §2, §7);
+agent tools fail safe (`db-query.ts`'s read-only transaction and timeout,
+`http-fetch.ts`'s manual-redirect re-validation); no plaintext secret reaches
+argv or a script's default stdout (`secrets.mjs`, `iam.mjs`, the persist
+scripts); and version agreement across the three manifests
+(`.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`,
+`package.json`) plus a matching `CHANGELOG.md` heading.
+
+Run it before you report done. If you cannot get your slice to pass, say exactly
+what is still failing and why — do not claim success.

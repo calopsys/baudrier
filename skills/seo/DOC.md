@@ -1,6 +1,6 @@
 # /seo
 
-Audits and improves your site's Google ranking. Hypervibe scans everything that matters to Google (content, technical, performance, accessibility), explains each issue in plain language, and fixes what it can.
+Audits and improves your site's Google ranking. Baudrier scans everything that matters to Google (content, technical, performance, accessibility), explains each issue in plain language, and fixes what it can.
 
 ## When to use it
 
@@ -11,7 +11,7 @@ Audits and improves your site's Google ranking. Hypervibe scans everything that 
 
 ## How it works
 
-1. **Full audit**: Hypervibe scans your project across several areas:
+1. **Full audit**: Baudrier scans your project across several areas:
   - **Technical**: `<title>` + `<description>` metadata on each page, `metadataBase`, sitemap, robots.txt, canonical URLs, JSON-LD, hreflang if i18n, OG image
   - **Content**: relevant keywords, heading structure (H1 / H2 / H3), text length, content freshness
   - **Performance**: image size, lazy loading, fonts, blocking JavaScript, Core Web Vitals (LCP, FID, CLS)
@@ -24,7 +24,7 @@ Audits and improves your site's Google ranking. Hypervibe scans everything that 
   - **Concrete consequence** (for example, "Google doesn't clearly understand what this page is about, and it's less likely to appear when someone searches for 'contact My Company'")
   - **Proposed fix** with the **why**
 
-3. **Automatic fixes**: Hypervibe fixes what it can safely (adding metadata, optimizing images, fixing the heading hierarchy, etc.). For changes that touch content (rewriting a text, choosing a main keyword), it proposes and you decide.
+3. **Automatic fixes**: Baudrier fixes what it can safely (adding metadata, optimizing images, fixing the heading hierarchy, etc.). For changes that touch content (rewriting a text, choosing a main keyword), it proposes and you decide.
 
 ## What it creates for you
 
@@ -36,7 +36,7 @@ Audits and improves your site's Google ranking. Hypervibe scans everything that 
 ## Prerequisites
 
 - No particular prerequisite, `/seo` can run on any project in the plugin
-- It's better to already be deployed on Vercel so that the Lighthouse / Core Web Vitals audits are relevant
+- It's better to already be deployed (and made public with `/publish`) so the follow-up performance audit (`/seo-perf`, Lighthouse / Core Web Vitals via Google PageSpeed Insights) can actually reach the site
 
 ## Tips
 

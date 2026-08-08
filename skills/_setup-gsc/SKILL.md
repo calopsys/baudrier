@@ -1,48 +1,47 @@
 ---
 name: _setup-gsc
-description: Internal helper to connect Google Search Console via a service account stored in the Bitwarden vault (no MCP, no Python, no restart). Guides the one-time creation of a Google service account, stores its JSON key in the vault (item GSC_SERVICE_ACCOUNT), and grants it owner access on the GSC property. Triggered by /gsc when GSC is not yet configured. Not meant to be invoked directly by users.
+description: Internal helper to connect Google Search Console via a service account stored in Scaleway Secret Manager (no MCP, no Python, no restart). Guides the one-time-per-project creation of a Google service account, stores its JSON key in Secret Manager (secret GSC_SERVICE_ACCOUNT, this project's own Scaleway Project), and grants it owner access on the GSC property. Triggered by /gsc when GSC is not yet configured. Not meant to be invoked directly by users.
 user-invocable: false
 allowed-tools: Bash Read
-compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (vercel, gh)."
+compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (scw, gh)."
 ---
 
-# Setup GSC (via vault) - Internal helper
+# Setup GSC (via Scaleway Secret Manager) - Internal helper
 
 ## Communication
-- Detect the user's language from their messages and ALWAYS reply in that language (default: English). This applies to every user-facing message: questions, progress, confirmations, summaries, errors.
+- Detect the user's language from their messages and ALWAYS reply in that language (default: French for this product's user base). This applies to every user-facing message: questions, progress, confirmations, summaries, errors.
 - Use plain, non-technical business language. Never expose internal script names (*.mjs) or jargon; describe actions in human terms.
 - When generating user-facing content for the scaffolded project (UI labels, emails, copy), write it in the user's language too.
 - Show progress as a short natural-language checklist (in-progress and done states).
 
-You connect Google Search Console to Hypervibe via a **Google service account** whose JSON key is stored in the **vault** (item `GSC_SERVICE_ACCOUNT`, field `credentials`). Then `/gsc` reads the data via the REST API with a token forged on the fly (`gsc-token.mjs`).
+You connect Google Search Console to the project via a **Google service account** whose JSON key is stored in **Scaleway Secret Manager** (secret `GSC_SERVICE_ACCOUNT`). Like every other secret, it lives in this project's own Scaleway Secret Manager Project (CONTRACT.md §2), not a shared one. Then `/gsc` reads the data via the REST API with a token forged on the fly (`gsc-token.mjs`).
 
-This is a **one-time setup per machine**: once done, all future `/gsc` runs (on any project) use the vault directly. Scope `webmasters` (read + write) means Claude is autonomous (adding a property, DNS verification, sitemap).
+This is a **one-time setup per project**: once done, all future `/gsc` runs on this project reuse the same secret. A new project needs its own service account, but reusing the same Google Cloud project across runs of this skill is fine - only the Secret Manager storage step repeats. Scope `webmasters` (read + write) means Claude is autonomous (adding a property, DNS verification, sitemap).
 
-> Scripts: `VAULT="${CLAUDE_SKILL_DIR}/../../scripts/vault/vault.mjs"`, `STORE="${CLAUDE_SKILL_DIR}/../../scripts/vault/store-file-secret.mjs"`, `GSCTOKEN="${CLAUDE_SKILL_DIR}/../../scripts/gsc/gsc-token.mjs"`, `OPENURL="${CLAUDE_SKILL_DIR}/../../scripts/open-url.mjs"`.
+> Scripts: `SECRETS_MJS="${CLAUDE_SKILL_DIR}/../../scripts/scaleway/secrets.mjs"`, `GSCTOKEN="${CLAUDE_SKILL_DIR}/../../scripts/gsc/gsc-token.mjs"`, `OPENURL="${CLAUDE_SKILL_DIR}/../../scripts/open-url.mjs"`.
 
 ---
 
-## Step 1 - Is the vault ready?
+## Step 1 - Is Scaleway configured?
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/vault/vault.mjs" status 2>/dev/null
+node "${CLAUDE_SKILL_DIR}/../../scripts/check-deps.mjs" scaleway
 ```
-- `unlocked` → continue to Step 2.
-- `expired` / `locked` → open the unlock: `node "${CLAUDE_SKILL_DIR}/../../scripts/vault/launch.mjs" unlock` (blocking), then re-test.
-- Error (no `bw`, no account) → the vault is not installed: delegate to **`_add-keyring`** first, then come back here.
+- `ok: true` → continue to Step 2.
+- `ok: false` → the operator's Scaleway credentials (`SCW_ACCESS_KEY` / `SCW_SECRET_KEY`) are missing or invalid: point to `/start`, which configures them, then retry.
 
 ---
 
 ## Step 2 - Announce the plan
 
-> To connect Google Search Console, we create a Google *technical account* once (~7 minutes). After that, I handle everything across all your projects. Steps:
+> Pour connecter Google Search Console, on crée un *compte technique* Google pour ce projet (~7 minutes). Ensuite, je gère tout automatiquement. Si vous avez déjà un compte technique d’un autre projet, vous pouvez réutiliser sa clé JSON directement à l’étape 3. Les étapes :
 >
-> 1. You create a technical account (service account) in the Google Cloud Console
-> 2. You download its key (a JSON file)
-> 3. You give me the path to the file → I store it in your vault
-> 4. You authorize this technical account on your Search Console (3 clicks)
+> 1. Vous créez un compte de service dans la Google Cloud Console
+> 2. Vous téléchargez sa clé (un fichier JSON)
+> 3. Vous ouvrez ce fichier dans un éditeur de texte et m’en collez le contenu complet → je le stocke dans le coffre de secrets Scaleway
+> 4. Vous autorisez ce compte technique sur votre Search Console (3 clics)
 >
-> No restart, no heavy installation. Shall we go?
+> Pas de redémarrage, pas d'installation lourde. On y va ?
 
 If they refuse → suggest an on-page audit via `/seo` (without GSC) and stop cleanly.
 
@@ -54,41 +53,57 @@ If they refuse → suggest an on-page audit via `/seo` (without GSC) and stop cl
 node "${CLAUDE_SKILL_DIR}/../../scripts/open-url.mjs" "https://console.cloud.google.com/"
 ```
 
-> Sign in with **the Google account that has access to your Search Console**.
+> Connectez-vous avec **le compte Google qui a accès à votre Search Console**.
 >
-> 1. At the top, select/create a project (project menu → **NEW PROJECT** → name e.g. "Claude Code Access" → **CREATE**)
-> 2. Left menu → **APIs & Services** → **Library** → enable **TWO** APIs (search for each → **ENABLE**): **"Search Console API"** AND **"Site Verification API"** (the 2nd one allows adding + verifying a property automatically)
-> 3. **APIs & Services** → **Credentials** → **+ CREATE CREDENTIALS** → **Service account**
-> 4. **Service account name**: `claude-code-gsc` → **CREATE AND CONTINUE** → roles empty (skip) → **DONE**
-> 5. Click the created service account → **KEYS** tab → **ADD KEY** → **Create new key** → **JSON** → **CREATE**
-> 6. A `.json` file downloads (often into `~/Downloads/`)
+> 1. En haut, sélectionnez/créez un projet (menu projet → **NOUVEAU PROJET** → nom ex. "Claude Code Access" → **CRÉER**)
+> 2. Menu de gauche → **APIs et services** → **Bibliothèque** → activez **DEUX** API (cherchez chacune → **ACTIVER**) : **"Search Console API"** ET **"Site Verification API"** (la 2ᵉ permet d'ajouter + vérifier une propriété automatiquement)
+> 3. **APIs et services** → **Identifiants** → **+ CRÉER DES IDENTIFIANTS** → **Compte de service**
+> 4. **Nom du compte de service** : `claude-code-gsc` → **CRÉER ET CONTINUER** → rôles vides (passer) → **OK**
+> 5. Cliquez sur le compte de service créé → onglet **CLÉS** → **AJOUTER UNE CLÉ** → **Créer une clé** → **JSON** → **CRÉER**
+> 6. Un fichier `.json` se télécharge (souvent dans `~/Downloads/`)
 
-Ask for the path:
+Ask the user to paste the content:
 
-> Give me the **full path** of the downloaded JSON file (e.g. Windows: `C:\Users\<you>\Downloads\claude-...json`; Mac/Linux: `~/Downloads/claude-...json`).
+> Ouvrez ce fichier `.json` dans un éditeur de texte, sélectionnez tout son contenu, et collez-le-moi directement dans le chat.
 
 ---
 
-## Step 4 - Store the key in the vault (and read the SA email)
+## Step 4 - Store the key in Secret Manager (and read the SA email)
 
-First extract the service account email (not secret - used in Step 5):
+Once the user pastes the JSON, write it verbatim to a fixed path under this session's own `/tmp` (CONTRACT.md §7 - the one cache path that survives across Bash calls within a Claude Code web session):
 
 ```bash
-SA_EMAIL=$(node -e "console.log(JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).client_email)" "<path>")
+cat > /tmp/gsc-service-account.json <<'EOF'
+<pasted JSON content, verbatim>
+EOF
+```
+
+Then extract the service account email (not secret - used in Step 5):
+
+```bash
+SA_EMAIL=$(node -e "console.log(JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).client_email)" /tmp/gsc-service-account.json)
 echo "$SA_EMAIL"
 ```
-If this fails (`client_email` missing) → the user probably downloaded an **OAuth client** instead of a **service account** (common mistake): send them back to Step 3 point 3 (be sure to choose **Service account**).
+If this fails (`client_email` missing) → the user probably pasted an **OAuth client** JSON instead of a **service account** key (common mistake): send them back to Step 3 point 3 (be sure to choose **Service account**), and ask them to paste the correct JSON again.
 
-Then store the file in the vault (the content goes file→vault, never passes through Claude):
+Then store the raw file content as a Secret Manager **string** secret (Secret Manager has no "file" secret type, unlike the vault this harness used to read from) - use the same pattern used elsewhere in this harness (`node --input-type=module -e` + `pathToFileURL`, never a bare relative `import`):
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/vault/store-file-secret.mjs" \
-  --file "<path>" --name GSC_SERVICE_ACCOUNT --field credentials \
-  --service "Google Search Console" --json
+SECRETS_MJS="${CLAUDE_SKILL_DIR}/../../scripts/scaleway/secrets.mjs" \
+SA_PATH=/tmp/gsc-service-account.json \
+node --input-type=module -e '
+import { pathToFileURL } from "node:url";
+import { readFileSync } from "node:fs";
+const { putSecret } = await import(pathToFileURL(process.env.SECRETS_MJS).href);
+const raw = readFileSync(process.env.SA_PATH, "utf8");
+try { JSON.parse(raw); } catch { console.log(JSON.stringify({ ok: false, error: "invalid_json" })); process.exit(5); }
+const res = await putSecret("GSC_SERVICE_ACCOUNT", raw);
+console.log(JSON.stringify({ ok: true, ...res }));
+'
 ```
-- `Created/Updated 'GSC_SERVICE_ACCOUNT'` → done. Advise the user to **delete the downloaded JSON file** (the key is now in the vault, no need to leave it in clear on the disk).
-- exit 2/3 → vault locked: unlock then rerun.
-- exit 5 → file is not valid JSON: wrong file, ask again.
+- `ok: true` → run `rm -f /tmp/gsc-service-account.json` (the key is now in Secret Manager, so no clear-text copy must stay in the sandbox). Advise the user to also **delete the downloaded JSON file**.
+- exit 5 (`invalid_json`) → wrong file, ask again.
+- any other error → relay it plainly (likely missing/invalid Scaleway credentials).
 
 ---
 
@@ -98,13 +113,13 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/vault/store-file-secret.mjs" \
 node "${CLAUDE_SKILL_DIR}/../../scripts/open-url.mjs" "https://search.google.com/search-console"
 ```
 
-> Last step (1 min) - I grant the technical account access to your Search Console:
+> Dernière étape (1 min) - j'accorde au compte technique l'accès à votre Search Console :
 >
-> 1. If your property doesn't exist yet: **Add property** → **Domain** format → your root domain (I'll take care of the DNS verification afterwards).
-> 2. Select your property → **Settings** (gear, bottom of the left menu) → **Users and permissions**
-> 3. **ADD USER** → email: `<SA_EMAIL>` → permission **Owner** → **Add**
+> 1. Si votre propriété n'existe pas encore : **Ajouter une propriété** → format **Domaine** → votre domaine racine (je m'occupe de la vérification DNS ensuite).
+> 2. Sélectionnez votre propriété → **Paramètres** (roue crantée, bas du menu de gauche) → **Utilisateurs et autorisations**
+> 3. **AJOUTER UN UTILISATEUR** → email : `<SA_EMAIL>` → autorisation **Propriétaire** → **Ajouter**
 >
-> Tell me *"it's done"*.
+> Dites-moi *"c'est fait"*.
 
 Warning: To track several sites, you need to add `<SA_EMAIL>` as an owner on **each** property (Google does not propagate between properties).
 
@@ -119,16 +134,16 @@ TOK=$(node "${CLAUDE_SKILL_DIR}/../../scripts/gsc/gsc-token.mjs" --readonly 2>/d
 [ $RC -eq 0 ] && curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $TOK" "https://www.googleapis.com/webmasters/v3/sites"
 ```
 - token OK + HTTP 200 → done, GSC configured. Hand control back to `/gsc` (which continues with its audit).
-- exit 2/3 → vault locked: unlock, retry.
-- exit 4 → the key is not in the vault: go back to Step 4.
+- exit 4 → the secret is not in Secret Manager: go back to Step 4.
+- exit 1 → relay the error plainly (missing Scaleway credentials, invalid JSON, Google token exchange failure).
 - HTTP 403 → the SA does not (yet) have access: Step 5 not finished or on the wrong property.
 
 ---
 
 ## Artifacts
 
-- Vault: item `GSC_SERVICE_ACCOUNT` (field `credentials` = SA JSON).
+- Scaleway Secret Manager (this project's own Project): secret `GSC_SERVICE_ACCOUNT` (full SA JSON, stored as a string).
 - Google: project + service account created; SA added as owner on the GSC property/properties.
 - **No** MCP in `.claude.json`, **no** Python package, **no** restart.
 
-All future `/gsc` runs skip this setup and read the vault.
+All future `/gsc` runs skip this setup and read the secret directly.

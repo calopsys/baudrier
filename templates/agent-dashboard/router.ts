@@ -16,9 +16,12 @@
 //   - triggerManual           : insert a row in agent_trigger_queue
 //   - killSwitch              : pause/resume an agent (sets a flag)
 //
-// The Render worker reads agent_trigger_queue every 5 s and runs anything
-// pending. So "trigger manual" lag is ~5 s, not instant - fine for a
-// dashboard button.
+// A cron-triggered Scaleway Serverless Job wakes up on a short interval
+// (every 5 min for manual-only agents, or at each cron tick for scheduled
+// ones - see templates/agent/entry.ts) and drains agent_trigger_queue. So
+// "trigger manual" lag is a few minutes, not instant, in exchange for near
+// scale-to-zero billing between runs (Jobs bill actual compute time, unlike
+// an always-on worker).
 
 import { z } from "zod";
 import { createTRPCRouter, publicProcedure } from "~/server/api/trpc";
@@ -48,7 +51,7 @@ export const agentDashboardRouter = createTRPCRouter({
       .select({
         agentName: agentInvocations.agentName,
         totalInvocations: sql<number>`COUNT(*)::int`,
-        totalCostUsd: sql<string>`COALESCE(SUM(${agentInvocations.totalCostUsd}::numeric), 0)`,
+        totalCostEur: sql<string>`COALESCE(SUM(${agentInvocations.totalCostEur}::numeric), 0)`,
         lastRun: sql<Date | null>`MAX(${agentInvocations.startedAt})`,
         successCount: sql<number>`COUNT(*) FILTER (WHERE ${agentInvocations.status} = 'success')::int`,
         errorCount: sql<number>`COUNT(*) FILTER (WHERE ${agentInvocations.status} = 'error')::int`,
@@ -59,7 +62,7 @@ export const agentDashboardRouter = createTRPCRouter({
       .orderBy(sql`MAX(${agentInvocations.startedAt}) DESC NULLS LAST`);
     return rows.map((r) => ({
       ...r,
-      totalCostUsd: Number(r.totalCostUsd),
+      totalCostEur: Number(r.totalCostEur),
     }));
   }),
 
@@ -80,7 +83,7 @@ export const agentDashboardRouter = createTRPCRouter({
           triggeredBy: agentInvocations.triggeredBy,
           promptPreview: agentInvocations.promptPreview,
           iterations: agentInvocations.iterations,
-          totalCostUsd: agentInvocations.totalCostUsd,
+          totalCostEur: agentInvocations.totalCostEur,
           startedAt: agentInvocations.startedAt,
           finishedAt: agentInvocations.finishedAt,
           errorMessage: agentInvocations.errorMessage,
@@ -120,7 +123,7 @@ export const agentDashboardRouter = createTRPCRouter({
         .select({
           day: sql<string>`date_trunc('day', ${agentInvocations.startedAt})`,
           invocations: sql<number>`COUNT(*)::int`,
-          costUsd: sql<string>`COALESCE(SUM(${agentInvocations.totalCostUsd}::numeric), 0)`,
+          costEur: sql<string>`COALESCE(SUM(${agentInvocations.totalCostEur}::numeric), 0)`,
         })
         .from(agentInvocations)
         .where(
@@ -132,15 +135,15 @@ export const agentDashboardRouter = createTRPCRouter({
         .groupBy(sql`date_trunc('day', ${agentInvocations.startedAt})`)
         .orderBy(sql`date_trunc('day', ${agentInvocations.startedAt})`);
 
-      const totalCost = dailyRows.reduce((s, r) => s + Number(r.costUsd), 0);
+      const totalCost = dailyRows.reduce((s, r) => s + Number(r.costEur), 0);
       return {
-        daily: dailyRows.map((r) => ({ day: r.day, invocations: r.invocations, costUsd: Number(r.costUsd) })),
+        daily: dailyRows.map((r) => ({ day: r.day, invocations: r.invocations, costEur: Number(r.costEur) })),
         totalCostLast30d: totalCost,
         totalInvocationsLast30d: dailyRows.reduce((s, r) => s + r.invocations, 0),
       };
     }),
 
-  /** Insert a manual trigger. The Render worker picks it up within 5 s. */
+  /** Insert a manual trigger. A Scaleway Serverless Job run picks it up on its next scheduled tick (see entry.ts). */
   triggerManual: adminProcedure
     .input(
       z.object({

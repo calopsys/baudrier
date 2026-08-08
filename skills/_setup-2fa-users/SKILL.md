@@ -1,8 +1,9 @@
 ---
 name: _setup-2fa-users
-description: Internal. Sets up optional per-user 2FA (TOTP) on a hypervibe user-accounts auth. Each user enables 2FA from their account page (scan a QR, confirm a code), with the secret + one-off backup codes stored per-user in the database. Login asks for the code after the password only for users who enabled it. Invoked by /add-2fa when the project is in users mode. Claude-piloted (no script) because the account page and signin flow are project-specific. Not meant to be invoked directly by users.
+description: Internal. Sets up optional per-user 2FA (TOTP) on a baudrier user-accounts auth. Each user enables 2FA from their account page (scan a QR, confirm a code), with the secret + one-off backup codes stored per-user in the database. Login asks for the code after the password only for users who enabled it. Invoked by /add-2fa when the project is in users mode. Claude-piloted (no script) because the account page and signin flow are project-specific. Not meant to be invoked directly by users.
 argument-hint: ""
-compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (vercel, gh)."
+user-invocable: false
+compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (scw, gh)."
 ---
 
 # Setup 2FA - Users mode (optional per user, in DB)
@@ -13,7 +14,7 @@ compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; 
 - When generating user-facing content for the scaffolded project (UI labels, emails, copy), write it in the user's language too.
 - Show progress as a short natural-language checklist (in-progress and done states).
 
-Sets up **optional per-user** 2FA on a Hypervibe accounts-based auth. No deterministic script: the Account page and the login flow vary from one project to another, so Claude implements it contextually by following this guide. **Check the build (`pnpm tsc --noEmit` + `pnpm lint`) after each large block.**
+Sets up **optional per-user** 2FA on a Baudrier accounts-based auth. No deterministic script: the Account page and the login flow vary from one project to another, so Claude implements it contextually by following this guide. **Check the build (`pnpm tsc --noEmit` + `pnpm lint`) after each large block.**
 
 **Input variables** (passed by `add-2fa`): `PROJECT_NAME`, `WEB_DIR`, `AUTH_APP`.
 
@@ -169,7 +170,7 @@ export async function regenerateBackupCodes() {
 }
 ```
 
-> Check that the session exposes `user.id` (the Hypervibe user auth does). If it exposes an `email` but no `id`, adapt the helpers so the key = email.
+> Check that the session exposes `user.id` (the Baudrier user auth does). If it exposes an `email` but no `id`, adapt the helpers so the key = email.
 
 ---
 

@@ -10,7 +10,7 @@ Mesure l'empreinte écologique de votre site et propose des corrections concrèt
 
 ## Comment ça se passe
 
-1. **Vérifications** : le site doit être en ligne (on mesure le site déployé). La clé Google nécessaire est la même que pour `/seo-perf` : si elle est déjà dans votre coffre-fort, zéro configuration.
+1. **Vérifications** : le site doit être en ligne (on mesure le site déployé). La clé Google nécessaire est la même que pour `/seo-perf` : si elle est déjà dans le coffre de secrets Scaleway, zéro configuration.
 
 2. **Mesure** : 3 à 5 pages représentatives sont chargées par les serveurs de Google. Pour chaque page : complexité (taille du DOM), nombre de requêtes, Ko transférés. Ces trois mesures donnent la note **EcoIndex (A à G)** et l'estimation d'impact (grammes de CO2e et eau par visite).
 
@@ -28,8 +28,9 @@ Mesure l'empreinte écologique de votre site et propose des corrections concrèt
 
 ## Prérequis
 
+- Un site **public** (`/publish`) : chaque application est restreinte au VPN de l'entreprise par défaut, et Google ne peut pas atteindre un site restreint
 - Un site **déployé** (l'audit mesure le site en ligne)
-- La clé Google PageSpeed du coffre-fort (la même que `/seo-perf` ; création guidée si première fois)
+- La clé Google PageSpeed du coffre de secrets Scaleway (la même que `/seo-perf` ; création guidée si première fois)
 
 ## Bon à savoir
 

@@ -10,11 +10,11 @@ Ajoute les notifications push : votre app peut prévenir ses utilisateurs sur le
 
 ## Comment ça se passe
 
-1. **Vérification de la PWA (prérequis indispensable)** : les notifications push reposent sur le "service worker" de la PWA, le composant qui reçoit et affiche les notifications même app fermée. **Sans PWA, le push est techniquement impossible.** Si votre app n'en est pas une, Hypervibe vous l'explique et vous propose de la transformer en PWA tout de suite (`/add-pwa`), puis enchaîne.
+1. **Vérification de la PWA (prérequis indispensable)** : les notifications push reposent sur le "service worker" de la PWA, le composant qui reçoit et affiche les notifications même app fermée. **Sans PWA, le push est techniquement impossible.** Si votre app n'en est pas une, Baudrier vous l'explique et vous propose de la transformer en PWA tout de suite (`/add-pwa`), puis enchaîne.
 
 2. **Autres prérequis** : une base de données (`/add-db`) pour mémoriser quels appareils sont abonnés, et des comptes utilisateurs (`/add-auth`) pour savoir à qui appartient chaque appareil.
 
-3. **Clés de signature (VAPID)** : Hypervibe génère la paire de clés qui prouve que c'est bien votre serveur qui envoie les notifications, et la range dans vos variables d'environnement (locales + Vercel).
+3. **Clés de signature (VAPID)** : Baudrier génère la paire de clés qui prouve que c'est bien votre serveur qui envoie les notifications, et la range en lieu sûr (`.env` local + Scaleway Secret Manager).
 
 4. **Table des abonnements** : chaque appareil qui accepte les notifications est enregistré en base, rattaché à son utilisateur.
 

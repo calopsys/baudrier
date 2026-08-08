@@ -10,7 +10,7 @@ Measures your site's ecological footprint and proposes concrete fixes to lighten
 
 ## How it goes
 
-1. **Checks**: the site must be online (we measure the deployed site). The Google key needed is the same as for `/seo-perf`: if it is already in your vault, zero configuration.
+1. **Checks**: the site must be **public** first - every app ships restricted to the office VPN by default, and Google cannot reach a restricted site, so Baudrier checks this and asks for `/publish` if needed. The site must also be online (we measure the deployed site). The Google key needed is the same as for `/seo-perf`: if it is already in the Scaleway secrets vault, zero configuration.
 
 2. **Measurement**: 3 to 5 representative pages are loaded by Google's servers. For each page: complexity (DOM size), number of requests, transferred KB. These three measurements give the **EcoIndex grade (A to G)** and the impact estimate (grams of CO2e and water per visit).
 
@@ -28,8 +28,9 @@ Measures your site's ecological footprint and proposes concrete fixes to lighten
 
 ## Prerequisites
 
+- A **public** site (`/publish`): every app ships restricted to the office VPN by default, and Google cannot reach a restricted site
 - A **deployed** site (the audit measures the site online)
-- The Google PageSpeed key from the vault (the same as `/seo-perf`; guided creation if it is the first time)
+- The Google PageSpeed key from the Scaleway secrets vault (the same as `/seo-perf`; guided creation if it is the first time)
 
 ## Good to know
 

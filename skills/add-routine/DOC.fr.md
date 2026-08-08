@@ -13,21 +13,21 @@ Le critère : le résultat est **pour vous** (ou votre équipe), pas pour votre 
 
 ## Comment ça se passe
 
-1. **Vous décrivez la mission et le rythme.** Si votre phrase contient déjà tout (« briefe-moi chaque matin sur mes concurrents »), Hypervibe ne repose aucune question.
+1. **Vous décrivez la mission et le rythme.** Si votre phrase contient déjà tout (« briefe-moi chaque matin sur mes concurrents »), Baudrier ne repose aucune question.
 
-2. **Le garde-fou** : si ce que vous décrivez sert en réalité votre app (nettoyer la base, écrire à vos clients...), Hypervibe vous arrête honnêtement et vous réoriente : une app ne doit jamais dépendre de votre compte Claude personnel.
+2. **Le garde-fou** : si ce que vous décrivez sert en réalité votre app (nettoyer la base, écrire à vos clients...), Baudrier vous arrête honnêtement et vous réoriente : une app ne doit jamais dépendre de votre compte Claude personnel.
 
 3. **Les deux vérités dites franchement** : la routine tourne sur **votre compte Claude** (chaque exécution consomme un peu de votre abonnement, et s'arrête si l'abonnement s'arrête) ; selon votre installation, elle tourne dans le cloud (même ordinateur éteint) ou sur cet ordinateur quand l'app Claude est ouverte.
 
 4. **La mission est rédigée avec vous** : objectif, étapes, ressources, livrable, limites. C'est LE contrat de la routine, vous la validez avant toute création.
 
-5. **Création et vérification** : la routine est créée, vérifiée, et Hypervibe vous donne l'heure de sa prochaine exécution.
+5. **Création et vérification** : la routine est créée, vérifiée, et Baudrier vous donne l'heure de sa prochaine exécution.
 
 ## Ce que ça crée pour vous
 
 - Une **routine sur votre compte Claude** (cloud ou locale), avec sa mission validée par vous
 - **Rien dans votre projet** : pas de code, pas de table, pas de déploiement
-- Si la mission concerne un de vos projets Hypervibe : une note dans son `CLAUDE.md`
+- Si la mission concerne un de vos projets Baudrier : une note dans son `CLAUDE.md`
 
 ## Prérequis
 

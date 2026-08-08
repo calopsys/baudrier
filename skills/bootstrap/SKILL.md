@@ -2,10 +2,10 @@
 name: bootstrap
 description: "Bootstrap a T3 stack project. Describe what you want to build and Claude infers the right stack."
 argument-hint: "[description of the app]"
-compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (vercel, gh)."
+compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js, pnpm, git, and Docker."
 ---
 
-# Bootstrap - Full Stack Hypervibe
+# Bootstrap - Full Stack Baudrier
 
 ## Communication
 - Detect the user's language from their messages and ALWAYS reply in that language (default: English). This applies to every user-facing message: questions, progress, confirmations, summaries, errors.
@@ -13,7 +13,7 @@ compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; 
 - When generating user-facing content for the scaffolded project (UI labels, emails, copy), write it in the user's language too.
 - Show progress as a short natural-language checklist (in-progress and done states).
 
-You are an infrastructure automation assistant. Your job is to scaffold a T3 stack project with GitHub and Vercel, smoke-test the deployment, then walk the user through the spec, configure optional services via modular skills, and build the actual application. Follow this plan step by step. **Do not skip steps. Do not assume - ask when in doubt.**
+You are an infrastructure automation assistant. Your job is to scaffold a T3 stack project **in place**, inside the repo checkout this skill is run from, deploy it on Scaleway (this machine builds and pushes the container image itself, a Serverless Container runs it - no GitHub Actions anywhere in the pipeline, CONTRACT.md §5), smoke-test the deployment, then walk the user through the spec, configure optional services via modular skills, and build the actual application. Follow this plan step by step. **Do not skip steps. Do not assume - ask when in doubt.**
 
 ---
 
@@ -23,10 +23,12 @@ You are an infrastructure automation assistant. Your job is to scaffold a T3 sta
 
 Concretely:
 
-- ✅ **Yours to do (without asking)**: anything that goes through an installed CLI (`vercel`, `gh`, `git`, `pnpm`, `stripe`, `wrangler`, `neonctl`, `npx`, etc.), anything that goes through a REST API with an already configured token, any file edit, any commit/push, any deployment, any env var push (via `_push-env-vars`), any package install, any DB migration, any secret generation, any log reading.
-- ❌ **To ask the user only when it is unavoidable**: creating an account on a third-party service, validating an OAuth flow in a browser, authorizing an integration through a web UI (typically the GitHub-to-Vercel authorization at Step 3), providing an API key that cannot be retrieved via CLI/API, saving a password in a personal manager, making a business decision (e.g. choosing a domain name).
+- ✅ **Yours to do (without asking)**: anything that goes through an installed CLI (`git`, `pnpm`, `docker`, `npx`, etc.), anything that goes through a REST API/SDK with already-configured credentials (Scaleway's `SCW_ACCESS_KEY`/`SCW_SECRET_KEY` environment variables), any file edit, any commit/push, any deployment, any env var push (via `_push-env-vars`), any package install, any DB migration, any secret generation, any log reading.
+- ❌ **To ask the user only when it is unavoidable**: creating an account on a third-party service, providing an API key that cannot be retrieved via CLI/API, saving a password in a personal manager, making a business decision (e.g. choosing a domain name).
 
-If you catch yourself writing "Run the command `...`" or "Launch `vercel ...`" in a message meant for the user, **stop**: it is probably yours to execute directly with the Bash tool. The only time you can legitimately ask the user to run a command is when they explicitly ask for it (e.g. "explain how to restart the dev server").
+If you catch yourself writing "Run the command `...`" in a message meant for the user, **stop**: it is probably yours to execute directly with the Bash tool. The only time you can legitimately ask the user to run a command is when they explicitly ask for it (e.g. "explain how to restart the dev server").
+
+Unlike a hosting platform tied to a GitHub App install, this stack has **no OAuth authorization step to walk the user through** - the machine running Claude Code builds and pushes the image itself on `git push` (no GitHub Actions), and Scaleway credentials are plain `SCW_*` environment variables (`scw` has no OAuth/device-code login and is not part of the toolchain at all, CONTRACT.md §1, §2, §7). There is no equivalent of "go authorize an integration in your browser" anywhere in this bootstrap.
 
 ---
 
@@ -34,18 +36,18 @@ If you catch yourself writing "Run the command `...`" or "Launch `vercel ...`" i
 
 The bootstrap happens in **8 steps**, with **2 autonomy phases** broken up by an **interactive phase** in the middle:
 
-- **Phase 1 (steps 2-3, ~5 min autonomous)**: build the base infrastructure via the deterministic script (T3 scaffold, GitHub, Vercel, minimal page, first deployment with smoke test, verification of the GitHub-to-Vercel auto-deploy).
+- **Phase 1 (step 2, ~5-10 min autonomous)**: build the base infrastructure via the deterministic script (T3 scaffold, security/SEO hardening, Dockerfile + Scaleway deploy artifacts, a dedicated Scaleway Project/registry/container, the first direct `docker build`/push, first deployment with smoke test).
 - **Interactive phase (step 4, variable duration)**: define the spec + validate the addon list.
-- **Phase 2 (steps 5-8, ~10-15 min autonomous)**: configure the addons, build the application, finalize CLAUDE.md, add the legal pages, audit + summary.
+- **Phase 2 (steps 5-8, ~10-15 min autonomous)**: configure the addons, build the application, finalize CLAUDE.md, add the legal pages, audit + summary + final deploy.
 
 You MUST follow these rules **without exception**:
 
 1. **At startup** (right after Step 1, before Step 2), display the full checklist of the 8 steps with `⬜` for each, announce it to the user, then immediately display this warning message:
 
    > ℹ️ I will now work in two phases:
-   > - **First ~5 min autonomously** to build the base infrastructure. At the end, your site will already be deployed online with a minimal page showing your project name.
+   > - **First, autonomously** (~5-10 min) to build the base infrastructure. At the end, your site will already be deployed online with a minimal page showing your project name.
    > - **Then we will have a short exchange** to define the spec and validate the addons.
-   > - **Finally ~10-15 min autonomously** to configure the addons, build the app, add the legal pages and finalize.
+   > - **Finally, autonomously again** (~10-15 min) to configure the addons, build the app, add the legal pages and finalize.
    >
    > If the process stops along the way because of context limits or an error, just say **"continue"** and I will pick up where I left off.
 2. **Before each step**, announce: `🔄 Step X/8: [step name]`.
@@ -64,22 +66,32 @@ You MUST follow these rules **without exception**:
 > **What remains**: [list of remaining steps]
 > **Reason for stopping**: [error, context limit, etc.]
 >
-> **To resume**: in the same conversation, the user just has to say **"continue"** and you resume by re-reading your own thread (the checklist in the chat shows how far you got). If you need to confirm the project state, you can inspect the files (`git log`, `git remote -v`, presence of `.env`, `package.json`, etc.) before resuming.
+> **To resume**: in the same conversation, the user just has to say **"continue"** and you resume by re-reading your own thread (the checklist in the chat shows how far you got). If you need to confirm the project state, you can inspect the files (`git log`, `git remote -v`, presence of `.env`, `package.json`, etc.) before resuming - there is no linkage file to check, the Scaleway Project/namespace/container resolve live by name (CONTRACT.md §2).
 
 ---
 
 ## Step 1 - Project identity
 
-**Ask in a single question directly in the chat as plain text. Do NOT use the askUser tool for this:**
+The app's name is no longer something you invent here: `/bootstrap` scaffolds **in place**, into the repo checkout it is run from (CONTRACT.md §7 - that repo already exists, created from the `baudrier-template` on GitHub, or connected on web). CONTRACT.md §2's rule is that a Scaleway Project's name is always the app name, which is always the repo name - so read it, silently:
 
-> What is the name of your app and what is it for?
-> (The name will be in kebab-case, e.g. `my-app`. Describe in 1-2 sentences what the app does.)
+```bash
+git remote get-url origin
+```
 
-Wait for the user's response. Extract:
-- `<name>` (kebab-case; if the user gives a non-kebab-case name, propose the kebab-case version yourself and confirm implicitly by using it).
-- `<description>` (~150-160 characters for SEO; you may rephrase / complete it from the user's sentence if needed to reach that length, this is what will be used in the page's `<meta name="description">` metadata).
+Take the repo name from that URL (or `basename "$(git rev-parse --show-toplevel)"` as a fallback with no parseable GitHub URL), and check it is kebab-case (lowercase `a-z`, `0-9`, hyphens, 2-50 characters - the same rule `bootstrap-init.mjs` itself enforces).
 
-⚠️ **The name becomes final as soon as Step 2 begins** - the script creates the GitHub repo and the Vercel project with that name. So if there is the slightest ambiguity, clarify now; otherwise go straight to Step 2 without asking for re-confirmation. Step 2 first runs a **name collision guard** (sub-step 1b) that may still adjust the name if it clashes with an existing project, so the truly final name is the one that clears that guard.
+- **If it already is kebab-case** → that is `<name>`. Never ask the user to confirm or rename it - the repo already exists on GitHub under that name.
+- **If it is not** → ask the user, once, for a deploy name instead. This only renames the **Scaleway resources** (Project, registry namespace, container) - the git repo itself is never renamed:
+
+  > Le nom de votre dépôt (`<repo-name>`) n’est pas dans le format attendu par Baudrier pour les ressources Scaleway (minuscules, chiffres et tirets uniquement). Quel nom voulez-vous utiliser pour vos ressources Scaleway (Projet, conteneur...) ? Le dépôt GitHub, lui, garde son nom actuel.
+
+In the same message (or the same turn, if a deploy name had to be asked first), ask for the description:
+
+> Décrivez en 1-2 phrases ce que fait votre application.
+
+Wait for the user's response and extract `<description>` (~150-160 characters for SEO; you may rephrase / complete it from the user's sentence if needed to reach that length - this is what will be used in the page's `<meta name="description">` metadata).
+
+⚠️ **The name becomes final as soon as Step 2 begins** - the script creates a dedicated Scaleway Project under it. Step 2 first runs a **name collision guard** (sub-step 1a) that may still adjust the Scaleway-resource name if it clashes with an existing project, so the truly final name is the one that clears that guard.
 
 Once the name and description are captured, **immediately display the 8-step checklist + the warning message from the "Progress communication" section**, then move on to Step 2.
 
@@ -87,83 +99,82 @@ Once the name and description are captured, **immediately display the 8-step che
 
 ## Step 2 - Infrastructure construction (deterministic script)
 
-This step runs `bootstrap-init.mjs` which mechanically chains 22 sub-steps: T3 scaffold, demo cleanup (incl. replacing the home with a minimal page `<h1>{name}</h1>`), healthcheck router, shadcn + LinkButton + Geist fix, security hardening, base SEO, **404 page polish**, **CLAUDE.md core**, commit, GitHub repo, vercel link, push env vars (`DATABASE_URL` placeholder + real `NEXT_PUBLIC_APP_URL`), local build, vercel --prod, **smoke test (curl URL with retry, check 200 + name in the HTML)**, **verification of the GitHub-to-Vercel auto-deploy integration**.
+This step runs `bootstrap-init.mjs`, **in place** inside the current checkout, which mechanically chains 26 sub-steps: preflight + a dedicated **Scaleway Project**, T3 scaffold, demo cleanup (incl. replacing the home with a minimal page `<h1>{name}</h1>`), healthcheck router, shadcn + LinkButton + Geist fix, security hardening, base SEO, **404 page polish**, the Scaleway **deploy artifacts** (Dockerfile, `output: 'standalone'`, `copy-assets.js`, the IP-allowlist proxy), **CLAUDE.md core**, the privacy-policy page, commit, a push to the pre-existing `origin`, a **Container Registry namespace**, a **Serverless Containers namespace**, a direct **`docker build` + push** of the image (no GitHub Actions anywhere, CONTRACT.md §5), the **container** itself pointed at that freshly-pushed image, and a **smoke test** (fetch the URL, check 200 + that the stylesheet actually loads).
 
 ### Invocation (background + narration via Monitor)
 
-The script takes ~3-5 min. Two Claude Code harness constraints to know about:
-- **Synchronous `Bash` buffers everything** until the end → the user would wait blind for 3-5 min.
+The script takes several minutes (a cold Next.js image build with no warm layer cache is the long pole). Two Claude Code harness constraints to know about:
+- **Synchronous `Bash` buffers everything** until the end → the user would wait blind for several minutes.
 - **Long `sleep`s at the start of a command (≥ ~30s) are blocked** by a harness safety rail ("Blocked: sleep 45 ..."). No manual `sleep 45 && tail` pattern. It is locked.
 
 The only solution that works: launch the script in the background with output to a log, then arm a **`Monitor`** that tails the log and emits a notification on each newly detected sub-step. The Monitor exits automatically when it sees the final banner.
 
-**1. Choose the parent folder**
+**1. Guard the project name against collisions**
 
-Move to the **parent** folder where the app should be created:
-- **Windows** (git-bash): `cd /c/DEV` (or `cd /c/Users/$USER/dev`)
-- **macOS / Linux**: `cd ~/dev` (or your convention)
-
-If the folder does not exist, create it (`mkdir -p <path>`).
-
-**1b. Guard the project name against collisions**
-
-Before creating anything, check that the chosen name does not clash with an existing project. From the parent folder, run:
+Before touching anything, check that the chosen name does not clash with an existing project. From the repo root, run:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/check-name-collision.mjs" --name "<project-name>" --parent-dir "$(pwd)"
+node "${CLAUDE_SKILL_DIR}/../../scripts/check-name-collision.mjs" --name "<project-name>" --parent-dir "$(dirname "$(pwd)")"
 ```
 
-The script reads the project's `status` in the returned JSON (it scans your existing projects: local folders, Neon, Vercel, and the shared background clock). React based on `status`:
+The script reads the project's `status` in the returned JSON (it scans your existing projects: local sibling folders next to this checkout, the shared background clock, and your Scaleway Projects). React based on `status`:
 
 - **`ok`** → no clash, go straight to step 2 with this name.
 - **`exact`** → a project with this exact name already exists. It cannot be reused. Present the `suggestions` (they are safe, non-colliding names) via `AskUserQuestion` and let the user pick one or type their own. **Re-run this guard** on the chosen name until it returns `ok`.
 - **`subset`** → the chosen name is contained inside an existing project's name (e.g. `street` while a `street-cool` already exists). This is the dangerous case: later, a cleanup of `<name>` could also sweep the other project's data. **Strongly recommend** one of the `suggestions` (which are built to avoid the overlap). Present them via `AskUserQuestion`, adding an explicit "keep `<name>` anyway" choice for the user who really wants it. If they pick a suggestion or type a new name, re-run the guard on it; if they explicitly keep the colliding name, proceed (their informed choice).
 - **`superset`** or **`both`** → the chosen name *contains* an existing shorter project's name (e.g. `street-cool` while a `street` already exists). Warn plainly that the two overlap and that a future cleanup will need extra care to tell them apart. Here `suggestions` is usually empty (a name that wraps another cannot be auto-fixed by adding a word), so **ask the user** to either pick a clearly different name (re-run the guard on it) or confirm they want to keep it.
 
-Always phrase this to the user in plain, non-technical language: talk about "another of your projects with a similar name" and "avoiding confusion when you later delete one of them", never about "tokens" or "subset/superset". If the JSON `notes` mention a source that could not be checked (Neon key locked, Vercel not logged in), you may still proceed, but if `status` is `ok` **only** because a source was skipped, mention that the check was partial.
+Always phrase this to the user in plain, non-technical language: talk about "another of your projects with a similar name" and "avoiding confusion when you later delete one of them", never about "tokens" or "subset/superset". If the JSON `notes` mention a source that could not be checked (Scaleway credentials missing), you may still proceed, but if `status` is `ok` **only** because a source was skipped, mention that the check was partial.
 
-Whatever name clears this guard is the one you pass to `--name` at step 2 (and everywhere afterwards).
+Whatever name clears this guard is the one you pass to `--name` at step 2 (and everywhere afterwards) - only when Step 1 needed a deploy-name override; if the repo name was already kebab-case, `--name` can be omitted entirely (the script derives it from `origin` on its own).
 
 **2. Start the script in the background**
 
-Run the block below with **`run_in_background: true`** in the `Bash` tool. The `_ensure-tools-path.sh` helper adds Node/pnpm/gh/vercel to the PATH (useful if a tool was just installed via /start without restarting Claude Code). We redirect stdout+stderr to `$LOG_FILE`, and we echo the path BEFORE the redirection so we can retrieve it.
+Run the block below, **from the repo root**, with **`run_in_background: true`** in the `Bash` tool. We redirect stdout+stderr to `$LOG_FILE`, and we echo the path BEFORE the redirection so we can retrieve it.
 
 ```bash
-source "${CLAUDE_SKILL_DIR}/../../scripts/_ensure-tools-path.sh"
 LOG_FILE="${TMPDIR:-/tmp}/bootstrap-init-$(date +%s).log"
 echo "LOG_FILE=$LOG_FILE"
 node "${CLAUDE_SKILL_DIR}/../../scripts/bootstrap-init.mjs" \
   --name "<project-name>" \
   --description "<150-160 char description from Step 1>" \
-  --locale fr_FR \
-  --private > "$LOG_FILE" 2>&1
+  --locale fr_FR > "$LOG_FILE" 2>&1
 ```
 
 The tool returns a `bash_id` (useful for `KillBash` in case of a hang) and an `output-file` (the file where the harness captures the background bash stdout - it contains just the `LOG_FILE=...` line since the rest is redirected).
+
+**If the operator's key lacks `ProjectManager`** (per-request delegation, CONTRACT.md §1): the `scwProject` sub-step fails with a JSON line carrying `"type":"needs_admin"` and `details.recipe: "project"`. Relay the script's French message to the user as-is - it is already a forwardable request, and points at `docs/ADMIN-SCALEWAY.md`, section Recette « projet ». Wait for the user to come back with the Project ID the admin created. Then re-run the same command from step 2, adding the flag:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/bootstrap-init.mjs" \
+  --name "<project-name>" \
+  --description "<150-160 char description from Step 1>" \
+  --locale fr_FR \
+  --scw-project-id "<Project ID from the admin>" > "$LOG_FILE" 2>&1
+```
+
+**If the operator is in PoC mode** (`BAUDRIER_SCW_MODE=poc`, set as an environment variable - CONTRACT.md §1, §2): the `scwProject` sub-step never tries to create a Project. If `--scw-project-id` was not passed, it fails with a JSON line carrying `"type":"poc_needs_project_id"`. Ask the user, in French and in plain language, for the identifier of an existing Scaleway Project to use for this app: their administrator may have prepared one specifically for it, or they can use their own key's default Project for a first test. Then re-run the same command from step 2, adding `--scw-project-id "<Project ID>"` as shown above.
+
+**Either mode, if a Project already holds another Baudrier app's secret**: the sub-step fails with `"type":"project_already_used"` and `details.secretName`. Relay the script's French message as-is - reusing a Project would collide two apps' secrets, breaking the rule that a secret's name is the env var name (CONTRACT.md §2). Ask the user for a different Project id, then re-run with the new `--scw-project-id`.
+
+The rest of the flow (Monitor, notifications, handoff banner) is unchanged.
 
 **3. Retrieve the LOG_FILE path**
 
 `Read` the `output-file` returned by the Bash. There you will find a single line `LOG_FILE=<absolute path>`. Remember this value - it is what the Monitor will tail.
 
-⚠️ **If even after `source` the `node` stays unreachable**: this is an extreme case where Node.js is not in a standard folder. Tell the user to restart Claude Desktop (1 action that fixes everything), or use the full path as a last resort: `& "C:\Program Files\nodejs\node.exe" "..."` (Windows) / `/opt/homebrew/bin/node "..."` (Mac).
-
-The script creates `<project-name>/` in the cwd and works there. NEVER launch it from inside an existing git repo - it will refuse and exit non-zero (otherwise it would pollute the parent repo).
+The script scaffolds **directly into the current directory** - never a new subfolder. `/bootstrap` now **requires** being run at the root of the app's own pre-existing git checkout (cloned from the `baudrier-template`, or connected on web): it refuses and exits non-zero if `git rev-parse --show-toplevel` does not match the current directory, or if a scaffold already looks present (`package.json`/`src/`). This is the opposite of the old sibling-directory model - there is no parent folder to `cd` into any more.
 
 **4. Announce to the user + arm the Monitor**
 
 Announce to the user:
 
-> Script launched in the background. ~3-5 min, 22 sub-steps. I will relay each new step as it goes.
+> Script launched in the background. Several minutes, 26 sub-steps (the longest part is waiting for the image build). I will relay each new step as it goes.
 
-Then launch the `Monitor` tool with this script (replace `<LOG_FILE>` with the real path remembered at step 3), `timeout_ms: 600000`, `persistent: false`, and a short `description` like `"bootstrap progress"`:
+Then launch the `Monitor` tool with this script (replace `<LOG_FILE>` with the real path remembered at step 3), `timeout_ms: 1200000` (20 min - the local `docker build`/push has no fixed timeout of its own but this is a generous margin for a cold layer cache), `persistent: false`, and a short `description` like `"bootstrap progress"`:
 
 ```bash
-# LC_ALL=C is CRITICAL - forces grep into byte-mode. Without it, GNU grep 3.0 (bundled
-# with Git for Windows MSYS) has a bug matching 4-byte UTF-8 chars (emojis like 🎉) in
-# non-C locales (e.g. fr_FR.UTF-8), and never detects the success marker → Monitor
-# hangs until timeout even though the script finished cleanly. The 3-byte `▸` matches
-# fine but the 4-byte `🎉` does not. LC_ALL=C is the surgical fix that keeps all the
-# UTF-8 markers visible to the user while making grep robust.
+# LC_ALL=C forces grep into byte-mode, so it reliably matches the 4-byte UTF-8 🎉 marker below.
 export LC_ALL=C
 LOG="<LOG_FILE>"
 LAST=""
@@ -176,8 +187,9 @@ while true; do
     echo "[DONE] failure"
     break
   fi
-  # ^▸ [A-Z] = main steps only. Internal retries ("▸   attempt N/9 ...") start
-  # with spaces then lowercase → excluded, otherwise they spam 5-9 useless notifs.
+  # ^▸ [A-Z] = main steps only. `docker build`/`push` write their own
+  # (unprefixed, very verbose) output straight into the same log file - this
+  # filter is what keeps that noise from ever becoming a notification.
   CUR=$(grep -E "^▸ [A-Z]" "$LOG" 2>/dev/null | tail -1)
   if [ -n "$CUR" ] && [ "$CUR" != "$LAST" ]; then
     echo "$CUR"
@@ -187,9 +199,9 @@ while true; do
 done
 ```
 
-⚠️ **The regex `^▸ [A-Z]` is crucial.** The bootstrap-init script also uses `▸   attempt N/9: waiting 10s for vercel[bot]` during the auto-deploy verification (internal retry loop). Without the `[A-Z]` filter after the space, those sub-retries would each trigger a notification - 5 to 9 wasted agent turns.
+⚠️ **The regex `^▸ [A-Z]` is crucial.** `docker build`'s own console output is extremely verbose and lands unprefixed in the same log file. Without the `[A-Z]` filter, that raw noise could otherwise be mistaken for real progress lines.
 
-⚠️ **`export LC_ALL=C` at the start of the script is just as crucial.** Without it, on Windows in locale `fr_FR.UTF-8` (or any non-`C` UTF-8 locale), `grep` never recognizes `🎉` (4-byte UTF-8) and the Monitor stays stuck until its timeout (10 min) even though the script finished in a few minutes. Bug confirmed on GNU grep 3.0 bundled with Git for Windows. Typical symptom: all the `▸ <step>` (3-byte UTF-8) arrive normally, then nothing for minutes even though the background bash already returned `exit 0`.
+⚠️ **`export LC_ALL=C` at the start of the script is just as crucial.** Without it, `grep` can fail to recognize the 4-byte UTF-8 `🎉` marker in some locales, and the Monitor stays stuck until its timeout even though the script finished.
 
 ### During execution (notification handling)
 
@@ -197,11 +209,12 @@ You will receive `task-notification`s as they come. For each:
 
 **Notif `▸ <Step>`** → post **one short sentence** to the user, in the format `↳ <translated/contextualized step> ...`. Examples:
 - `▸ Installing with pnpm` → `↳ Installing pnpm dependencies...`
-- `▸ Linking Vercel project` → `↳ Linking the Vercel project`
-- `▸ Connecting GitHub repo to Vercel project (auto-deploy)` → `↳ Connecting the GitHub repo to the Vercel project (auto-deploy)`
-- `▸ Local build (pnpm build) - gate before deploy` → `↳ Local build (gate before deploy)`
-- `▸ Deploying to Vercel production` → `↳ Deploying to Vercel production (~45s)`
-- `▸ Verifying GitHub↔Vercel auto-deploy integration` → `↳ Verifying GitHub→Vercel auto-deploy (can take up to 90s)`
+- `▸ Creating dedicated Scaleway Project "<name>"` → `↳ Creating your dedicated Scaleway space`
+- `▸ Creating Scaleway Container Registry namespace` → `↳ Setting up image storage on Scaleway`
+- `▸ Pushing <branch> to origin` → `↳ Pushing your code to GitHub`
+- `▸ Building + pushing the Docker image (tag ...)` → `↳ Building and pushing your app's image (~2-5 min)`
+- `▸ Creating Scaleway Serverless Container (scale S: ...)` → `↳ Creating your web server (Scaleway container)`
+- `▸ Smoke-testing https://...` → `↳ Checking that your site is really online and styled correctly`
 
 **Notif `[DONE] success`** → success. On the same turn or the next:
 - Synchronous `Bash`: `tail -n 40 "<LOG_FILE>"` to retrieve the full handoff banner.
@@ -214,17 +227,17 @@ You will receive `task-notification`s as they come. For each:
 - Synchronous `Bash`: `tail -n 200 "<LOG_FILE>"` to get the full context.
 - Proceed according to "If the script fails" below.
 
-**Safety net hang**: the `Monitor` has a `timeout_ms: 600000` (10 min). If the timeout fires without us having seen `[DONE]`, it is a real hang. Read `tail -n 200 "<LOG_FILE>"` to diagnose. Kill the background bash with `KillBash` on the remembered `bash_id` (or `pkill -f bootstrap-init.mjs`).
+**Safety net hang**: the `Monitor` has a `timeout_ms: 1200000` (20 min). If the timeout fires without us having seen `[DONE]`, it is a real hang. Read `tail -n 200 "<LOG_FILE>"` to diagnose. Kill the background bash with `KillBash` on the remembered `bash_id` (or `pkill -f bootstrap-init.mjs`).
 
 The script writes to `$LOG_FILE`:
-- `▸ <step>` when it starts each sub-step (22 main steps)
+- `▸ <step>` when it starts each sub-step (26 main steps)
 - `✅ <result>` at the end of each
 - At the very end, a **handoff banner**:
   ```
   ────────────────────────────────────────────────────────
   Bootstrap-init handoff state
   ────────────────────────────────────────────────────────
-  ✅ Completed (X/22): preflight, scaffoldT3, ...
+  ✅ Completed (X/26): preflight, scwProject, scaffoldT3, ...
   ❌ Failed at: <step>           (if failure)
   ⏸  Not attempted: ...           (if failure)
   ⚠️  N warning(s) during the run: ... (if applicable)
@@ -233,16 +246,15 @@ The script writes to `$LOG_FILE`:
 
 ### If the script finishes successfully WITHOUT warnings
 
-The smoke test confirmed that the site responds 200 and shows the project name. The GitHub-to-Vercel verification confirmed that `vercel[bot]` took over after the push. **Everything is ready.**
+The smoke test confirmed that the site responds 200 and that its stylesheet actually loads (not just an unstyled page passing its health check). **Everything is ready.**
 
 Announce to the user:
 
 > 🎉 **Infrastructure ready!**
 >
 > - GitHub repo: `https://github.com/<gh-user>/<name>`
-> - Vercel project: `https://vercel.com/<vercel-scope>/<name>`
-> - Live site: `https://<name>.vercel.app` ✅ (tested, responds 200, shows the name)
-> - GitHub→Vercel auto-deploy: ✅ (a `git push` deploys on its own)
+> - Scaleway: a dedicated Project, a container registry, and a Serverless Container are provisioned
+> - Live site: `https://<container-domain>` ✅ (tested, responds 200, styling loads)
 >
 > Now let's move on to defining your project.
 
@@ -258,28 +270,29 @@ Mark Step 2 ✅, move on to Step 3 to handle the warnings.
 2. **Identify the failed step** in the banner (`❌ Failed at: <step>`). The name maps 1:1 to a function in `scripts/bootstrap-init.mjs` - open that file and read the `<step>()` function to know exactly what it is supposed to do.
 3. **Diagnose the cause**:
    - **T3 / shadcn drift** (regex sanity check warn) → patch the project manually drawing on the script + flag it to the user so they can patch the script afterward.
-   - **CLI changed** (invalid flag for shadcn / T3 / vercel / gh) → fix manually then likewise flag it.
-   - **External problem** (expired auth, network, quota) → fix and re-run the script from a fresh folder (the script is not idempotent).
-4. **Continue the remaining steps manually** (`⏸ Not attempted`) drawing on the script functions. Do not skip any of the banner steps - the local `pnpm build` in particular must pass before any `vercel --prod`, and the smoke test must confirm the site is live.
+   - **CLI changed** (invalid flag for shadcn / T3 / docker) → fix manually then likewise flag it.
+   - **External problem** (Scaleway credentials/network/quota, a `docker build`/`push` failure) → fix and re-run the script. If the failure is at `dockerBuildPush`, the actual Docker error is right there in the log (unprefixed, above the handoff banner) - no external run URL to fetch, unlike the old GitHub Actions model.
+4. **Continue the remaining steps manually** (`⏸ Not attempted`) drawing on the script functions. Do not skip any of the banner steps - the smoke test in particular must confirm the site is live and styled before moving on. `scwProject` now runs right after `preflight`, before any local file exists - a failure there leaves nothing on disk to clean up, and a re-run with `--scw-project-id` starts clean. A failure at any later step may leave local files on disk AND partial Scaleway resources behind (a Project, a registry namespace, a container namespace, a container) - the Scaleway side is safe to re-run, every `scripts/scaleway/*` helper used is find-or-create / idempotent-PATCH. Unlike the old sibling-directory model, there is no "fresh folder" to retry into either way - the repo checkout is the one and only project directory (in-place bootstrap, CONTRACT.md §7).
 
 ### Notes on the script's choices (which you do not have to redo if successful)
 
 - **`--dbProvider postgres`** (not `postgresql` - T3 bug).
-- **No `--nextAuth` flag** in the T3 command → NextAuth is NOT scaffolded. So the script does NOT push a placeholder for `AUTH_SECRET` nor `AUTH_DISCORD_*`. It is `/add-auth` that handles all that later when the user wants auth.
+- **No `--nextAuth` flag** in the T3 command → NextAuth is NOT scaffolded. So the script does NOT push a placeholder for `AUTH_SECRET`. It is `/add-auth` that handles all that later when the user wants auth.
 - **drizzle-orm bumped to 0.45.2+** right after scaffold (SQL injection CVE fix).
-- **Demo cleanup**: removal of `src/server/api/routers/post.ts`, of the orphan component `src/app/_components/post.tsx`, of the obsolete JSDoc in `root.ts` that references `trpc.post.all()`, and **replacement of the T3 home with a minimal page showing `<h1>{name}</h1>`** (used by the smoke test to verify we really serve our own code).
-- **Healthcheck router** injected into `src/server/api/routers/healthcheck.ts` + wired in `root.ts` - otherwise an empty `appRouter` would crash the TS build.
+- **Demo cleanup**: removal of `src/server/api/routers/post.ts`, of the orphan component `src/app/_components/post.tsx`, of the obsolete JSDoc in `root.ts` that references `trpc.post.all()`, of `src/server/db/schema.ts`'s multi-project table-prefix helper (each app gets its own dedicated Scaleway database, so there is nothing to prefix), and **replacement of the T3 home with a minimal page showing `<h1>{name}</h1>`**.
+- **Healthcheck router** injected into `src/server/api/routers/healthcheck.ts` + wired in `root.ts` - otherwise an empty `appRouter` would crash the TS build. The gate-exempt endpoint is separate: a plain `/api/healthz` route (`src/app/api/healthz/route.ts`), which `src/proxy.ts` exempts with an exact pathname match - a tRPC prefix exemption would reopen the batching bypass. The keep-warm Job pings `/api/healthz`.
 - **shadcn init via `npx`** (not `pnpm dlx` which crashes with `ERR_PNPM_NO_IMPORTER_MANIFEST_FOUND`).
 - **`LinkButton`** created in `src/components/ui/link-button.tsx` because shadcn v4 does not expose `asChild` on `Button`.
 - **globals.css patch**: strip of `--font-sans: var(--font-sans);` injected by shadcn init, which clobbers the T3 Geist mapping (without this fix the app renders in Times New Roman).
-- **Security headers** + `images.remotePatterns` (picsum + unsplash) + `rate-limit.ts` + `rateLimitedProcedure` via `setup-security.mjs`.
+- **Security headers** + `rate-limit.ts` + `rateLimitedProcedure` via `setup-security.mjs`.
 - **SEO metadata** + sitemap + robots + JSON-LD via `setup-seo.mjs`.
 - **404 page polish**: `src/app/not-found.tsx` with a clean design (gradient on the 404, `LinkButton` back to home, fade-in animation).
-- **CLAUDE.md core**: project name + description + stack + structure + commands + T3-specific conventions (Geist, LinkButton, shadcn, tRPC patterns, etc.). The cross-project conventions (TypeScript no-any, responsive mobile-first, etc.) are in the global `~/.claude/CLAUDE.md` maintained by `/start`.
-- **Placeholder env vars**: only `DATABASE_URL` (`postgresql://placeholder...`) to pass Drizzle's Zod validation. `NEXT_PUBLIC_APP_URL` is pushed with its **real value** (`https://<name>.vercel.app` in prod/preview, `http://localhost:3000` in dev) - the Vercel URL is known from the `vercel link`.
-- **Smoke test**: curl with 8 retries (8s between each) on the Vercel URL, checks HTTP 200 + presence of the project name in the rendered HTML.
-- **Explicit git connection**: right after `vercel link`, the script runs `vercel git connect --yes` to attach the GitHub repo to the Vercel project (the `link` alone only links the local folder). If it fails (Vercel's GitHub app absent or limited to selected repos), an immediate `GH_VERCEL_CONNECT_FAILED` warning, non-blocking.
-- **Auto-deploy verification**: empty commit + git push, then polling of `gh api .../deployments` (120s max if the connect succeeded, 90s of safety net otherwise - the Vercel webhook often lands beyond 30s, hence these wide windows to avoid false positives) - if `vercel[bot]` is among the creators, the GitHub-to-Vercel integration is wired. Otherwise, a `GH_VERCEL_INTEGRATION_MISSING` warning in the banner (non-blocking - the first deploy already worked via `vercel --prod`).
+- **Deploy artifacts**: `Dockerfile` (multi-stage, `node:24-alpine`), `next.config.*` patched (not overwritten - security headers survive) for `output: 'standalone'` + `images.remotePatterns` on `**.scw.cloud`, `copy-assets.js` (restores `.next/static/` + `public/` into the standalone output - the #1 way this setup would silently ship an unstyled site), `src/proxy.ts` (the IP-allowlist gate).
+- **CLAUDE.md core**: project name + description + stack + structure + commands + T3-specific conventions (Geist, LinkButton, shadcn, tRPC patterns, IP-restriction, etc.). The cross-project conventions (TypeScript no-any, responsive mobile-first, etc.) are in the global `~/.claude/CLAUDE.md` maintained by `/start`.
+- **Placeholder env vars**: only `DATABASE_URL` (`postgresql://placeholder...`) to pass Drizzle's Zod validation. `APP_URL` is set to the container's real Scaleway domain right after creation, and `ACCESS_RESTRICTED` to `"true"`. All three go through the container's **secret** channel, even though the last two are not secret: `environment_variables` replaces the whole map on update while `secret_environment_variables` merges per key, so the plain channel would silently drop values written by a later step. The proxy also fails **closed** - anything other than the literal `"false"` means restricted - so a lost variable cannot accidentally publish an app.
+- **No linkage file of any kind is written** (CONTRACT.md §2, §7): `deploy`, `add-domain` and `_push-env-vars` all find this app's Scaleway Project, namespace, and container again by resolving them **by name** - the app name, which is always the repo name - never from a file this script wrote earlier.
+- **Direct build + push, then the container**: once the registry namespace exists, this machine itself runs `docker build --platform linux/amd64` and pushes the image straight to it, tagged with the commit SHA - no GitHub Actions anywhere in the pipeline (CONTRACT.md §5). The container is created only after that push succeeds (Scaleway validates the image against the registry at container-creation time, so a tag that does not exist yet would be rejected outright) and is then waited on until ready.
+- **Smoke test**: fetches the container's URL with the `ACCESS_BYPASS_TOKEN` header (minted by `scwContainer()`, checked by the generated `src/proxy.ts`, CONTRACT.md §6), so HTTP 200 is expected from any machine, web sandbox included. Checks 200, extracts the page's own stylesheet `<link>` and fetches THAT too - a bare 200 check would miss the Geist-font/copy-assets regressions. A 403 despite the token is a real warning (token not synced, or the proxy check is missing), never an expected outcome.
 
 ---
 
@@ -287,72 +300,47 @@ Mark Step 2 ✅, move on to Step 3 to handle the warnings.
 
 ⚠️ **This step only exists if the script reported warnings in its handoff banner**. If the output contains no warning, mark this step ✅ right away and go to Step 4 without saying anything to the user.
 
-### Warning: `GH_VERCEL_CONNECT_FAILED` and/or `GH_VERCEL_INTEGRATION_MISSING`
+Warnings at this stage are almost always **T3/shadcn drift** picked up by the script's `expect()` sanity checks (T3 or shadcn changed their output since this script was written), a Scaleway-side hiccup during provisioning, or the **IP-gate warning** below. For each warning:
 
-These two warnings denote the same problem, detected at two moments: the GitHub repo is **not connected** to the Vercel project, so future `git push`es will not deploy automatically (the first deploy worked because we ran `vercel --prod` directly). The cause is almost always **Vercel's GitHub app** on the user's account side, with **two distinct cases**:
+1. Inspect the mentioned file/resource to see what drifted.
+2. Patch manually if the consequence is visible (e.g. font in Times New Roman → fix the `--font-sans` mapping in `globals.css`; a Scaleway resource not created → re-run the corresponding step function's logic manually, they are all idempotent find-or-create calls).
+3. Note what should be fixed in `bootstrap-init.mjs` for next time (to mention in the final summary if you do not have time to fix it yourself).
 
-- **Case A: the app is not installed at all.** Typical of a Vercel account created by email. ⚠️ Common trap: "I log into Vercel with GitHub" is NOT enough, that is an OAuth login, not the install of the integration app.
-- **Case B: the app is installed but limited to "Only select repositories".** The repo created a minute ago is not in the selection, so Vercel cannot attach to it. This is the sneakiest case: the user "has already connected GitHub" and does not understand why it does not work.
+There is no GitHub-App-authorization class of warning in this pipeline (unlike platforms that need a separate "connect your GitHub" step) - this machine builds and pushes the image itself on `git push`, no GitHub Actions and no browser authorization involved anywhere (CONTRACT.md §5).
 
-This is an authorization **in a browser** - you cannot automate it. Display to the user:
+### The IP-gate warning (`ACCESS_ALLOWED_IPS`)
 
-> ⚠️ One small thing to sort out: your Vercel account does not have (or not fully) access to your GitHub repos, so your future `git push`es will not deploy automatically. Once fixed, it holds for all your future projects.
->
-> **If you have never connected Vercel to GitHub:**
-> 1. Go to **https://vercel.com/integrations/github**
-> 2. Click **Add GitHub Account**, authorize access
-> 3. Select **All repositories** (recommended: you will never have to come back to this)
-> 4. Confirm the install
->
-> **If Vercel is already linked to your GitHub** (you log into Vercel with GitHub, for example): it is probably the list of authorized repos that does not contain the new one. In GitHub:
-> 1. Go to **https://github.com/settings/installations**
-> 2. **Vercel** row → click **Configure**
-> 3. **Repository access** section → choose **All repositories** (recommended), or add this repo to the list
-> 4. **Save**
->
-> Come back here and tell me **"done"**.
+`detectEgressIps()` / `smokeTest()` warn when the app's IP allowlist ends up empty or wrong for this machine - the two shapes to recognize in the banner:
 
-Wait for the user's confirmation. Then re-verify in two stages:
+- **"Could not detect this machine's public IP address. `ACCESS_ALLOWED_IPS` stays unset..."** (a non-web machine whose egress-IP lookup failed), or **"Running in a Claude Code web sandbox: ... `ACCESS_ALLOWED_IPS` is not seeded from it..."** (expected on web - the sandbox's own address is never the operator's, so it is never auto-allowlisted).
+- A `smokeTest` 403-despite-token warning naming the address the gate saw (the harness token bypass did not work; the operator's browser access is a separate question).
 
-**1) Reconnect (deterministic, immediate)**, from the project folder:
+**Handle this once, never re-ask while the secret already exists**: check first whether `ACCESS_ALLOWED_IPS` is already set (`node "${CLAUDE_SKILL_DIR}/../../scripts/scaleway/secrets.mjs" get ACCESS_ALLOWED_IPS`, or infer it from the warning text itself). If it genuinely does not exist yet, ask the user exactly once, in French:
+
+> Pour que vous puissiez voir votre site (il est restreint par défaut), ouvrez https://ip.me dans votre navigateur et collez-moi l’adresse affichée.
+
+Once they reply, store it and sync the container:
 
 ```bash
-vercel git connect --yes
-echo "exit=$?"
+printf '%s' "<adresse collée>" | node "${CLAUDE_SKILL_DIR}/../../scripts/scaleway/secrets.mjs" put ACCESS_ALLOWED_IPS --stdin
 ```
 
-- `exit=0` → the connection is made. Move on to 2) for the end-to-end proof.
-- `exit≠0` → the app install did not take (often: "Confirm"/"Save" forgotten at the last step, or wrong GitHub account selected). Show the guide above again, wait, retry. Do NOT move on to 2) while `git connect` fails: the polling would be wasted time.
-
-**2) Prove the auto-deploy (real webhook)**:
+then sync the container so it actually picks up the new value (the same `syncContainerSecrets` call `scwContainer()` itself makes):
 
 ```bash
-git commit --allow-empty -m "chore: re-verify auto-deploy"
-git push
-REPO=$(git remote get-url origin | sed 's|.*github.com[:/]||;s|\.git$||')
-FOUND=""
-for i in 1 2 3 4 5 6 7 8 9; do
-  sleep 10
-  if gh api "repos/$REPO/deployments?per_page=10" --jq "[.[] | .creator.login]" 2>/dev/null | grep -q "vercel\[bot\]"; then
-    FOUND="yes (after ${i}x10s)"
-    break
-  fi
-done
-echo "vercel[bot] detected: ${FOUND:-no, after 90s}"
+CONTAINER_MJS="${CLAUDE_SKILL_DIR}/../../scripts/scaleway/container.mjs" \
+PROJECT_NAME="<project-name>" \
+node --input-type=module -e '
+import { pathToFileURL } from "node:url";
+const { ensureNamespace, findContainerByName, syncContainerSecrets } = await import(pathToFileURL(process.env.CONTAINER_MJS).href);
+const ns = await ensureNamespace(process.env.PROJECT_NAME);
+const container = await findContainerByName(ns.id, process.env.PROJECT_NAME);
+const ready = await syncContainerSecrets(container.id, {});
+console.log(JSON.stringify({ ok: true, status: ready.status }));
+'
 ```
 
-- If `vercel[bot] detected: yes ...` → announce ✅ "The auto-deploy is now wired." and go to Step 4.
-- If `vercel[bot] detected: no, after 90s` even though `git connect` had succeeded → rare case (slow webhook): retry the polling once. If still absent, note in the final summary of Step 8 that it remains to be verified (non-blocking for what follows).
-
-⚠️ **Important**: NEVER conclude "broken integration" on a single `sleep 12` + check. Always retry for ~90s before declaring KO. The bug of the first bootstrap run was exactly that: the script checked at 12s while vercel[bot] had not registered yet, and on the 2nd check (1-2 min later, without doing anything in between), it was fine. The retry loop above fixes that on Claude's side.
-
-### Other warnings (T3/shadcn drift)
-
-Other warnings can come from the script's `expect()` sanity checks if T3 or shadcn changed their output. Read them in the banner. For each warning:
-
-1. Inspect the mentioned file to see what drifted.
-2. Patch manually if the consequence is visible (e.g. font in Times New Roman → fix the `--font-sans` mapping in `globals.css`).
-3. Note what should be fixed in the `bootstrap-init.mjs` script for next time (to mention in the final summary if you do not have time to fix it yourself).
+The smoke test itself authenticates with `ACCESS_BYPASS_TOKEN` and does not depend on `ACCESS_ALLOWED_IPS` at all - this warning is only about the USER reaching their own site from a browser. Ask for the ip.me address when the allowlist is genuinely empty or the user reports a 403, never because of the smoke test.
 
 ---
 
@@ -385,9 +373,9 @@ After the spec skill completes, you have the spec file AND the infrastructure an
 
 Ask: "Place the .md file in the current folder and give me its name."
 
-Read the spec file entirely. Silently infer the infrastructure needs from its content (DB, auth, email, stripe, i18n, storage, analytics) using the inference rules below. Do NOT ask the user for confirmation at this stage - the 4b loop is the single confirmation point.
+Read the spec file entirely. Silently infer the infrastructure needs from its content (DB, auth, email, storage, analytics, map) using the inference rules below. Do NOT ask the user for confirmation at this stage - the 4b loop is the single confirmation point.
 
-If some decisions are genuinely ambiguous (e.g., the spec says "maybe we'll add payments later"), ask ONE targeted question via the askUser tool to resolve. Don't batch multiple questions - resolve the hardest one first, the rest will surface at 4b if needed.
+If some decisions are genuinely ambiguous, ask ONE targeted question via the askUser tool to resolve. Don't batch multiple questions - resolve the hardest one first, the rest will surface at 4b if needed.
 
 Then go to 4b.
 
@@ -401,12 +389,10 @@ Tell the user: "OK, I will create a simple app based on your description. You ca
 
 - Users, accounts, data, content management → add-db + add-auth (credentials)
 - Admin, backoffice, protected pages → add-auth (credentials)
-- Login, registration → add-auth (credentials). Do NOT ask which OAuth provider - bootstrap always uses Credentials; user can add Google OAuth later with `/add-google-auth`.
+- Login, registration → add-auth (credentials). Do NOT ask which OAuth provider - bootstrap always uses Credentials; extend later if the user wants social login.
 - Emails, contact form, notifications, confirmations → add-email
-- Payments, checkout, pricing, subscription → add-stripe
-- Multiple languages, translation → add-i18n
 - File uploads, images, documents → add-storage
-- Analytics, tracking, statistics → add-analytics. ⚠️ **STRICT OPT-IN**: only propose `add-analytics` IF the user explicitly wrote words like "analytics", "tracking", "statistics", "Google Analytics", "GA4", "audience", "audience measurement" in their spec or short description. **Never as a "useful" default**: a site about marketing or SaaS does NOT trigger analytics on its own. When in doubt → no, the user can add `/add-analytics` later.
+- Analytics, tracking, statistics, audience measurement → add-analytics (Matomo). ⚠️ **STRICT OPT-IN**: only propose `add-analytics` IF the user explicitly wrote words like "analytics", "tracking", "statistics", "audience measurement" in their spec or short description. **Never as a "useful" default**: a site about marketing or SaaS does NOT trigger analytics on its own. When in doubt → no, the user can add `/add-analytics` later.
 - Map, interactive map, agencies, stores, points of sale, locations, "find", "where to find us", route, map-first app, geolocation → add-map. Also infer the `usage` (single / multi / route / mapfirst) and the `placement` (existing contact page / dedicated page to create / home) from the spec to pass these hints to the skill - it will then be able to skip its discovery question.
 - Any app that stores data implicitly needs add-db (e.g., "booking app" → needs a DB).
 
@@ -418,16 +404,14 @@ This is **the single confirmation point** before configuring the addons. Present
 
 > **Summary before configuring the addons:**
 >
-> **Project:** <name> - <description> *(already created on GitHub + Vercel ✅)*
+> **Project:** <name> - <description> *(already created on GitHub + Scaleway ✅)*
 > **Spec:** <yes (filename) / no>
 > **Addons to configure:**
 > - Database: <yes/no>
 > - Authentication: <yes (credentials mode) / no>
 > - Email: <yes/no>
-> - Analytics: <yes/no>
-> - Payments: <yes/no>
 > - Storage: <yes/no>
-> - Multilingual: <yes (languages) / no>
+> - Analytics: <yes/no>
 > - Interactive map: <yes (inferred usage: single / multi / route / mapfirst) / no>
 >
 > **Shall I launch the configuration, or do you want to change the list?**
@@ -435,11 +419,11 @@ This is **the single confirmation point** before configuring the addons. Present
 Then, two possible cases:
 
 - **Validation** (OK / go / launch / it's good / perfect / sure / etc.) → move **immediately on to Step 5**. Do NOT re-present the summary. Do NOT write an intermediate message.
-- **Change request** (e.g. "remove Stripe", "add English on top of French", "add analytics") → apply the change to your internal list, then **re-present the SAME summary block with the updated values** and the same final question. Loop like this until explicit validation - with no iteration limit.
+- **Change request** (e.g. "remove storage", "add analytics") → apply the change to your internal list, then **re-present the SAME summary block with the updated values** and the same final question. Loop like this until explicit validation - with no iteration limit.
 
 If the requested change is ambiguous (e.g. "can we remove stuff?"), ask **one single** short clarification question, then loop again.
 
-⚠️ The project name is no longer changeable at this stage (the GitHub repo and the Vercel project are already created). If the user asks to change the name, explain that it would require starting over from scratch and propose to continue with the current name.
+⚠️ The project name is no longer changeable at this stage (the Scaleway resources are already created under it, and the GitHub repo it lives in was already named before this run started). If the user asks to change the name, explain that the Scaleway side would require starting over from scratch and propose to continue with the current name.
 
 ---
 
@@ -454,11 +438,9 @@ Run them **in this order** (dependencies matter):
 1. `add-db` (if database was requested) - must run before auth (auth needs DB tables)
 2. `add-auth` (if authentication was requested)
 3. `add-email` (if transactional email was requested)
-4. `add-stripe` (if payments were requested)
-5. `add-i18n` (if multilingual was requested)
-6. `add-storage` (if file storage was requested)
-7. `add-analytics` (if analytics was requested)
-8. `add-map` (if an interactive map was requested) - pass the inferred usage + placement as context so the skill can skip its discovery question. If the markers need to live in DB (mapfirst with > 30 points or admin-editable), add-map will require add-db to have run first (handled by the skill's own preflight, but the ordering above already ensures it).
+4. `add-storage` (if file storage was requested)
+5. `add-analytics` (if analytics was requested)
+6. `add-map` (if an interactive map was requested) - pass the inferred usage + placement as context so the skill can skip its discovery question. If the markers need to live in DB (mapfirst with > 30 points or admin-editable), add-map will require add-db to have run first (handled by the skill's own preflight, but the ordering above already ensures it).
 
 For each addon, the skill file handles its own prerequisites check, installation, configuration, env var push, and CLAUDE.md update (via `_update-claude-md`). Follow each skill's steps completely before moving to the next addon.
 
@@ -466,27 +448,25 @@ For each addon, the skill file handles its own prerequisites check, installation
 
 ### Progress communication during the addons
 
-⚠️ **Important rule**: the addon SKILL.md files have their own internal structure in `## Step 1`, `## Step 2`, etc. This structure is **for Claude's internal use** to organize its work, **not to display to the user**. NEVER show the "Step 1", "Step 2" numbers of an addon in the chat - that would create a double numbering with the main `Step X/8` numbering of the bootstrap. **Likewise, NEVER mention the names of internal skills prefixed with `_`** (like `_push-env-vars`, `_update-claude-md`, `_setup-wrangler`, `_detect-project-root`, etc.) - that is internal mechanics. Describe the action in plain language instead (e.g. "I am saving your keys" rather than "I am invoking `_push-env-vars`").
+⚠️ **Important rule**: the addon SKILL.md files have their own internal structure in `## Step 1`, `## Step 2`, etc. This structure is **for Claude's internal use** to organize its work, **not to display to the user**. NEVER show the "Step 1", "Step 2" numbers of an addon in the chat - that would create a double numbering with the main `Step X/8` numbering of the bootstrap. **Likewise, NEVER mention the names of internal skills prefixed with `_`** (like `_push-env-vars`, `_update-claude-md`, `_detect-project-root`, etc.) - that is internal mechanics. Describe the action in plain language instead (e.g. "I am saving your keys" rather than "I am invoking `_push-env-vars`").
 
 Communication pattern to follow instead:
 
 1. **At the very start of Step 5**, announce the list of addons requested by the user:
 
-   > I am going to configure 3 addons: Neon (DB), NextAuth (auth), Resend (email).
+   > I am going to configure 2 addons: your database, and email.
 
    (Adapt: number and list according to what was requested at Step 4.)
 
 2. **Before each addon**, display a header like:
 
-   > 📦 **1/3 - Neon addon** (database)
+   > 📦 **1/2 - Database addon**
 
-   Use a short descriptive name for the addon (Neon / NextAuth / Resend / Stripe / next-intl / Cloudflare R2 / Cloudflare Worker / GitHub Actions / Google Analytics).
+   Use a short descriptive name for the addon (Database / Authentication / Email / Storage / Analytics / Map).
 
 3. **During each addon**, describe your actions in plain language, with a `↳` to show they are part of the current addon. Examples:
 
-   > ↳ I am fetching your Neon key from the vault...
-   > ↳ I am listing the existing projects (5/100 used)...
-   > ↳ I am creating the Neon project "myproject"... ✅
+   > ↳ I am creating your database on Scaleway...
    > ↳ I am installing Drizzle ORM... ✅
    > ↳ I am applying the schema... ✅
 
@@ -494,7 +474,7 @@ Communication pattern to follow instead:
 
 4. **After each completed addon**, display:
 
-   > ✅ **Neon addon configured**
+   > ✅ **Database addon configured**
 
 5. **After all the addons are done**, mark step 5/8 as `✅` in the main checklist and move on to Step 6.
 
@@ -512,7 +492,7 @@ The infrastructure and the addons are in place. Now we build the real applicatio
    - Database schema (if the spec defines tables beyond what the addons already created)
    - Layout and navigation (header, footer, shared components)
    - Pages, in the order they appear in the spec
-   - Integrations (Stripe checkout flow, email triggers, form submissions, etc.)
+   - Integrations (email triggers, form submissions, etc.)
    - Design refinements (animations, responsive adjustments, visual polish)
 
 3. **Implement each section.** For each page or feature described in the spec:
@@ -528,7 +508,7 @@ The infrastructure and the addons are in place. Now we build the real applicatio
 
 1. **Interpret the description** and make smart decisions about what pages, features, and database schema the app needs. Think like a product designer: what would make this app genuinely useful?
 
-2. **Design the database schema** based on the description. Create the Drizzle tables, push to Neon.
+2. **Design the database schema** based on the description. Create the Drizzle tables (directly with `pgTable` - no table-name-prefix hack, this app has its own dedicated database), push them to the Scaleway Serverless SQL database.
 
 3. **Build the full application:**
    - A polished layout with header/navigation and footer
@@ -540,9 +520,13 @@ The infrastructure and the addons are in place. Now we build the real applicatio
 
 4. **Make it beautiful.** Choose a coherent color palette and design system. Use modern UI patterns: cards, badges, gradients, hover effects, transitions. The app should look professional, not like a tutorial exercise.
 
-5. **Use real images, never gray boxes or invented local paths** (e.g. `/images/hero.jpg` without the file → 404). Two options:
-   - **Default: Lorem Picsum** (reliable, deterministic URL, no 404): `https://picsum.photos/seed/<keyword>/<w>/<h>` - the seed fixes the same image between rebuilds. E.g. `https://picsum.photos/seed/restaurant/1600/900`, `https://picsum.photos/seed/team-portrait/800/800`.
-   - **If the context is very specific** (hero of a French gourmet restaurant, portrait of a business lawyer, etc.) and a real Unsplash visual would have more impact: use WebSearch to find a real Unsplash photo-id, then build the URL `https://images.unsplash.com/photo-<real-id>?w=1600&q=80`. **Never invent an Unsplash ID** - they 404.
+5. **Use real images, never gray boxes or invented local paths** (e.g. `/images/hero.jpg` without the file → 404). **Default: the local placeholders in `public/placeholders/`** - 8 SVG files (`placeholder-01.svg` to `placeholder-08.svg`, gradient + geometric compositions, no text) written by `bootstrap-init.mjs` at scaffold time. Pick whichever file suits each section's tone (a warm palette for a hero, a cooler one for a feature grid) and reference it as a normal local asset:
+   ```tsx
+   <Image src="/placeholders/placeholder-03.svg" alt="Description descriptive" fill unoptimized />
+   ```
+   `unoptimized` is required for SVG (Next.js does not rasterize vector images - see `next.config.js`'s `dangerouslyAllowSVG`). Because these are real committed files, not a generated-per-request URL, there is no seed/determinism concern the way there was with a remote service.
+   - **Real photos** (a specific product, a team portrait, a real storefront) come from the user's own uploads, stored in the project's own Scaleway Object Storage bucket (`/add-storage`) - never from a third-party photo service. Loading a stock-photo URL sends every visitor's IP address to a US company (Lorem Picsum/Cloudflare, Unsplash) on every page load; this product's whole premise is not doing that. Do not use `https://picsum.photos/...` or `https://images.unsplash.com/...` in generated code.
+   - If the user explicitly wants a specific real photo before storage is wired up, ask them to send the file and save it under `public/` directly - do not fall back to a remote placeholder service.
    Always wrap in the `<Image>` component from `next/image` with a descriptive `alt`.
 
 6. **Be generous with features.** If the description says "a restaurant app", build: a landing page with hero + menu sections, a reservation form that saves to DB, an admin dashboard to manage reservations, and a contact section. Go beyond the minimum.
@@ -565,7 +549,7 @@ The infrastructure and the addons are in place. Now we build the real applicatio
   git add .
   git commit -m "feat: implement [section name]"
   ```
-- **Do NOT push to Vercel after each section.** Wait until the full implementation is complete (Step 8 will handle the final push).
+- **Do NOT deploy after each section.** Wait until the full implementation is complete (Step 8 will handle the final push + deploy).
 - The spec/description takes priority over defaults. If it says "dark theme with purple accents", follow that, not the T3 defaults.
 - Read `src/app/globals.css` (or `src/styles/globals.css` depending on what T3 scaffolded) before creating any component to stay consistent with the palette and design tokens already defined.
 - Always use shadcn/ui components from `~/components/ui/` before creating custom ones.
@@ -575,7 +559,7 @@ The infrastructure and the addons are in place. Now we build the real applicatio
 
 ## Step 7 - Finalization: CLAUDE.md, legal pages
 
-The Step 2 script already created a CLAUDE.md core and a 404 page polish. The Step 5 addons already added their sections in `CLAUDE.md` via `_update-claude-md`. This step completes the remaining elements: the spec mention if provided, the non-technical communication convention (specific to hypervibe), the favicon, and the legal pages.
+The Step 2 script already created a CLAUDE.md core and a 404 page polish. The Step 5 addons already added their sections in `CLAUDE.md` via `_update-claude-md`. This step completes the remaining elements: the spec mention if provided, the non-technical communication convention (specific to baudrier), the favicon, and the legal pages.
 
 ### 7a - Complete `CLAUDE.md`
 
@@ -587,7 +571,7 @@ The Step 2 script already created a CLAUDE.md core and a 404 page polish. The St
 
 Use a direct Edit (the `_update-claude-md` helper does not handle insertion at a specific spot outside a section).
 
-**Non-technical communication (specific to hypervibe)**: invoke `_update-claude-md` with section `conventions` + this single line:
+**Non-technical communication (specific to baudrier)**: invoke `_update-claude-md` with section `conventions` + this single line:
 
 > `- Communication: the user of this app is NON-TECHNICAL. In all your summaries (what was done, what remains, problems encountered, manual steps), explain in clear and understandable language, **with the corresponding technical term in parentheses when possible** - the user learns the vocabulary along the way. Instead of "I patched the middleware", say "I modified the part of the site that decides who sees what (the \"middleware\")". Instead of "I added an index on the users table", say "I sped up the user search (added an \"index\" in the database)". Keep the bare jargon only in the code and the code comments.`
 
@@ -612,23 +596,21 @@ Before generating the pages, ask the user for the following info (if not already
 - Phone number (optional but recommended)
 
 **For the Privacy Policy:**
-- Which personal data is collected (email, name, address, payment, etc.) - Claude Code can deduce this from the project config (auth = email/name, Stripe = payment data, analytics = browsing data)
+- Which personal data is collected (email, name, address, etc.) - Claude Code can deduce this from the project config (auth = email/name, analytics = browsing data)
 - Use of cookies (if analytics is configured)
 - Data retention period
 - Whether a DPO (data protection officer) is appointed - for a small structure, generally not
 
-**The host is always Vercel Inc.** - Claude Code knows the info:
-- Vercel Inc., 440 N Barranca Ave #4133, Covina, CA 91723, USA
-- https://vercel.com
+**The host is Scaleway.** Claude Code should look up Scaleway's current legal-entity details (company name, registered office, SIRET/RCS) directly from Scaleway's own published legal notice (https://www.scaleway.com) before finalizing the client's Mentions Légales, rather than relying on a fixed value here - registered-company details can change and must be accurate in a legal document.
 
 #### 7b.2 - Generate the Legal Notice page
 
-Create `src/app/mentions-legales/page.tsx` (or `src/app/[locale]/mentions-legales/page.tsx` if i18n).
+Create `src/app/mentions-legales/page.tsx`.
 
 The page must include:
 - Publisher identity (company name, legal form, SIRET, VAT, address, contact)
 - Name of the publication manager
-- Host information (Vercel Inc.)
+- Host information (Scaleway, France - see 7b.1 for sourcing the exact legal-entity details)
 - Site terms of use
 - Intellectual property
 
@@ -636,15 +618,13 @@ Style: clean, readable, Tailwind prose. Include a link back to home.
 
 #### 7b.3 - Privacy Policy page (already generated)
 
-The Step 2 bootstrap script (sub-step 10c) already generated a data-driven Privacy Policy page at `src/app/politique-de-confidentialite/page.tsx`, rendered from a subprocessors registry that each `/add-*` skill keeps up to date. **Do not create a second privacy page** (no `src/app/confidentialite/page.tsx`).
+The Step 2 bootstrap script (privacyPolicy step) already generated a data-driven Privacy Policy page at `src/app/politique-de-confidentialite/page.tsx`, rendered from a subprocessors registry that each `/add-*` skill keeps up to date. **Do not create a second privacy page** (no `src/app/confidentialite/page.tsx`).
 
 Just verify the generated page exists and renders, and make sure the footer (Step 7b.4) links to `/politique-de-confidentialite`.
 
 #### 7b.4 - Footer links
 
 Add the links to "Legal notice" and "Privacy policy" in the site footer or layout. If there is no footer yet, create a minimal one.
-
-If i18n is configured, add the page names to the message files.
 
 ### 7c - Favicon
 
@@ -654,7 +634,7 @@ The T3 starter ships a generic Next.js `favicon.ico` (the Next logo). We replace
 
 **Steps:**
 
-1. **Choose the initials.** 1 letter by default (first letter of the project name, uppercase), or 2 letters if the name is made of several words (e.g. "Mon Super Projet" → "MS", "hypervibe" → "H"). Keep it short and readable at 16x16 px.
+1. **Choose the initials.** 1 letter by default (first letter of the project name, uppercase), or 2 letters if the name is made of several words (e.g. "Mon Super Projet" → "MS", "baudrier" → "B"). Keep it short and readable at 16x16 px.
 
 2. **Choose the gradient colors.** Read `src/app/globals.css` and retrieve the project's primary / accent color (typically a CSS var `--primary`, `--accent`, or the brand color defined at bootstrap). Build a gradient from that color (from the primary color toward a slightly darker/more saturated variant, or toward a 2nd accent color if the palette has one). If no usable color is found, use an elegant neutral gradient (e.g. `#1A1410` → `#4B4036`). Choose a text color (white `#FFFFFF` or cream) that contrasts sufficiently with the background.
 
@@ -685,11 +665,11 @@ Do **not** launch the dev server nor the preview to check the rendering (see the
 
 ---
 
-## Step 8 - Final audit, commit, summary
+## Step 8 - Final audit, commit, deploy, summary
 
 ### 8a - Audit dependencies
 
-Run a security audit silently via `pnpm audit`. The preflight (Step 2) guarantees pnpm 11+, on which `pnpm audit` reaches the current `advisories/bulk` endpoint (only pnpm 10 and older hit the deprecated `/audits/quick` endpoint that 410s). `--prod` restricts the audit to production dependencies. We no longer use the old `npm install --package-lock-only` dance: npm 11 crashes (`Cannot read properties of null (reading 'matches')`) when it tries to build a lockfile for a pnpm-managed project that has a `pnpm.onlyBuiltDependencies` field in package.json.
+Run a security audit silently via `pnpm audit`. The preflight (Step 2) guarantees pnpm 11+, on which `pnpm audit` reaches the current `advisories/bulk` endpoint (only pnpm 10 and older hit the deprecated `/audits/quick` endpoint that 410s). `--prod` restricts the audit to production dependencies.
 
 ```bash
 pnpm audit --prod --json 2>&1
@@ -697,78 +677,21 @@ pnpm audit --prod --json 2>&1
 
 Analyze the JSON output (npm-audit-compatible shape: `advisories` / `metadata.vulnerabilities`). For each vulnerability found, determine if it affects a production dependency (`--prod` already excludes devDependencies).
 
-> ℹ️ If `pnpm audit` itself errors (e.g. an older pnpm slipped through and hit the 410 endpoint, or offline), don't block the bootstrap - note it and move on. The deploy in 8b is the real gate.
+> ℹ️ If `pnpm audit` itself errors (offline, or an older pnpm slipped through), don't block the bootstrap - note it and move on. The deploy in 8b is the real gate.
 
-- **Production vulnerability, critical or high**: parse the JSON output to identify the offending packages + their `fixAvailable.version`, then run `pnpm update <package>@<safe-version>` for each. Do not ask the user - just fix it.
+- **Production vulnerability, critical or high**: parse the JSON output to identify the offending packages + their `fixAvailable.version`. `pnpm update <package>@<safe-version>` only fixes a DIRECT dependency - it cannot move a transitive one (e.g. `postcss`, `sharp` pulled in by another package). For a transitive advisory, add or extend the `overrides:` block in `pnpm-workspace.yaml` (pnpm 11 reads workspace-level overrides from there, not from `package.json`), then run `pnpm install`. Do not ask the user - just fix it.
 - **Moderate or low severity**: ignore silently.
 - **If nothing needs fixing**: move on without saying anything.
 
 Only mention the audit to the user if a production vulnerability was found AND could not be fixed automatically.
 
-### 8b - Commit, push, and **final deployment verification**
+### 8b - Final deploy
 
-```bash
-git add .
-git commit -m "feat: build application + legal pages"
-git push
-```
+Read and execute the `deploy` skill (`skills/deploy/SKILL.md`) from this plugin, **targeting production directly - skip its own Step 0 ("deploy wanted at all?") and Step 1 (target) confirmations here**. This is the one documented exception to the global "never deploy without explicit consent" rule (the user already consented to the whole bootstrap, which always ends with a working, live app), so there is no need to ask again. `deploy` skill's own Step 0 already names this exception.
 
-The GitHub-to-Vercel auto-deploy was already verified at Step 2 (or repaired at Step 3). The push triggers a Vercel build - now you must **wait for the build to finish and verify that it succeeded**, otherwise a silent crash (TS error, prerender error, missing env var, etc.) slips under the radar and the user discovers the broken site in prod.
+The `deploy` skill's own script (`scripts/deploy.mjs`) commits any remaining local changes, pushes, builds and pushes the image directly (`docker build --platform linux/amd64`, starting the daemon lazily if needed - no GitHub Actions, CONTRACT.md §5), runs the (empty, at this point) migration Job, updates the container, smoke-tests the live URL, and prunes old registry images. It ends with one JSON line - parse it exactly as the `deploy` skill's own Step 4 describes.
 
-Run this block once. It polls the GitHub API until it sees a terminal state (success / failure / error), 6 min max:
-
-```bash
-SHA=$(git rev-parse HEAD)
-REPO=$(git remote get-url origin | sed 's|.*github.com[:/]||;s|\.git$||')
-
-# 1) Wait for Vercel to register the deployment for this SHA (webhook ~5-30s)
-DEPLOY_ID=""
-for i in $(seq 1 18); do
-  DEPLOY_ID=$(gh api "repos/$REPO/deployments?sha=$SHA&per_page=1" --jq '.[0].id // empty' 2>/dev/null)
-  [ -n "$DEPLOY_ID" ] && break
-  sleep 5
-done
-
-if [ -z "$DEPLOY_ID" ]; then
-  echo "RESULT=NO_DEPLOY_REGISTERED - Vercel did not register a deploy for $SHA in ~90s. The GitHub-to-Vercel integration may be broken."
-else
-  # 2) Poll the status until terminal (up to ~6 min total - a big Next.js build can take 3-4 min)
-  STATE=""
-  LOG_URL=""
-  for i in $(seq 1 72); do
-    LINE=$(gh api "repos/$REPO/deployments/$DEPLOY_ID/statuses?per_page=1" --jq '.[0] | "\(.state)|\(.log_url // "")"' 2>/dev/null)
-    STATE="${LINE%%|*}"
-    LOG_URL="${LINE#*|}"
-    case "$STATE" in
-      success)            echo "RESULT=SUCCESS"; echo "LOG_URL=$LOG_URL"; break ;;
-      failure|error)      echo "RESULT=$STATE"; echo "LOG_URL=$LOG_URL"; break ;;
-      pending|in_progress|queued|"") sleep 5 ;;
-      *)                  echo "RESULT=UNKNOWN_STATE:$STATE"; echo "LOG_URL=$LOG_URL"; break ;;
-    esac
-  done
-  if [ -z "$STATE" ]; then
-    echo "RESULT=TIMEOUT - build still running after 6 min, check manually"
-  fi
-fi
-```
-
-Decide based on `RESULT=`:
-
-- **`SUCCESS`** → ✅ Continue calmly to 8c.
-- **`failure` or `error`** → ❌ **Do NOT move on to 8c**. The prod deployment is broken. Procedure:
-  1. Read the `LOG_URL` that points to the Vercel build page - retrieve the log with:
-     ```bash
-     gh api "repos/$REPO/deployments/$DEPLOY_ID/statuses?per_page=1" --jq '.[0].target_url'
-     ```
-     Then use `vercel inspect --logs <target_url>` to read the full build logs (or `curl` the `LOG_URL` directly).
-  2. Identify the exact error (TS error, prerender error on a client page, missing env var, etc.).
-  3. Fix the cause in the code (for example: wrap `useSearchParams` in a `<Suspense>`, fix a type, add a missing env var via `_push-env-vars`).
-  4. `git add . && git commit -m "fix: <description>" && git push`
-  5. **Re-run the verification block above** on the new SHA. Loop until `SUCCESS` (max 3 iterations - beyond that ask the user how to proceed).
-- **`NO_DEPLOY_REGISTERED`** → the GitHub-to-Vercel integration is not responding. Mention in Part 2 that the user must go to https://vercel.com/integrations/github to reactivate it, and do a manual `vercel --prod` for this project as a fallback.
-- **`TIMEOUT`** → the build exceeded 6 min. Probably a heavy project. Ask the user to verify manually on the Vercel dashboard and tell you if it is ok.
-
-⚠️ **This verification step is NON-NEGOTIABLE**. A failed deployment that is not surfaced to the user is worse than a visible error: the site is broken in prod without anyone knowing. If you have not seen `RESULT=SUCCESS`, the bootstrap is not done.
+⚠️ **This verification step is NON-NEGOTIABLE**. A failed deployment that is not surfaced to the user is worse than a visible error: the site is broken in prod without anyone knowing. If the JSON line does not say `"success":true`, the bootstrap is not done - follow the `deploy` skill's own failure-diagnosis table (preflight/commitPush → fix and retry; buildPush → read the raw Docker build error in the log, fix, retry; migrate → the container was never touched, fix the migration and retry; updateContainer/smokeTest/pruneTags → safe to retry the whole thing).
 
 ### 8c - Mandatory final announcement
 
@@ -787,9 +710,9 @@ List everything that was configured during bootstrap, grouped by category. Only 
 > **Project - Summary**
 >
 > **Infrastructure:**
-> - GitHub repo (private): `https://github.com/<user>/<project-name>`
-> - Vercel deployment: `<deployment-url>`
-> - Neon database: provisioned and connected
+> - GitHub repo: `https://github.com/<user>/<project-name>`
+> - Scaleway Serverless Container (region Paris - fr-par): `<deployment-url>`
+> - Scaleway Serverless SQL database: provisioned and connected
 > (etc.)
 >
 > **Application:**
@@ -805,64 +728,20 @@ List everything that was configured during bootstrap, grouped by category. Only 
 
 #### Part 2 - Actions that ONLY the user can do
 
-⚠️ **Strict rule**: only put here actions that you cannot do yourself (CLI/API not available, OAuth validation in a browser, third-party account creation, saving a secret in a password manager, business decision). If an action can be done via a CLI or an API you master (`vercel`, `gh`, `git push`, `_push-env-vars`, `stripe`, `wrangler`, etc.), it must already have been done - and appear in Part 1, not here.
+⚠️ **Strict rule**: only put here actions that you cannot do yourself (CLI/API not available, third-party account creation, saving a secret in a password manager, business decision). If an action can be done via a CLI or an API you master (`git push`, `docker`, `_push-env-vars`, the Scaleway SDK, etc.), it must already have been done - and appear in Part 1, not here.
 
 For the actions that remain (genuinely manual), give **step-by-step** instructions. Number them in priority order. Only include what applies.
 
-**If Stripe was configured:**
-
-> **2. Understanding Stripe: local vs production, test vs live**
->
-> Stripe has two independent axes:
-> - **Test mode vs Live mode** - determined by the API keys (`sk_test_...` = test, `sk_live_...` = live). In test, no real money flows, you use the card `4242 4242 4242 4242`.
-> - **Local vs Production** - where your code runs. Locally you use `stripe listen` to receive the webhooks. In production it is a real HTTPS webhook configured at Stripe.
->
-> **What is already done:**
-> - The Stripe code is in place (client, webhook endpoint, Checkout example)
-> - The test keys are in `.env` and on Vercel
-> - `stripe listen` is ready for local dev
->
-> **What you must do:**
->
-> *a) To develop locally:*
-> - Run `stripe listen --forward-to localhost:3000/api/webhooks/stripe` in a separate terminal before testing payments
-> - The `STRIPE_WEBHOOK_SECRET` in `.env` already matches this command
->
-> *b) To enable payments in production (after the site is deployed):*
-> - Ask Claude Code: **"configure the Stripe webhook for prod on https://<domain>"**
-> - Claude Code will create the webhook via the Stripe CLI and push the secret to Vercel automatically
->
-> *c) To go live (real money) - when you are ready:*
-> - Go to https://dashboard.stripe.com/apikeys
-> - Turn off test mode (toggle at the top of the dashboard)
-> - Copy the live keys (`sk_live_...`, `pk_live_...`)
-> - Push them to Vercel to replace the test keys (ask Claude Code)
-> - Recreate the prod webhook with the live keys (ask Claude Code)
-
-**If R2 was configured:**
-
-> **3. Create the R2 API keys**
-> 1. Go to https://dash.cloudflare.com/ → R2 → Manage R2 API Tokens
-> 2. Create API Token → permissions: Object Read & Write
-> 3. Copy the Access Key ID and Secret Access Key
-> 4. Add them to `.env` (`R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`)
-> 5. Push them to Vercel: ask Claude Code
-
 **If Credentials auth was configured:**
 
-> **4. Save the prod admin password**
+> **1. Save the prod admin password**
 > The admin password for production is: `<generated password>`
 > It is stored nowhere in the code - only the hash. Note it somewhere secure (password manager).
 
-**If Resend was configured:**
+**If Email was configured:**
 
-> **5. Verify the Resend sender**
-> If you use `onboarding@resend.dev`, emails can only be sent to the account owner's address. To send to anyone, add and verify a custom domain in the Resend dashboard (Domains → Add Domain).
-
-**If GitHub-to-Vercel auto-deploy was not fixed at Step 3:**
-
-> **6. Enable the GitHub-to-Vercel auto-deploy**
-> Your future `git push`es will not deploy automatically. Go to https://vercel.com/integrations/github, authorize Vercel to access your repositories, then confirm. Once done, any `git push` will trigger a deploy.
+> **2. Verify the sender domain**
+> Scaleway Transactional Email requires the sender domain to be verified (SPF/DKIM/DMARC records) before it can send to recipients outside your own account. If this wasn't finished during the addon configuration, ask Claude Code to check the domain status and finish the DNS setup.
 
 **Always include as the last item:**
 
@@ -884,11 +763,12 @@ Adapt the content and numbering based on which options were actually selected. D
 
 ## Important rules
 
-- **You do, you do not delegate.** Anything that can be executed via a CLI or an API (vercel, gh, git, pnpm, stripe, wrangler, neonctl, `_push-env-vars`, etc.) must be executed by you, without asking the user. See the "Autonomy principle" at the top of the file. This rule overrides all others in case of conflict.
+- **You do, you do not delegate.** Anything that can be executed via a CLI or an API (git, pnpm, docker, the Scaleway SDK, `_push-env-vars`, etc.) must be executed by you, without asking the user. See the "Autonomy principle" at the top of the file. This rule overrides all others in case of conflict.
 - **Always use pnpm.** Never use npm or yarn. Use `pnpm add` to install packages, `pnpm dev` / `pnpm build` to run scripts, and `pnpm dlx` instead of `npx` when possible (except for `shadcn` which requires `npx`).
-- **Env vars always go through `_push-env-vars`** (never `vercel env add` inline). The helper handles the `.env` local update + Vercel push + idempotency + the `printf` vs `echo` pitfall in a single call.
+- **Env vars always go through `_push-env-vars`** (never edit `.env` by hand for anything that should also reach the live container). The helper handles the local `.env` update + Scaleway Secret Manager + the container's `secret_environment_variables` (resolving the container by name, never from a linkage file) + idempotency in a single call.
 - **Never commit secrets.** Always use `.env` + `.gitignore`.
 - **Stop and ask** if any CLI command fails. Do not retry blindly.
 - **Explain each step** briefly as you go, so the user knows what's happening.
-- **If a service requires manual action** (e.g., creating OAuth credentials in Google Console, generating R2 API tokens, OAuth authorization in a browser), clearly tell the user what to do and wait for confirmation before continuing.
-- **NEVER INVOKE `preview_start` DURING the bootstrap to test the app**. The Next.js preview (dev server) must only be launched AT THE VERY END, and ONLY after the user has explicitly answered "yes" to the question "Do you want me to launch the preview?" at Step 8. No "let me quickly check that it compiles by launching the preview" between 2 steps, no "let me test that the page renders well" during the bootstrap. To validate that the code works technically, use `pnpm tsc --noEmit` (typecheck) or `pnpm lint` - **never** `pnpm dev` nor `preview_start`. Launching the preview during the bootstrap steals the screen focus, occupies a port, and breaks the communication rhythm with the user (who does not expect to see their browser open on its own in the middle of the conversation).
+- **If a service requires manual action** (e.g., creating an account, generating an API token in a third-party dashboard), clearly tell the user what to do and wait for confirmation before continuing.
+- **NEVER INVOKE `preview_start` OR `pnpm dev` DURING THE BOOTSTRAP RUN itself.** This is scoped to the run, and for a mechanical reason: Step 2 through Step 8 execute as one long unattended sequence with no user turn in between, and a dev server never exits on its own - starting one mid-sequence would hang the skill waiting on a process that was never going to finish, not just steal focus or occupy a port. The preview is only launched AT THE VERY END, and ONLY after the user has explicitly answered "yes" to the question "Do you want me to launch the preview?" at Step 8. No "let me quickly check that it compiles by launching the preview" between 2 steps, no "let me test that the page renders well" during the bootstrap. During the run, validate with `pnpm tsc --noEmit` (typecheck) and `pnpm lint` - **never** `pnpm dev` nor `preview_start` - but treat these as a floor, not a substitute for actually running the app: they catch type errors and style issues only, never a runtime bug, a broken layout, or wrong data on the page. The real check happens once the user opts into the Step 8 preview, or in the normal local dev loop described below.
+- **After bootstrap, the default loop is local.** Once `🎉 BOOTSTRAP COMPLETE` has been shown, the run-scoped prohibition above no longer applies: `pnpm dev` and `http://localhost:3000` are the normal way to keep building and testing the app, and the generated project's own `CLAUDE.md` documents this loop (including the `tryDb` database-resilience helper, `src/server/db/safe.ts`, once a database is configured). A deploy is not the default next action after a later change - reserve it for when the user explicitly asks to see something live, always confirm before deploying, and steer to the local review first if production is already published (see `skills/deploy/SKILL.md`).

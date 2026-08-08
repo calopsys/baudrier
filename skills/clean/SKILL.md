@@ -1,13 +1,13 @@
 ---
 name: clean
-description: "Audit the project to find what is no longer used - orphan files, dead code, AI leftovers, unused dependencies, orphan env vars, DB tables with no caller, obsolete migrations. Produces a report with a certainty level and a danger level for each finding, then applies the validated deletions on a separate branch (code + Neon DB) for verification before merge."
-compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (vercel, gh)."
+description: "Audit the project to find what is no longer used - orphan files, dead code, AI leftovers, unused dependencies, orphan env vars, DB tables with no caller (static analysis only), obsolete migrations. Produces a report with a certainty level and a danger level for each finding, then applies the validated deletions on a separate branch (code + a preview Serverless SQL Database) for verification before merge."
+compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (gh, scw)."
 ---
 
 # Clean - Project hygiene audit
 
 ## Communication
-- Detect the user's language from their messages and ALWAYS reply in that language (default: English). This applies to every user-facing message: questions, progress, confirmations, summaries, errors.
+- Detect the user's language from their messages and ALWAYS reply in that language (default: French for this product's user base). This applies to every user-facing message: questions, progress, confirmations, summaries, errors.
 - Use plain, non-technical business language. Never expose internal script names (*.mjs) or jargon; describe actions in human terms.
 - When generating user-facing content for the scaffolded project (UI labels, emails, copy), write it in the user's language too.
 - Show progress as a short natural-language checklist (in-progress and done states).
@@ -44,9 +44,9 @@ This is the most important rule of this skill. **Everything that is technically 
 
 - Run `grep` / `find` searches in the code → you have the tool.
 - Read the content of a config file (`.env`, `package.json`, `drizzle.config.ts`) → you have the tool.
-- Look up the value of a Vercel env var → run `vercel env pull .env.vercel-check --yes` (all of them into a temp file), read the values, then `rm .env.vercel-check`.
-- Check the state of a Neon DB (tables, row counts) → helper `node "${CLAUDE_SKILL_DIR}/../../scripts/neon/run-sql.mjs" "SELECT ..."` (SQL-over-HTTP, reads `DATABASE_URL` from the `.env`). List/inspect branches → Neon REST API (`GET https://console.neon.tech/api/v2/projects/{id}/branches`, key `NEON.api_key` from the vault).
-- Verify a deployment, logs, a CLI auth → you have the CLIs (`gh`, `vercel`, `wrangler`, `render`).
+- Look up the value of a stored env var → invoke `_pull-env-vars` (reads Scaleway Secret Manager - the canonical source per CONTRACT.md §2, one value per key, no per-environment split to worry about).
+- Check which tables a Drizzle schema declares and whether the code references them → static analysis only (read `src/server/db/schema.ts`, `grep` the codebase). **You cannot query the live database from here** - CONTRACT.md §4: the operator's machine never connects to a Serverless SQL Database directly, only the migration Job does, and only from inside Scaleway's network. Never claim to have checked row counts or live table state; say plainly that this check is unavailable from the operator's machine.
+- Verify a deployment, logs, a CLI auth → you have the CLIs (`gh`, `scw`).
 - Recount a number of imports or usages - even if you already verified it in your internal scan, do not ask the user to re-type the command.
 
 **In the report, present these checks as facts**, not as homework for the user. Examples:
@@ -54,8 +54,8 @@ This is the most important rule of this skill. **Everything that is technically 
 - ❌ *"To verify before deleting: open your editor, do `Ctrl+Shift+F` on 'db.select', you should get 0 results"*
 - ✅ *"Verified: 0 occurrence of `db.select / db.insert / db.update / db.query` in `src/`."*
 
-- ❌ *"To verify: run `vercel env pull` and check whether `DATABASE_URL` is a fake localhost"*
-- ✅ *"Verified on Vercel: `DATABASE_URL` = `postgresql://placeholder:placeholder@localhost:5432/db` (fake value left by the bootstrap, never used)."*
+- ❌ *"To verify: pull the env vars and check whether `DATABASE_URL` is a fake localhost"*
+- ✅ *"Verified in Secret Manager: `DATABASE_URL` = `postgresql://placeholder:placeholder@localhost:5432/placeholder` (fake value left by the bootstrap, never used)."*
 
 ### What you MUST ask the user (you cannot know it)
 
@@ -78,7 +78,7 @@ Example of an opening checklist:
 > - ⬜ Detect dead code (exports, imports, unreferenced pages)
 > - ⬜ Spot AI leftovers (stubs, TODOs, duplicates)
 > - ⬜ List unused dependencies
-> - ⬜ Compare environment variables .env ↔ code ↔ Vercel
+> - ⬜ Compare environment variables .env ↔ code ↔ Secret Manager
 > - ⬜ Check DB tables with no caller
 > - ⬜ Check obsolete Drizzle migrations
 > - ⬜ Do a global checkup (look beyond the planned categories)
@@ -137,29 +137,28 @@ Run `pnpm dlx depcheck` (or `pnpm dlx knip --dependencies`) and capture the resu
 Compare three sources:
 1. Local `.env` (listed keys)
 2. Code: `grep -r "process\.env\." src/` → list of vars read
-3. Vercel: `vercel env ls` (if the CLI is authenticated)
+3. Scaleway Secret Manager: invoke `_pull-env-vars` (canonical stored values, CONTRACT.md §2 - one value per key, no per-environment split)
 
 Three types of findings:
-- **In .env / Vercel but NEVER read in the code** → deletion candidate. ⚠️ Moderate danger: some vars are read by deps (e.g. `NEXTAUTH_URL`, `DATABASE_URL` by Drizzle, `VERCEL_URL`, `NODE_ENV`).
-- **Read in the code but absent from .env / Vercel** → not a leftover, but a **potential bug** to flag.
-- **In local .env but not on Vercel (or the reverse)** → desynchronization to flag.
+- **In .env / Secret Manager but NEVER read in the code** → deletion candidate. ⚠️ Moderate danger: some vars are read by deps or by the platform itself rather than by application code (e.g. `AUTH_SECRET`, `DATABASE_URL` by Drizzle, `NODE_ENV`, `ACCESS_RESTRICTED`/`ACCESS_ALLOWED_IPS` by `proxy.ts`).
+- **Read in the code but absent from .env / Secret Manager** → not a leftover, but a **potential bug** to flag.
+- **In local .env but not in Secret Manager (or the reverse)** → desynchronization to flag - probably means `/rotate-secret` or a manual edit didn't get pushed both ways.
 
-### 1f - DB tables with no caller
+### 1f - DB tables with no caller (static analysis only)
 
 Read `src/server/db/schema.ts` (or equivalent), extract the table names and their exported variables. For each one, check that there is at least one `grep` that references it on the code side (`db.select().from(X)`, `db.insert(X)`, import `{ X } from "...schema"`).
+
+**This check is static only - it cannot be confirmed against live data.** CONTRACT.md §4: the operator's machine never connects to a Serverless SQL Database (`DATABASE_URL` does not exist there), only the migration Job does. There is no way from here to check whether a candidate table currently holds rows. Say this plainly in the report rather than implying a row-count was checked - see the "To verify" wording for this category below.
 
 ⚠️ The riskiest category of the report - see danger level below.
 
 ### 1g - Obsolete Drizzle migrations
 
-List the files in `drizzle/` (or `src/db/migrations/`).
-
-- If the project uses `db:push` (no versioned migrations) → no action.
-- Otherwise, flag the orphan JSON snapshots (numbers that no longer match a `.sql`) or the migrations whose content is entirely cancelled out by a later migration (added then removed the same column).
+List the files in `drizzle/` (or `src/db/migrations/`). Every Baudrier project uses versioned migrations applied by the migration Serverless Job (CONTRACT.md §1 - `drizzle-kit migrate` never runs anywhere else), so flag: orphan JSON snapshots (numbers that no longer match a `.sql`) or migrations whose content is entirely cancelled out by a later migration (added then removed the same column).
 
 ### 1g-bis - "Ready-to-use" scaffolding (to classify separately, not as leftover)
 
-**This is the most important distinction of the skill.** The Hypervibe plugin (and T3, and shadcn/ui) intentionally scaffold elements that are not used right away, but that are **ready to wire up** as soon as the user needs them. These elements:
+**This is the most important distinction of the skill.** The Baudrier plugin (and T3, and shadcn/ui) intentionally scaffold elements that are not used right away, but that are **ready to wire up** as soon as the user needs them. These elements:
 
 - are useless today in the code
 - **but** have a near-zero cost to keep
@@ -184,16 +183,16 @@ List the files in `drizzle/` (or `src/db/migrations/`).
 
 Conversely, some files look like scaffolding but are not. **T3 does not create them** - they were added manually or by an earlier Claude conversation:
 
-- `src/components/**/index.ts` (barrel re-exports): T3 and Hypervibe do not generate any. If you find one that is never imported, it is a human/AI addition that you can propose for normal deletion (🟢 low risk).
+- `src/components/**/index.ts` (barrel re-exports): T3 and Baudrier do not generate any. If you find one that is never imported, it is a human/AI addition that you can propose for normal deletion (🟢 low risk).
 - Custom React components in `src/components/<domain>/` that are never imported: not scaffolding, real dead code.
-- Utilities in `src/lib/` other than those explicitly shipped by T3 / Hypervibe (`cn.ts`, `utils.ts` from shadcn): same, verify the origin before deciding.
+- Utilities in `src/lib/` other than those explicitly shipped by T3 / Baudrier (`cn.ts`, `utils.ts` from shadcn): same, verify the origin before deciding.
 
 #### How to recognize "ready-to-use scaffolding" rather than dead code
 
 Three signals that help you decide:
 
 1. **The element has a visible placeholder** (fake DATABASE_URL, "replace with your …" comment) → scaffolding.
-2. **The element is part of a standard T3 / shadcn / Hypervibe pattern** → scaffolding.
+2. **The element is part of a standard T3 / shadcn / Baudrier pattern** → scaffolding.
 3. **Deleting the element would amount to removing a capability** (not just a line of code) → scaffolding.
 
 If all three are false → it is real dead code and you put it in category 1b.
@@ -234,7 +233,7 @@ Examples of possible findings (non-exhaustive list, for inspiration):
 - **Commented-out code** left "just in case" for several commits (visible via `grep -r "^\s*//" src/` and by looking at the big blocks).
 - **Empty or near-empty files**: `.ts`/`.tsx` of fewer than 10 lines with no useful export.
 - **Tests referencing deleted code**: a `.test.ts` whose tested file no longer exists.
-- **Docker / Kubernetes / Heroku config** if the project is now on Vercel and those files no longer run.
+- **Leftover config from a different hosting target** (a Netlify config, a Heroku `Procfile`, any other platform-specific deploy file...) - the project deploys as a container on Scaleway Serverless Containers (CONTRACT.md §1), so anything scaffolded for another platform never runs and is a safe deletion candidate. The project's own `Dockerfile` is NOT a leftover - it is exactly how the image is built here, never propose it for deletion. The harness builds and pushes that image directly (no GitHub Actions anywhere in the pipeline, CONTRACT.md §5) - a `.github/workflows/build.yml` left over from an older scaffold is dead weight, not a live deploy path; flag it as a safe deletion candidate rather than protecting it. The dispatch-only `.github/workflows/clean-merged-branches.yml` maintenance workflow is NOT a leftover - the harness scaffolds it deliberately (a session cannot delete a remote branch itself, CONTRACT.md §5); never propose it for deletion.
 - **README.md** that documents steps or features that no longer exist in the code.
 - **`shadcn/ui` components generated but never used** in `src/components/ui/` (they are committed as is - we can remove the ones that serve no purpose).
 - **Historical seeds / setup scripts** that reference tables or columns that no longer exist in the schema.
@@ -303,8 +302,8 @@ Example render (excerpt) for a non-technical user:
 | Component duplicate (`X2.tsx`) | 🟡 Medium | 🟡 Medium (which of the two is used?) |
 | Forgotten console.log | 🟡 Medium | 🟢 Low (but sometimes intentional in dev) |
 | `depcheck` dependency | 🟡 Medium | 🟢 Low (reinstallable, the lockfile keeps a trace) |
-| Env var in .env never read in the code | 🟡 Medium | 🔴 **High** (a transitive dep may read it, e.g. NEXTAUTH_URL) |
-| DB table with no caller | 🔴 Low | 🔴 **Very high** - never delete without a backup + human validation |
+| Env var in .env never read in the code | 🟡 Medium | 🔴 **High** (the platform itself may read it, e.g. `ACCESS_RESTRICTED`, `AUTH_SECRET`) |
+| DB table with no caller | 🔴 Low (static analysis only - row count cannot be checked from here) | 🔴 **Very high** - never delete without a backup + human validation on a preview database |
 | Old Drizzle migration already applied | 🟢 High | 🟡 Medium (useless, but breaks nothing if left) |
 | Asset in `/public/` not referenced | 🟡 Medium | 🟡 Medium (may be used in an email / external document) |
 | Unreferenced i18n key | 🟢 High | 🟢 Low (will show the raw key if called) |
@@ -363,6 +362,8 @@ Ask the user to **validate category by category** (not all at once), in **increa
 
 **For 🔴 categories, NEVER propose a bulk action.** Item by item, with the checks to do explicitly cited.
 
+**DB tables are report-only by default - a stricter rule than every other category.** Validating a DB table finding in this step means "yes, I agree this table looks unused" - it does **not** mean "go ahead and generate/apply a migration that drops it." Do not chain straight into Step 4b for the database category the way you do for every other category. Present the exact table name, the schema snippet, and the `DROP TABLE`-equivalent Drizzle change you would make, then stop and explicitly ask a separate question: *"Do you want me to actually prepare and test this table removal (as a migration on an isolated preview database, never touching production directly), or do you just want this noted so you can act on it yourself later?"* Only proceed to 4b for that specific table if the user says yes to that second, distinct question. This is on top of, not instead of, the per-item validation above - never treat "I approve the finding" and "go ahead and drop it" as the same answer for this category.
+
 ---
 
 ## Step 4 - Separate branch proposal
@@ -377,7 +378,7 @@ git checkout -b cleanup/YYYY-MM-DD
 
 (Name: `cleanup/YYYY-MM-DD` or `cleanup/YYYY-MM-DD-HHMM` if there are several sessions in one day.)
 
-All the deletions (files, code, deps, env vars) happen on this branch. One commit per category to be able to roll back finely:
+All the deletions (files, code, deps, env var **code references**) happen on this branch. One commit per category to be able to roll back finely:
 
 - `cleanup: remove orphan backup files`
 - `cleanup: remove unused exports`
@@ -386,16 +387,18 @@ All the deletions (files, code, deps, env vars) happen on this branch. One commi
 - `cleanup: prune env vars` (⚠️ test very carefully)
 - etc.
 
-### 4b - Neon DB branch
+**"Prune env vars" means removing the now-dead code references and `.env.example` entries only - it is a normal, git-reversible source-code edit.** It never means calling Secret Manager's `deleteSecret` on the live secret. Removing the actual secret from Scaleway Secret Manager is out of scope for `/clean` entirely: mention it as something the user can do themselves afterwards (e.g. via `/rotate-secret` or the Scaleway console) once they've confirmed on the preview deployment that nothing needs it - never do it as part of this skill's own flow.
 
-If some changes touch the database (deletion of tables, columns, migrations):
+### 4b - Preview database (only if the user explicitly asked for the DB table removal to be prepared, see Step 3)
 
-1. Create a **Neon branch** from `main` via the Neon REST API (`POST https://console.neon.tech/api/v2/projects/{id}/branches`, key `NEON.api_key` from the vault) or `neonctl branches create`
-   - Name: `cleanup-YYYY-MM-DD`
-2. Get its `connection_string`
-3. Add it to Vercel in the **Preview** environment only (not Production), as `DATABASE_URL` for the previews of the `cleanup/*` branch. Or simply replace `DATABASE_URL` in the `.env.local` during the verification phase.
-4. Apply the cleaned schema on this Neon branch (via `pnpm db:push` or the Drizzle migration)
-5. Production stays intact during the whole verification phase
+**Do not run this section as an automatic continuation of Step 3.** It only starts if the user answered yes to the separate "do you want me to actually prepare and test this" question for a specific table (Step 3). If they only wanted the finding noted, stop at the report - do not generate a migration, do not touch any database, not even a preview one.
+
+When the user has explicitly asked for it:
+
+1. Generate the Drizzle migration locally (`drizzle-kit generate` - writes SQL files, no DB connection needed, CONTRACT.md §4) and commit it on the `cleanup/*` branch.
+2. Push the branch and run `/deploy`, choosing **preview** when asked. Per CONTRACT.md §5, any non-`main` branch automatically gets its **own preview container and its own preview Serverless SQL Database** - there is nothing to provision by hand, and production is never touched by this.
+3. `/deploy` runs the migration on that preview database via the migration Serverless Job (the only place `drizzle-kit migrate` ever runs, CONTRACT.md §1) - this is also the only way to actually verify a table is safe to drop: inspect the preview database's state (e.g. via `psql`/Drizzle Studio pointed at the preview `DATABASE_URL_PREVIEW_*` secret, from a machine that has network access to it) rather than guessing from static analysis.
+4. Production stays completely intact during the whole verification phase - it wasn't touched by anything in this step, and won't be until the user separately confirms the merge in 4d.
 
 ### 4c - Test plan to give the user
 
@@ -408,21 +411,23 @@ To verify before merging cleanup/YYYY-MM-DD:
 ☐ pnpm lint → OK
 ☐ pnpm build → OK (no "module not found" warning)
 ☐ Dev server (pnpm dev) starts without error
-☐ Vercel preview: open the URL and click on every main section
+☐ Preview deployment: open the preview container's URL and click on every main section
+   (remember it's IP-restricted by default like every Baudrier app - CONTRACT.md §6 - so
+   test from a machine that passes the gate, or from one that's on the allowlist)
 ☐ Deleted pages: test that they indeed return 404 and not a 500 (and check that no link on the site points to them)
-☐ Deleted API routes: if external services call them (Stripe webhooks, Vercel cron, mobile app), test them
-☐ Deleted env vars: re-read the Vercel Preview logs looking for "undefined" or "missing"
-☐ Deleted DB tables: open Drizzle Studio on the cleanup Neon branch and check that the app works
+☐ Deleted API routes: if anything external calls them (a cron Job, a webhook, a mobile app), test it
+☐ Deleted env vars: check the preview container's logs (Cockpit, via `/costs`-adjacent tooling or `scripts/scaleway/cockpit.mjs`) for "undefined" or "missing"
+☐ Deleted DB tables: inspect the preview database directly and confirm the app still works end to end
 ```
 
 ### 4d - Merge
 
 When the user confirms that everything works:
 
-1. PR → merge onto `main` (→ Vercel redeploys to prod)
-2. Apply the schema changes on the **Neon main branch** (via `pnpm db:push` pointed at prod)
-3. Delete the cleanup Git branch: `git branch -d cleanup/YYYY-MM-DD`
-4. Delete the cleanup Neon branch: REST API (`DELETE https://console.neon.tech/api/v2/projects/{id}/branches/{branch_id}`) or `neonctl branches delete cleanup-YYYY-MM-DD`
+1. PR → merge onto `main`.
+2. Run `/deploy`, choosing **production** this time - the migration Job applies the same, already-verified migration to the production database (never a raw `db:push`, CONTRACT.md §1 forbids running migrations anywhere but this Job).
+3. Delete the cleanup Git branch: `git branch -d cleanup/YYYY-MM-DD`.
+4. The preview container and preview database created in 4b are cleaned up the normal way a preview branch is retired (ask the user, or point them at the relevant infra skill) - they don't linger on their own, but nothing here deletes them automatically as a side effect of merging.
 
 ---
 
@@ -431,8 +436,8 @@ When the user confirms that everything works:
 1. **The report first, the deletions after.** Never a silent deletion.
 2. **Certainty + danger on EVERY item.** No "we can clearly see it is safe" category - it is up to the user to decide, with both pieces of info in hand.
 3. **Order of presentation: safe first.** The user enters the skill with quick, validated deletions, then tackles the risky things with a clear head.
-4. **Everything on a separate branch.** Git AND Neon. Production does not move until the user has tested.
-5. **Never `git push --force`** nor `drop table` without double validation.
+4. **Everything on a separate branch, database included.** Git AND (only if the user explicitly asked, on top of validating the finding, per Step 3) a preview Serverless SQL Database via the normal `/deploy` preview flow. Production does not move until the user has tested and separately confirmed the merge.
+5. **Never `git push --force`**, and never generate or apply a DB-dropping migration - not even against a preview database - without the extra, explicit confirmation described in Step 3. Validating the finding is not the same as authorizing the migration.
 6. **Always offer the exit door.** After each category: *"Do you want to continue with the next one, or do we stop here?"*
 
 ---
@@ -441,9 +446,9 @@ When the user confirms that everything works:
 
 Even if the user validates, **refuse** and ask for a second confirmation if:
 
-- The item is a DB table with rows (`SELECT COUNT(*) > 0`)
-- The item is an API route whose name suggests a webhook (`/api/webhooks/*`, `/api/stripe/*`, `/api/cron/*`)
-- The item is an env var whose name matches a pattern known to be read by a dep (`NEXTAUTH_*`, `AUTH_*`, `VERCEL_*`, `NODE_*`, `NEXT_PUBLIC_*`)
+- The item is a DB table - row count cannot be checked from the operator's machine (CONTRACT.md §4), so treat every candidate table as if it might hold rows until it has been verified on a preview database (see Step 4b)
+- The item is an API route whose name suggests a webhook or a scheduled call (`/api/webhooks/*`, `/api/cron/*`)
+- The item is an env var whose name matches a pattern known to be read by the platform itself (`AUTH_*`, `ACCESS_*`, `NODE_*`, `NEXT_PUBLIC_*`)
 - The number of deletions in a 🔴 category exceeds 5 in a single batch
 
 Phrase it: *"You validated N risky elements at once. I prefer that we do them one by one so you have time to review. OK?"*

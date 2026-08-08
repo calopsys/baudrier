@@ -2,7 +2,7 @@
 name: add-pwa
 description: Turns a Next.js app into an installable PWA (Progressive Web App) on mobile and desktop. Adds the manifest, a service worker (Serwist) with a minimal offline cache, icons generated from the project favicon, the iOS meta tags, and a small window inviting the user to install the app (native Android prompt, "Add to Home Screen" instructions on iOS). Prerequisite for /add-push-notification. Can be called by /bootstrap or standalone.
 argument-hint: ""
-compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (vercel, gh)."
+compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (scw, gh)."
 ---
 
 # Add PWA: installable app (Serwist)
@@ -19,10 +19,10 @@ You turn the current project's Next.js app into a **PWA**: installable on the ho
 
 ## Step 0: Re-run? (idempotence)
 
-Detect whether the PWA is already in place: the `hypervibe:pwa` marker at the top of `<WEB_DIR>/src/app/manifest.ts`.
+Detect whether the PWA is already in place: the `baudrier:pwa` marker at the top of `<WEB_DIR>/src/app/manifest.ts`.
 
 ```bash
-test -f "<WEB_DIR>/src/app/manifest.ts" && grep -q "hypervibe:pwa" "<WEB_DIR>/src/app/manifest.ts" && echo present || echo absent
+test -f "<WEB_DIR>/src/app/manifest.ts" && grep -q "baudrier:pwa" "<WEB_DIR>/src/app/manifest.ts" && echo present || echo absent
 ```
 
 - **absent** → initial installation, continue to Step 1.
@@ -59,8 +59,8 @@ pnpm add -D sharp
    - `__APP_NAME__` / `__SHORT_NAME__`: from the project's `CLAUDE.md` or `package.json`. Keep the short name short (12 chars max, display constraint under the icon).
    - `__APP_DESCRIPTION__`: one sentence.
    - `__THEME_COLOR__` / `__BG_COLOR__`: read the background and accent color from `globals.css` (palette variables). The `theme_color` colors the status bar once installed.
-   - `__LANG__`: the project's default locale (`fr` usually; read `i18n/routing.ts` if i18n).
-3. **Do NOT remove** the `// hypervibe:pwa` comment (it is the marker that `/add-push-notification` detects).
+   - `__LANG__`: `fr` (the app is French-only).
+3. **Do NOT remove** the `// baudrier:pwa` comment (it is the marker that `/add-push-notification` detects).
 
 ---
 
@@ -68,7 +68,7 @@ pnpm add -D sharp
 
 ### 4a. Service worker
 
-1. Copy `templates/pwa/sw-base.ts` to `<WEB_DIR>/src/app/sw.ts` (minimal offline cache: NetworkFirst, fresh content as soon as there is network, offline fallback otherwise). Keep the `// hypervibe:push-handlers` marker (insertion point for `/add-push-notification`).
+1. Copy `templates/pwa/sw-base.ts` to `<WEB_DIR>/src/app/sw.ts` (minimal offline cache: NetworkFirst, fresh content as soon as there is network, offline fallback otherwise). Keep the `// baudrier:push-handlers` marker (insertion point for `/add-push-notification`).
 2. Wrap the Next config with Serwist. Read `<WEB_DIR>/next.config.*` and add at the top:
    ```ts
    import withSerwistInit from "@serwist/next";
@@ -107,8 +107,8 @@ cd "<WEB_DIR>" && node "${CLAUDE_SKILL_DIR}/../../scripts/generate-pwa-icons.mjs
 
 1. Copy `templates/pwa/ios-share-icon.tsx` and `templates/pwa/install-prompt.tsx` to `<WEB_DIR>/src/components/`.
 2. In `install-prompt.tsx`: replace `__APP_NAME__` and `__LOGO_LETTER__` (project initial), and adapt the color classes (`bg-foreground`/`bg-background`/`border-border`) to the actual palette if the tokens differ (read `globals.css`).
-3. Mount `<InstallPrompt />` in the **root layout** (`<WEB_DIR>/src/app/layout.tsx`, or `[locale]/layout.tsx` if i18n), just before `</body>`.
-4. iOS meta in the root layout's `metadata` / `viewport` (Next 15):
+3. Mount `<InstallPrompt />` in the **root layout** (`<WEB_DIR>/src/app/layout.tsx`), just before `</body>`.
+4. iOS meta in the root layout's `metadata` / `viewport` (Next 16):
    ```ts
    export const metadata: Metadata = {
      // ...existant...

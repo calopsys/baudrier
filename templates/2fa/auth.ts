@@ -12,7 +12,7 @@ declare module "next-auth" {
   }
 }
 
-// hypervibe:auth-modes admin
+// baudrier:auth-modes admin
 export const { auth, handlers, signIn, signOut } = NextAuth({
   // Session courte (filet de sécurité). La déconnexion après inactivité est
   // gérée côté client (composant IdleTimeout).
@@ -23,8 +23,8 @@ export const { auth, handlers, signIn, signOut } = NextAuth({
         username: { label: "Username", type: "text" },
         // `proof` est une preuve signée par le serveur (HMAC AUTH_SECRET),
         // émise par loginAction APRÈS vérification du mot de passe + du 2FA.
-        // NextAuth ne re-vérifie donc pas le mot de passe ici : c'est la
-        // server action qui est l'unique porte d'entrée de la connexion.
+        // NextAuth ne re-vérifie donc pas le mot de passe ici : c’est la
+        // server action qui est l’unique porte d’entrée de la connexion.
         proof: { label: "Proof", type: "text" },
       },
       async authorize(credentials) {
@@ -35,7 +35,7 @@ export const { auth, handlers, signIn, signOut } = NextAuth({
         const expectedUsername = process.env.ADMIN_USERNAME ?? "admin";
         if (username !== expectedUsername) return null;
 
-        if (!verifyLoginProof(username, proof)) return null;
+        if (!(await verifyLoginProof(username, proof))) return null;
 
         return { id: "admin", name: "Admin" };
       },

@@ -1,7 +1,7 @@
 ---
 name: security
 description: Audit the security of a Next.js/T3 project. Checks for exposed secrets, unprotected routes, input validation, dependency vulnerabilities, headers, CORS, and common web security issues. Use when the user wants to verify their app is safe before going live.
-compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (vercel, gh)."
+compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, gh, and scw."
 ---
 
 # Security - Security audit
@@ -9,7 +9,7 @@ compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; 
 You audit the security of the project and propose concrete fixes. You explain each problem simply, without scaring the user unnecessarily.
 
 ## Communication
-- Detect the user's language from their messages and ALWAYS reply in that language (default: English). This applies to every user-facing message: questions, progress, confirmations, summaries, errors.
+- Detect the user's language from their messages and ALWAYS reply in that language (default: French for this product's user base). This applies to every user-facing message: questions, progress, confirmations, summaries, errors.
 - Use plain, non-technical business language. Never expose internal script names (*.mjs) or jargon; describe actions in human terms.
 - When generating user-facing content for the scaffolded project (UI labels, emails, copy), write it in the user's language too.
 - Show progress as a short natural-language checklist (in-progress and done states).
@@ -59,7 +59,7 @@ Analyze the project and check each point. For each point, indicate:
 
 ### 1a - Secrets and environment variables
 
-- **Secrets in the source code**: search for API keys, tokens, passwords hardcoded in the `.ts`, `.tsx`, `.js` files. Look for patterns: `sk_live_`, `re_`, `whsec_`, `ghp_`, `Bearer `, `password`, `secret`, `apiKey` followed by a hardcoded value.
+- **Secrets in the source code**: search for API keys, tokens, passwords hardcoded in the `.ts`, `.tsx`, `.js` files. Look for patterns: `ghp_` (GitHub token), `postgres://` with embedded credentials (a hardcoded `DATABASE_URL`), `Bearer `, `password`, `secret`, `apiKey` followed by a hardcoded value. Scaleway IAM keys have no distinctive prefix (they're UUID-shaped) - for those, grep for the env var NAME followed by a literal string assignment (e.g. `SCW_SECRET_KEY = "` or `STORAGE_SECRET_KEY: "`) rather than a value pattern.
 - **.env file present and complete**: verify that secrets are in `.env` and not in the code.
 - **.gitignore file**: verify it contains `.env`, `.env.local`, `.env.production`, `node_modules/`, `.next/`.
 - **.env file committed to Git**: check with `git log --all --diff-filter=A -- .env .env.local .env.production` whether a .env file has ever been committed (even if it was deleted afterward, the secrets are in the history).
@@ -95,7 +95,7 @@ Check in `next.config.js` or the middleware whether the following headers are co
 - **X-Content-Type-Options: nosniff**: prevents MIME sniffing
 - **X-Frame-Options: DENY** or **SAMEORIGIN**: protection against clickjacking
 - **Referrer-Policy: strict-origin-when-cross-origin**: controls the info sent to the referrer
-- **Content-Security-Policy**: controls the allowed script/style sources (at minimum, check whether a CSP exists)
+- **Content-Security-Policy**: `/bootstrap` now ships one by default (`templates/deploy/next.config.js` / `setup-security.mjs`) - an enforced `frame-ancestors 'none'` plus a `Content-Security-Policy-Report-Only` starter covering the rest. Check that it's still present, and if an addon that loads a third-party script (Matomo, Web Push) was added since, verify its origin was appended to the Report-Only policy's `script-src`/`connect-src` (see `skills/add-analytics/SKILL.md`) before anyone promotes it to enforced.
 - **X-XSS-Protection**: deprecated header - it should NOT be present (browsers ignore it, and on old browsers it could even introduce flaws). If found, flag it and remove it; modern XSS protection comes from the CSP.
 
 ### 1f - CORS (Cross-Origin Resource Sharing)
@@ -121,15 +121,42 @@ Three things this sequence gets right, keep them:
 
 **Reading the result:**
 - `npm audit` **exits non-zero when it finds vulnerabilities**. That is a successful audit, not an error. Judge success on the output being JSON with a `metadata.vulnerabilities` object.
-- **If no valid JSON comes back, the audit failed.** Report it as an explicit line in the final report (`Dependencies: not audited - <reason>`) and move on. Do **not** improvise a fallback: the ad-hoc retries invented here have written to `/tmp`, which does not exist on Windows. If you really need a scratch file, use the session scratchpad directory, never `/tmp`.
+- **If no valid JSON comes back, the audit failed.** Report it as an explicit line in the final report (`Dependencies: not audited - <reason>`) and move on. Do **not** improvise a fallback: if you really need a scratch file, a session-scoped file under `/tmp` is the sanctioned cache on Claude Code web (CONTRACT.md §7) - nothing is meant to survive past the session anyway.
 
 - Parse the returned JSON, flag the critical and high vulnerabilities in prod (devDeps already excluded by `--omit=dev`).
 - Propose `pnpm update <pkg>@<safe-version>` for each vulnerable package (read `fixAvailable.version` in the JSON output).
 - **Next.js itself**: check the installed `next` version explicitly (it appears in the audit output like any package, but treat it as its own finding). Pay special attention to the middleware authorization bypass class of CVEs (e.g. CVE-2025-29927: a spoofed internal header let attackers skip middleware auth checks entirely). If `next` is affected by a critical advisory, upgrading it is a 🔴, not a ⚠️.
 
+**Named-advisory sweep.** `npm audit` only knows what the GitHub Advisory Database
+already holds. A supply-chain advisory (a poisoned publish, a worm) is public hours
+before it is indexed there, so when the user names one, sweep the lockfiles by hand
+instead of trusting the audit:
+
+```bash
+PKGS='keyv|flat-cache|file-entry-cache|cacheable|cache-manager|ecto'
+grep -nE "$PKGS" pnpm-lock.yaml package-lock.json 2>/dev/null
+```
+
+Replace `PKGS` with the package names the advisory lists. Two traps:
+
+- **Match the substring, not `"name"`.** A lockfile key reads
+  `"node_modules/keyv"`, so a `"keyv"` pattern with a leading quote silently
+  misses every hit and reports a clean tree.
+- **A hit is not a compromise.** Compare the resolved version against the
+  advisory's exact version list. Report the version you found, never the name alone.
+
+Then check the host for the advisory's own indicators (dropper file names,
+persistence units, exfiltration domains) and the repo for unexpected commit authors
+and workflow files. Report `Dependencies: not affected by <advisory>` with the
+package count you swept, so the result is auditable.
+
+The generated project's own guard is `minimumReleaseAge` in `pnpm-workspace.yaml`
+(CONTRACT.md §1). Verify it is still there and still 4320: a `pnpm add` that
+removes it re-opens the same-day install window.
+
 ### 1h - Rate limiting and abuse protection
 
-- **Public API routes**: check whether rate limiting is in place (via middleware or a service like Vercel Edge).
+- **Public API routes**: check whether rate limiting is in place (via `rateLimitedProcedure`, see `src/lib/rate-limit.ts`, or custom middleware logic).
 - **Forms**: check for the presence of anti-spam protection (honeypot, rate limiting, or captcha).
 - **Authentication**: check for protection against brute force (rate limit on login, delay after X attempts).
 
@@ -147,15 +174,26 @@ Three things this sequence gets right, keep them:
 
 ### 1k - Webhooks and third-party callbacks
 
-- **Signature verification**: every webhook endpoint (`/api/webhooks/*` or any route a third-party service calls) must verify the provider's signature BEFORE processing the payload. Stripe: `stripe.webhooks.constructEvent(rawBody, signature, STRIPE_WEBHOOK_SECRET)` - flag any handler that parses the body without it. Same principle for Brevo, GitHub, etc. Consequence if missing: anyone who finds the URL can forge a "payment succeeded" event and get the product for free.
-- **Raw body**: verify the signature is computed on the raw request body (not a re-serialized JSON), otherwise verification breaks or, worse, gets removed "because it didn't work".
-- **Idempotency**: check that replaying the same webhook event twice does not duplicate side effects (double order, double email). Providers DO redeliver events.
+- **Signature verification**: every webhook endpoint (`/api/webhooks/*`, `/api/cron/*`, or any route a third-party service calls into) must verify the caller before processing the payload. For a GitHub webhook: verify the `X-Hub-Signature-256` HMAC against the configured secret - flag any handler that parses the body without it. For `/api/cron/*`, verify the `CRON_SECRET` shared secret (CONTRACT.md §2) is checked on every request, not just logged. Consequence if missing: anyone who finds the URL can trigger the endpoint's side effects for free, at will.
+- **Raw body**: if a signature is computed on the request body, verify it uses the raw body (not a re-serialized JSON), otherwise verification breaks or, worse, gets removed "because it didn't work".
+- **Idempotency**: check that replaying the same webhook/cron call twice does not duplicate side effects (double email, double DB write). Providers and schedulers DO redeliver/re-trigger.
+- This product ships with no payment processor by default, so there is typically no payment webhook to check - if the project doesn't call into any third party that sends callbacks, mark this point ✅ with "not applicable".
 
 ### 1l - SSRF (Server-Side Request Forgery - tricking YOUR server into making requests for an attacker)
 
 - Look for any server-side `fetch`/HTTP call whose URL comes, even partially, from user input: a form field, a query param, a value stored in DB that users can write (avatar URL, webhook URL, RSS feed...).
 - If found, verify the URL is validated against an allowlist: `https` only, expected hosts only, and never internal addresses (`localhost`, `127.0.0.1`, `10.x`, `192.168.x`, `169.254.169.254`...). Consequence if not: an attacker can make your server call internal services or the cloud provider's metadata endpoint, and exfiltrate credentials from inside.
 - If the project has no such call (common for a simple site), mark the point ✅ with "not applicable".
+
+### 1m - IP access gate (`proxy.ts`)
+
+Every app ships IP-restricted by default (`src/proxy.ts`, CONTRACT.md §6). Check it, and describe it **accurately** - this is the single point where over- or under-stating security matters most:
+
+- **What it actually is**: an application-layer check. `proxy.ts` reads `X-Forwarded-For`, takes the first entry, and compares it against `ACCESS_ALLOWED_IPS`. **It is not a network firewall** - Scaleway Serverless Containers have no network-level IP filtering. DNS still resolves and TLS still completes for anyone; only the HTTP response (403) is gated. Never describe it to the user as "your site is only reachable from the VPN" - say "requests from outside the allowlist get a 403, but the platform itself has no network-level block."
+- **Spoof-resistance is unverified on this product**: whether Scaleway's edge reliably sets/overwrites `X-Forwarded-For` (so a client can't simply forge it) has not been independently confirmed. Report this as a known unknown, not as a settled fact in either direction - do not claim the gate is trivially bypassable, and do not claim it's airtight.
+- **Required exemptions**: verify `proxy.ts` always lets through `/.well-known/acme-challenge/*` and the health-check path, regardless of `ACCESS_RESTRICTED`. Missing the ACME exemption makes a custom domain's TLS setup permanently fail (CONTRACT.md §1's 3-minute HTTP-01 window); missing the health-check exemption kills all traffic, including from allowed IPs, because Scaleway's probe doesn't originate from the VPN.
+- **`ACCESS_RESTRICTED=false` without a matching `/publish` in the conversation history or `CLAUDE.md`**: if `.env` (or the project's known state) shows `ACCESS_RESTRICTED=false` but you find no record of `/publish` having been run deliberately, flag it ⚠️ - the gate may have been disabled unintentionally (e.g. hand-edited, or left over from a previous state). Note explicitly that this is inferred from the evidence at hand, not certain - `/publish` does not currently leave a durable marker in `CLAUDE.md`, so absence of evidence is not proof it was never run; say so rather than asserting it as fact.
+- If everything above checks out, mark ✅ but keep the "application-layer, not a firewall" framing in the final report - never let it read as "you have a firewall."
 
 ---
 
@@ -188,7 +226,7 @@ Ask the user:
 If yes, fix in this order of priority:
 1. **Exposed secrets** → move them into `.env`, check `.gitignore`. If a `.env` was committed in the past, remove it from the git history and **regenerate all the affected keys** (the history remains accessible).
 2. **Unprotected routes and IDOR** → add the auth checks (`protectedProcedure` or session check) AND the ownership filters (`where userId = session.user.id`) on every procedure that accesses a record by id.
-3. **Unverified webhooks** → add the provider signature verification (Stripe `constructEvent` on the raw body, etc.) before any payload processing.
+3. **Unverified webhooks** → add signature/secret verification (GitHub HMAC, `CRON_SECRET` check, etc.) before any payload processing.
 4. **Missing input validation** → add the server-side Zod schemas. If an SSRF was found (1l), add the URL allowlist validation here too.
 5. **Missing security headers** → run `node "${CLAUDE_SKILL_DIR}/../../scripts/setup-security.mjs"` (idempotent: injects the headers into the EXISTING next.config without regenerating it - wrapped configs like next-intl and custom options survive - + console.log isDev guard + rate-limit.ts + rateLimitedProcedure if not already in place; also removes the deprecated X-XSS-Protection header if present). Two follow-ups after running it:
    - If the script reports a ⚠️ saying it could not inject (custom `headers()` already present, or config object not found), apply the `securityHeaders` block manually in `next.config` by merging it with what exists.
