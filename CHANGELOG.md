@@ -1,5 +1,67 @@
 # Changelog
 
+## v1.2.0 (2026-08-10)
+
+Splits the operator's Scaleway key into two explicit shapes instead of one
+key that could drift through several states. Removes the delegation
+machinery that used to bridge between them.
+
+### Added
+
+- **`operatorKeyAsAppCredential()`, the one chokepoint allowed to turn the
+  environment key into an application credential.** It lives in
+  `scripts/scaleway/app-credentials.mjs` (renamed from `dev-credentials.mjs`).
+  It probes the key's own rights first and fails closed: it refuses any key
+  that shows organization reach, and it refuses when the probe itself cannot
+  decide. A successful probe confirms the key is Cas B (below); nothing else
+  in the harness may perform this conversion.
+
+### Changed
+
+- **Two explicit credential shapes replace the old delegation ladder.**
+  Cas A: the cloud environment's key belongs to an organization admin.
+  `/bootstrap` creates the Project and mints one scoped IAM application plus
+  key per service connection (database, Object Storage, Generative APIs,
+  Transactional Email); the environment key never reaches the running app.
+  Cas B: the key is a single IAM application scoped to one Project, created
+  by the admin ahead of time (`docs/ADMIN-SCALEWAY.md`). The harness mints
+  nothing; that same key serves every connection, permanently, before and
+  after `/publish`. One key, one application, one cloud environment, one app.
+- **`/publish` now does one thing: it removes the IP restriction.** The old
+  gate that blocked publishing until every secret left the operator's
+  personal key is gone, because the personal-key fallback it guarded no
+  longer exists.
+- **`docs/ADMIN-SCALEWAY.md` collapses six recipes into one.** The admin
+  creates the Project, creates one IAM application scoped to it, attaches
+  one policy carrying the service permission set, issues a non-expiring key,
+  and hands the collaborator the key pair plus the Project id. That one
+  recipe replaces the separate database, IA, emails, stockage and
+  clé-applicative recipes.
+- **`BillingReadOnly` leaves the Cas B permission set.** It is
+  organization-scoped, and a Cas B key now reaches the running container -
+  Cas A's environment key never does. `/costs` can no longer show the
+  Scaleway spend figure for a Cas B app; it still shows Transactional Email
+  consumption.
+- **A Cas B key issued under the old admin guide will be refused.** It
+  carries `BillingReadOnly`, which the new chokepoint reads as organization
+  reach and rejects, fail-closed. An administrator who set up a collaborator
+  before this release must re-issue that key without `BillingReadOnly`,
+  following the single recipe in `docs/ADMIN-SCALEWAY.md`.
+
+### Removed
+
+- **`BAUDRIER_APP_KEY` and the adoption flow that consumed it.** There is no
+  more "delegated" per-app state to migrate into: a cloud environment is
+  Cas A or Cas B from its first session onward.
+- **`BAUDRIER_SCW_PROJECTS_IDS`.** A Cas B key now names its one Project
+  through `SCW_DEFAULT_PROJECT_ID` alone, mandatory for that shape since a
+  Project-scoped key cannot list Projects. One cloud environment now serves
+  exactly one app under Cas B; the per-app map is gone with it.
+- **The dev-backed fingerprint tracking and `BAUDRIER_DEV_FINGERPRINTS`.** An
+  operator's key is now always fully Cas A or fully Cas B; there is no
+  middle state where a restricted app runs partly on the operator's own
+  personal key, so there is nothing left to track.
+
 ## v1.1.0 (2026-08-10)
 
 Retires `/start`. `/bootstrap` is now the only documented entry point, and it

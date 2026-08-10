@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-// check-scw-permissions.mjs - read-only probe for the two IAM permission
-// sets the preflight's continuous per-app provisioning depends on: ProjectManager
-// and IAMManager (CONTRACT.md §1). Re-runnable after an admin grants access.
-// Advisory only: on a detected gap it recommends BAUDRIER_SCW_PROJECTS_IDS
-// (several apps in one cloud environment) or SCW_DEFAULT_PROJECT_ID (one app)
-// as the workaround, it does not set either itself.
+// check-scw-permissions.mjs - read-only probe for the three organization-scoped
+// permission sets the harness cares about: ProjectManager, IAMManager, and
+// BillingReadOnly (CONTRACT.md §1, §1's IAM permission-set table). Re-runnable
+// after an admin grants access.
+// Advisory only: on a detected gap it recommends SCW_DEFAULT_PROJECT_ID as
+// the workaround, it does not set it itself.
 //
 // A 403 on a probe is a hard "missing" signal. A 200 is NOT proof of create
 // rights - read-only permission sets exist (e.g. ProjectReadOnly), so a
@@ -30,24 +30,82 @@ function out(payload) {
   process.stdout.write(JSON.stringify(payload) + "\n");
 }
 
-async function probeProjects(organizationId) {
+/** Run a probe call, translating any throw into the shared probe result shape. */
+async function probe(fn) {
   try {
-    const projects = await api("Account", "v3", "ProjectAPI");
-    const list = await sdkCall(() => projects.listProjects({ organizationId }).all());
-    return { ok: true, status: null, count: list.length, error: null };
+    const count = await fn();
+    return { ok: true, status: null, count, error: null };
   } catch (e) {
     return { ok: false, status: e?.status ?? null, count: null, error: String(e?.message || e).slice(0, 200) };
   }
 }
 
+async function probeProjects(organizationId) {
+  return probe(async () => {
+    const projects = await api("Account", "v3", "ProjectAPI");
+    const list = await sdkCall(() => projects.listProjects({ organizationId }).all());
+    return list.length;
+  });
+}
+
 async function probeIam(organizationId) {
-  try {
+  return probe(async () => {
     const iam = await api("Iam", "v1alpha1");
     const list = await sdkCall(() => iam.listApplications({ organizationId }).all());
-    return { ok: true, status: null, count: list.length, error: null };
-  } catch (e) {
-    return { ok: false, status: e?.status ?? null, count: null, error: String(e?.message || e).slice(0, 200) };
-  }
+    return list.length;
+  });
+}
+
+/** Current calendar period as "YYYY-MM", the granularity listConsumptions expects. */
+function currentBillingPeriod() {
+  const now = new Date();
+  return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+async function probeBilling(organizationId) {
+  return probe(async () => {
+    const billing = await api("Billing", "v2beta1");
+    const list = await sdkCall(() =>
+      billing.listConsumptions({ organizationId, billingPeriod: currentBillingPeriod() }).all(),
+    );
+    return list.length;
+  });
+}
+
+/** A probe result is conclusive on a clean success or a clean 403/401 denial. */
+function isConclusive(p) {
+  return p.ok || p.status === 403 || p.status === 401;
+}
+
+/**
+ * Probe every organization-scoped permission set and summarise organization
+ * reach for the app-credential chokepoint (`app-credentials.mjs`).
+ * `orgReach` is true when ANY probe succeeds - organization reach is not only
+ * about creating Projects. `canMint` mirrors the IAM probe alone: minting a
+ * scoped key needs IAMManager specifically. `conclusive` is false when any
+ * probe failed for a reason other than a clean 403/401 (network error,
+ * timeout, unexpected status); an inconclusive probe must never be read as
+ * "no reach".
+ * @param {{organizationId?:string}} [args]
+ * @returns {Promise<{orgReach:boolean, canMint:boolean, conclusive:boolean, probes:object}>}
+ */
+export async function probeOrgReach({ organizationId } = {}) {
+  const creds = requireCredentials();
+  const orgId = organizationId || creds.organizationId;
+
+  const [projects, iam, billing] = await Promise.all([
+    probeProjects(orgId),
+    probeIam(orgId),
+    probeBilling(orgId),
+  ]);
+  const probes = { projects, iam, billing };
+
+  return {
+    orgReach: projects.ok || iam.ok || billing.ok,
+    canMint: iam.ok,
+    conclusive: isConclusive(projects) && isConclusive(iam) && isConclusive(billing),
+    probes,
+  };
 }
 
 async function main() {
@@ -66,15 +124,20 @@ async function main() {
 
   const organizationId = arg("--organization-id") || creds.organizationId;
 
-  const [projects, iam] = await Promise.all([probeProjects(organizationId), probeIam(organizationId)]);
+  const [projects, iam, billing] = await Promise.all([
+    probeProjects(organizationId),
+    probeIam(organizationId),
+    probeBilling(organizationId),
+  ]);
 
   const likelyMissing = [];
   if (projects.status === 403) likelyMissing.push("ProjectManager");
   if (iam.status === 403) likelyMissing.push("IAMManager");
+  if (billing.status === 403) likelyMissing.push("BillingReadOnly");
 
   out({
     ok: true,
-    probes: { projects, iam },
+    probes: { projects, iam, billing },
     likelyMissing,
     certainty: "denial-only",
     blocking: false,

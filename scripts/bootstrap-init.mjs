@@ -21,12 +21,12 @@
 //     design: a clean read cannot prove the create right, only a missing
 //     right. Running the real find-or-create here both proves the right and
 //     does the required work in one step. A 403 raises the existing
-//     needs_admin error (recipe "project", docs/ADMIN-SCALEWAY.md) before a
-//     single local file exists, so nothing needs cleanup - re-run with
+//     needs_admin error (details.recipe "project", docs/ADMIN-SCALEWAY.md)
+//     before a single local file exists, so nothing needs cleanup - re-run with
 //     --scw-project-id and the run starts clean, instead of a ~5-minute
 //     scaffold-then-discover detour through create-t3-app + pnpm install.
-//     When a Project id is already configured for this app (per-app map or
-//     SCW_DEFAULT_PROJECT_ID, CONTRACT.md §2), this step reuses it and never
+//     When a Project id is already configured for this app (--scw-project-id
+//     or SCW_DEFAULT_PROJECT_ID, CONTRACT.md §2), this step reuses it and never
 //     calls createProject, and refuses a Project that already carries
 //     another app's secret.
 //   3-13. Scaffold + harden the T3 app (unchanged in spirit from earlier
@@ -512,7 +512,7 @@ function needsAdminProjectError(e, slug) {
   return new ScwError(
     "Votre clé Scaleway n’a pas les droits nécessaires pour créer un projet. " +
       `Demandez à l’administrateur de créer un projet Scaleway nommé « ${slug} », de vous accorder les droits ` +
-      "de service nécessaires sur ce projet (voir docs/ADMIN-SCALEWAY.md, recette « projet »), puis de vous " +
+      "de service nécessaires sur ce projet (voir docs/ADMIN-SCALEWAY.md, recette unique), puis de vous " +
       "communiquer l’identifiant du projet. Relancez ensuite /bootstrap avec --scw-project-id et cet identifiant.",
     { type: "needs_admin", details: { recipe: "project", projectName: slug } },
   );

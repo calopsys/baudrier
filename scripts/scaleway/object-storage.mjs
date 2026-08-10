@@ -71,7 +71,7 @@
 // generated app's owner.
 
 import { loadS3 } from "./_deps.mjs";
-import { loadCredentials, REGION, ScwError, slugify } from "./_scw-auth.mjs";
+import { REGION, ScwError, slugify } from "./_scw-auth.mjs";
 import { assertDestructiveAllowed } from "./_destructive-guard.mjs";
 import { pathToFileURL } from "node:url";
 
@@ -381,22 +381,39 @@ export async function deleteBucket(name, { accessKey, secretKey, region = REGION
 
 /* ------------------------------------------------------------------------ CLI */
 
+// The S3 protocol carries no Project field (module header): the client above
+// is built from a key, a secret and a region only, so the Project a bucket
+// command targets is decided entirely by which key it signs with. Falling
+// back to the operator's own SCW_* key here would silently create or inspect
+// a bucket in the operator's own default Project instead of this app's - and
+// bucketExists() would then check that same wrong Project, so the mistake
+// would never surface as an error. The CLI therefore refuses outright instead
+// of guessing.
+function requireStorageCredentials() {
+  const accessKey = process.env.STORAGE_ACCESS_KEY;
+  const secretKey = process.env.STORAGE_SECRET_KEY;
+  if (!accessKey || !secretKey) {
+    throw new ScwError(
+      "Les commandes de bucket ont besoin de la paire de clés de stockage propre à cette " +
+        "application, STORAGE_ACCESS_KEY et STORAGE_SECRET_KEY : le protocole S3 n’a pas de champ " +
+        "Projet, c’est la clé qui détermine le Projet visé. Utiliser la clé de l’opérateur créerait " +
+        "ou inspecterait un bucket dans le mauvais Projet. Définissez STORAGE_ACCESS_KEY et " +
+        "STORAGE_SECRET_KEY avant de relancer cette commande.",
+      { type: "missing_storage_credentials" },
+    );
+  }
+  return { accessKey, secretKey };
+}
+
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   const [cmd, ...rest] = process.argv.slice(2);
-  // STORAGE_* is a pair or nothing: an access key signed with the OTHER key's
-  // secret produces a SignatureDoesNotMatch that reads like a permission bug.
-  // Without the pair, resolve through loadCredentials() (SCW_* env vars).
-  const storagePair = process.env.STORAGE_ACCESS_KEY && process.env.STORAGE_SECRET_KEY;
-  const resolved = storagePair
-    ? { accessKey: process.env.STORAGE_ACCESS_KEY, secretKey: process.env.STORAGE_SECRET_KEY }
-    : loadCredentials();
-  const { accessKey, secretKey } = resolved;
 
   (async () => {
     switch (cmd) {
       case "ensure": {
         const [name] = rest;
         if (!name) throw new ScwError("usage: node object-storage.mjs ensure <NAME>", { type: "usage" });
+        const { accessKey, secretKey } = requireStorageCredentials();
         console.log(`▸ ensuring bucket "${name}"`);
         const bucket = await ensureBucket(name, { accessKey, secretKey });
         console.log(`✅ bucket ${bucket.name} (${bucket.created ? "created" : "already existed"})`);
@@ -409,6 +426,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
       case "set-public": {
         const [name] = rest;
         if (!name) throw new ScwError("usage: node object-storage.mjs set-public <NAME>", { type: "usage" });
+        const { accessKey, secretKey } = requireStorageCredentials();
         console.log(`▸ applying public-read policy to "${name}"`);
         await setBucketPolicy(name, buildPublicReadPolicy(slugify(name)), { accessKey, secretKey });
         console.log(`✅ bucket ${name} is now publicly readable`);
@@ -418,6 +436,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
       case "delete": {
         const [name] = rest;
         if (!name) throw new ScwError("usage: node object-storage.mjs delete <NAME>", { type: "usage" });
+        const { accessKey, secretKey } = requireStorageCredentials();
         console.log(`▸ deleting bucket "${name}"`);
         await deleteBucket(name, { accessKey, secretKey });
         console.log(`✅ deleted (or already absent)`);
@@ -426,8 +445,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
       }
       default:
         console.log("usage: node object-storage.mjs <ensure|set-public|delete> <NAME>");
-        console.log("  reads the STORAGE_ACCESS_KEY/STORAGE_SECRET_KEY pair from env");
-        console.log("  without that pair, falls back to the SCW_* environment variables");
+        console.log("  reads the STORAGE_ACCESS_KEY/STORAGE_SECRET_KEY pair from env (required)");
         process.exitCode = 1;
     }
   })().catch((err) => {

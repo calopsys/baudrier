@@ -143,7 +143,7 @@ async function resolveScwProject() {
       organizationId: creds.organizationId,
       via: "env-or-cache",
       ownerCandidates,
-      note: `${orgListNote} Identifiant repris de BAUDRIER_SCW_PROJECTS_IDS, de SCW_DEFAULT_PROJECT_ID ou du cache de session.`,
+      note: `${orgListNote} Identifiant repris de SCW_DEFAULT_PROJECT_ID ou du cache de session.`,
     };
   } catch {
     return {
@@ -153,7 +153,7 @@ async function resolveScwProject() {
       organizationId: creds.organizationId,
       via: null,
       ownerCandidates,
-      note: `${orgListNote} Aucun identifiant de projet exploitable (aucune entrée BAUDRIER_SCW_PROJECTS_IDS, SCW_DEFAULT_PROJECT_ID absent, cache de session vide) - projet non résolu.`,
+      note: `${orgListNote} Aucun identifiant de projet exploitable (SCW_DEFAULT_PROJECT_ID absent, cache de session vide) - projet non résolu.`,
     };
   }
 }

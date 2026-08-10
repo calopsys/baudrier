@@ -109,7 +109,17 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/setup-email.mjs" \
   --web-dir "<WEB_DIR>"
 ```
 
-The script chains 6 sub-steps: preflight, TEM domain setup (create/find the domain, fetch its SPF/DKIM/DMARC/MX records, publish them via Scaleway DNS if the domain is delegated there, trigger a verification check), write `mail.ts`, write the contact tRPC router, register `contactRouter` in `root.ts`, push env vars.
+The script chains 7 sub-steps: preflight, TEM domain setup (create/find the domain, fetch its SPF/DKIM/DMARC/MX records, publish them via Scaleway DNS if the domain is delegated there, trigger a verification check), TEM API key (`TEM_API_SECRET_KEY`, see below), write `mail.ts`, write the contact tRPC router, register `contactRouter` in `root.ts`, push env vars.
+
+### The TEM API key
+
+`mail.ts`'s `sendMail()` authenticates to the TEM send API with `TEM_API_SECRET_KEY`, never the operator's own `SCW_SECRET_KEY` (see `templates/email/mail.ts`'s header comment). The script asks which credential shape the environment holds (`credentialShape()`, CONTRACT.md §1-§2 `app-credentials.mjs`) and branches:
+
+- **Cas A** - an organization-administrator key: it mints a dedicated IAM Application carrying only `TransactionalEmailEmailApiCreate` and a non-expiring key, then stores the secret as `TEM_API_SECRET_KEY`.
+- **Cas B** - a key scoped to this Project alone: it mints nothing and calls `operatorKeyAsAppCredential({ purpose: "transactional-email" })` to store the environment's own key as `TEM_API_SECRET_KEY` directly - this skill never reads `SCW_SECRET_KEY` itself.
+
+If the environment holds a Cas B key, tell the user once, in plain French, before running the script (do not repeat this warning elsewhere in this skill):
+> ℹ️ Votre clé Scaleway a les droits administrateur sur ce projet. L’application utilisera cette même clé pour envoyer les emails. Concrètement : toute personne qui accède à l’application en ligne accède à tout ce que contient ce projet Scaleway (base de données, stockage, emails...). Gardez l’accès à l’application restreint tant que vous n’acceptez pas ce risque.
 
 ### During execution
 
@@ -118,7 +128,7 @@ The script prints live:
 - `✅ <result>` at the end of each one
 - `⚠️ <warning>` for non-blocking warnings (rateLimitedProcedure missing, DNS not auto-published, the 500 emails/month + 2 domains cap on a fresh account, etc.)
 - At the end, a structured **handoff banner** (includes the DNS records to publish if they couldn't be published automatically)
-- On the last line on success, a parseable JSON object: `{"success":true,"senderEmail":"...","senderName":"...","domain":"...","temDomainId":"...","temDomainStatus":"...","dnsAutoPublished":true|false,"envVars":["TEM_SENDER_EMAIL","TEM_SENDER_NAME"]}`
+- On the last line on success, a parseable JSON object: `{"success":true,"senderEmail":"...","senderName":"...","domain":"...","temDomainId":"...","temDomainStatus":"...","dnsAutoPublished":true|false,"envVars":["TEM_SENDER_EMAIL","TEM_SENDER_NAME","TEM_API_SECRET_KEY"]}`
 
 Let the output through live (no `> /tmp/...`, no capture).
 
@@ -129,6 +139,7 @@ Let the output through live (no `> /tmp/...`, no capture).
 3. **Diagnose**:
    - `preflight` then usually an already existing file (`mail.ts` or `contact.ts`) or no Next.js / no tRPC. Handle specifically.
    - `configureDomain` then likely a Scaleway credentials problem (a missing or expired `SCW_*` variable) - the error message from `_scw-auth.mjs` tells the user exactly what to do; have them check the four `SCW_*` variables in the cloud environment dialog, then start a new conversation. This step is otherwise resilient: DNS-not-delegated is a warning, not a hard failure - continue past it and hand the user the manual DNS records from the handoff banner.
+   - `temApiKey` then a Scaleway IAM error minting the key (Cas A) or turning the environment key into an app credential (Cas B) - see "The TEM API key" above.
    - `writeMailTs` / `writeContactRouter` then FS permission (rare).
    - `registerRouter` then T3 may have reorganized `root.ts`. Patch manually: add `import { contactRouter } from "~/server/api/routers/contact";` + `contact: contactRouter,` in the `createTRPCRouter({...})`.
    - `pushEnvVars` then the code and the TEM domain are in place, only the env vars/secrets didn't land. Retry: `printf '%s' "<email>" | node scripts/scaleway/secrets.mjs put TEM_SENDER_EMAIL --stdin` and same for `TEM_SENDER_NAME`, plus append both to `.env`.
@@ -160,6 +171,7 @@ Invoke `_update-claude-md` with:
 - `env-vars`:
   - `- \`TEM_SENDER_EMAIL\` - adresse d'expédition vérifiée`
   - `- \`TEM_SENDER_NAME\` - nom affiché comme expéditeur`
+  - `- \`TEM_API_SECRET_KEY\` - clé IAM dédiée à l'envoi d'emails, jamais la clé Scaleway de l'opérateur`
   - `- \`CONTACT_RECIPIENT_EMAIL\` - destinataire du formulaire de contact (optionnel, retombe sur \`TEM_SENDER_EMAIL\`)`
 - `conventions`:
   - `- Email : toujours utiliser \`escapeHtml()\` depuis \`~/server/mail\` sur les données utilisateur avant de les insérer dans le HTML d'un email.`

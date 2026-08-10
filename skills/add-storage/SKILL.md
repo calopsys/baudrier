@@ -114,7 +114,14 @@ Unlike some storage providers, Scaleway Object Storage has no manual "enable thi
 
 **Always in `fr-par`** (Paris) - this harness only ever targets that region (CONTRACT.md constants).
 
-1. Create a dedicated IAM Application + policy + non-expiring API key for this app's storage access (same pattern as `/add-db`'s database credentials - a leaked or rotated key must never silently break the app, so no expiry):
+1. First, ask which credential shape the environment holds:
+   ```bash
+   shape_result=$(node "${CLAUDE_SKILL_DIR}/../../scripts/scaleway/app-credentials.mjs" shape)
+   credential_shape=$(echo "$shape_result" | node -e "console.log(JSON.parse(require('fs').readFileSync(0,'utf8')).shape)")
+   ```
+   `credentialShape()` (CONTRACT.md §1, §2 `app-credentials.mjs`) returns `"org"` when the environment's key is an organization administrator (Cas A), `"project"` when it is an IAM application scoped to this Project alone (Cas B), or `"unknown"`. Ask it before acting - never guess the shape from a failed call.
+
+   **Cas A - `credential_shape = "org"`**: create a dedicated IAM Application + policy + non-expiring API key for this app's storage access (same pattern as `/add-db`'s database credentials - a leaked or rotated key must never silently break the app, so no expiry):
    ```bash
    node "${CLAUDE_SKILL_DIR}/../../scripts/scaleway/iam.mjs" ensure-app "<PROJECT_NAME>-storage"
    node "${CLAUDE_SKILL_DIR}/../../scripts/scaleway/iam.mjs" ensure-policy "<app-id>" "<project-id>" "ObjectStorageBucketsRead,ObjectStorageBucketsWrite,ObjectStorageObjectsRead,ObjectStorageObjectsWrite,ObjectStorageObjectsDelete,ObjectStorageBucketPolicyFullAccess"
@@ -123,19 +130,20 @@ Unlike some storage providers, Scaleway Object Storage has no manual "enable thi
    `--reveal` is required on `create-key` here: the secret is only ever returned once, and Step 4.2-4.3 and Step 6 below need the real value - capture it into a shell variable and use it right away, never log it separately.
    This deliberately excludes `ObjectStorageBucketsDelete` and the various `*FullAccess` sets - the app's own running key can create/read/write/delete objects and manage this bucket's policy, but cannot delete the bucket itself. Bucket deletion is an operator action (via the Scaleway console or `object-storage.mjs delete`), not something the app does to itself.
 
-   **Storage is the one addon that still asks the administrator early**, unlike `/add-db`, the Generative APIs key, and the TEM key: `scripts/scaleway/dev-credentials.mjs` (CONTRACT.md §1, §2) only tracks and swaps a dev-backed `DATABASE_URL`; it has no equivalent fill command for Object Storage credentials, and this skill never types the operator's own secret key into a command or the chat to fake one by hand. So a storage `permission_denied` is still handled the old way, immediately, rather than being deferred to `/publish`.
-
-   **If `ensure-app`, `ensure-policy`, or `create-key` fails with `"type":"permission_denied"`** (the operator's key lacks `IAMManager`): do not retry. Relay a French message pointing at `docs/ADMIN-SCALEWAY.md`, section Recette « stockage » - the admin creates the application and policy themselves, and stores `STORAGE_ACCESS_KEY`/`STORAGE_SECRET_KEY` directly (the final canonical secrets, no adoption step) in this app's own Scaleway Project. Wait for the admin to confirm, then pull the two values with the `_pull-env-vars` helper instead of re-running the `iam.mjs` commands:
+   **Cas B - `credential_shape = "project"`**: mint nothing. Turn the environment's own key into the app's storage credential instead - `operatorKeyAsAppCredential()` has no CLI flag of its own (CONTRACT.md §1, §2 `app-credentials.mjs`: it is a function other scripts import, not a command a secret should pass through), so call it directly:
    ```bash
-   node "${CLAUDE_SKILL_DIR}/../../scripts/pull-env-vars.mjs" --keys=STORAGE_ACCESS_KEY,STORAGE_SECRET_KEY --write-to-local --json
+   node --input-type=module -e "
+     import { operatorKeyAsAppCredential } from '${CLAUDE_SKILL_DIR}/../../scripts/scaleway/app-credentials.mjs';
+     const cred = await operatorKeyAsAppCredential({ purpose: 'object-storage' });
+     console.log(JSON.stringify(cred));
+   "
    ```
-   Continue at step 2 below (create the bucket). Do not retype the values in the chat: export them from `.env.local` in the same Bash call instead of the inline `STORAGE_ACCESS_KEY=<...>` prefix (both values are plain alphanumeric, so the `grep`-export form is safe here):
-   ```bash
-   export $(grep -E '^STORAGE_(ACCESS|SECRET)_KEY=' .env.local) && \
-     node "${CLAUDE_SKILL_DIR}/../../scripts/scaleway/object-storage.mjs" ensure "<PROJECT_NAME>-assets"
-   ```
+   `operatorKeyAsAppCredential({ purpose: "object-storage" })` is the only sanctioned way to do this - this skill never reads `SCW_SECRET_KEY` itself, and it refuses to run against an organization key. Object Storage resolves its Project from the key itself, not from a separate id, so in Cas B this pair is not merely acceptable: it is the only pair that reaches this app's own Project. Capture `accessKey`/`secretKey` from the printed JSON and use them right away, same as in Cas A - never log them separately.
 
-2. Create the bucket using the key just minted:
+   Tell the user once, in plain French, before continuing (do not repeat this warning later in this skill):
+   > ℹ️ Votre clé Scaleway a les droits administrateur sur ce projet. L’application utilisera cette même clé pour accéder au stockage. Concrètement : toute personne qui accède à l’application en ligne accède à tout ce que contient ce projet Scaleway (base de données, stockage, emails...). Gardez l’accès à l’application restreint tant que vous n’acceptez pas ce risque.
+
+2. Create the bucket using the key from step 1 above (minted in Cas A, reused in Cas B):
    ```bash
    STORAGE_ACCESS_KEY=<access-key> STORAGE_SECRET_KEY=<secret-key> \
      node "${CLAUDE_SKILL_DIR}/../../scripts/scaleway/object-storage.mjs" ensure "<PROJECT_NAME>-assets"

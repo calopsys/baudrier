@@ -151,7 +151,7 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/bootstrap-init.mjs" \
 
 The tool returns a `bash_id` (useful for `KillBash` in case of a hang) and an `output-file` (the file where the harness captures the background bash stdout - it contains just the `LOG_FILE=...` line since the rest is redirected).
 
-**If the operator's key lacks `ProjectManager`** (per-request delegation, CONTRACT.md §1): the `scwProject` sub-step fails with a JSON line carrying `"type":"needs_admin"` and `details.recipe: "project"`. Relay the script's French message to the user as-is - it is already a forwardable request, and points at `docs/ADMIN-SCALEWAY.md`, section Recette « projet ». Wait for the user to come back with the Project ID the admin created. Then re-run the same command from step 2, adding the flag:
+**If the operator's key lacks `ProjectManager`** (per-request delegation, CONTRACT.md §1): the `scwProject` sub-step fails with a JSON line carrying `"type":"needs_admin"` and `details.recipe: "project"`. Relay the script's French message to the user as-is - it is already a forwardable request, and points at `docs/ADMIN-SCALEWAY.md`, section Recette unique. Wait for the user to come back with the Project ID the admin created. Then re-run the same command from step 2, adding the flag:
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/bootstrap-init.mjs" \

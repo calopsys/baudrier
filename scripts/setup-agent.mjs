@@ -64,7 +64,6 @@ import { fileURLToPath } from "node:url";
 import { requireCredentials, resolveProjectId, ScwError } from "./scaleway/_scw-auth.mjs";
 import { ensureApplication, ensurePolicy, createApiKey } from "./scaleway/iam.mjs";
 import { getSecret, putSecret, secretExists } from "./scaleway/secrets.mjs";
-import { recordDevFingerprint } from "./scaleway/dev-credentials.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const TEMPLATE_DIR = resolve(__dirname, "../templates/agent");
@@ -243,8 +242,7 @@ async function generativeApiKey() {
     log("Cannot mint a dedicated IAM key - falling back to your personal Scaleway key for development");
     try {
       await putSecret("SCW_GENERATIVE_API_KEY", creds.secretKey);
-      await recordDevFingerprint("SCW_GENERATIVE_API_KEY", creds.secretKey);
-      ok("SCW_GENERATIVE_API_KEY runs on your personal Scaleway key until /publish.");
+      ok("SCW_GENERATIVE_API_KEY runs on your personal Scaleway key for now.");
     } catch {
       throw new ScwError(NEEDS_ADMIN_AGENT_MESSAGE, {
         type: "needs_admin",
@@ -305,8 +303,7 @@ async function temApiKey() {
     log("Cannot mint a dedicated IAM key - falling back to your personal Scaleway key for development");
     try {
       await putSecret("TEM_API_SECRET_KEY", creds.secretKey);
-      await recordDevFingerprint("TEM_API_SECRET_KEY", creds.secretKey);
-      ok("TEM_API_SECRET_KEY runs on your personal Scaleway key until /publish.");
+      ok("TEM_API_SECRET_KEY runs on your personal Scaleway key for now.");
     } catch {
       throw new ScwError(NEEDS_ADMIN_TEM_MESSAGE, {
         type: "needs_admin",

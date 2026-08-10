@@ -58,7 +58,7 @@ import { requireCredentials, ScwError } from "./scaleway/_scw-auth.mjs";
 import { ensureDatabase, waitForDatabaseReady, buildConnectionString } from "./scaleway/sdb.mjs";
 import { ensureApplication, ensurePolicy, createApiKey, DELEGATED_DB_KEY_SECRET_NAME } from "./scaleway/iam.mjs";
 import { getSecret, putSecret } from "./scaleway/secrets.mjs";
-import { devDbCredentials, recordDevFingerprint } from "./scaleway/dev-credentials.mjs";
+import { devDbCredentials } from "./scaleway/app-credentials.mjs";
 
 // Permission set for the app's own database connection: read/write, not
 // full-access. ServerlessSQLDatabaseFullAccess also grants provisioning and
@@ -68,7 +68,7 @@ const DB_PERMISSION_SETS = ["ServerlessSQLDatabaseReadWrite"];
 
 // Per-request delegation: the operator's own key mints its own IAM access
 // when it can. When it cannot (no IAMManager), the operator's personal key
-// powers the database connection instead (see scripts/scaleway/dev-credentials.mjs) -
+// powers the database connection instead (see scripts/scaleway/app-credentials.mjs) -
 // so this message is now a RARE last resort, only reached when even the
 // personal-key fallback fails (devDbCredentials()'s principal cannot be
 // resolved). It is the forwardable French request for that rare handover.
@@ -78,7 +78,7 @@ const NEEDS_ADMIN_DB_MESSAGE =
   "L’administrateur doit créer une application IAM, une politique limitée à ce projet avec le droit " +
   "ServerlessSQLDatabaseReadWrite, une clé API, puis stocker " +
   '{"application_id":"...","secret_key":"..."} dans le secret BAUDRIER_DB_KEY de ce projet. ' +
-  "Voir docs/ADMIN-SCALEWAY.md (recette « base de données »).";
+  "Voir docs/ADMIN-SCALEWAY.md.";
 
 const MALFORMED_DELEGATED_KEY_MESSAGE =
   `Le secret ${DELEGATED_DB_KEY_SECRET_NAME} ne contient pas le format attendu. ` +
@@ -92,17 +92,13 @@ const MALFORMED_DELEGATED_KEY_MESSAGE =
 // creating IAM access first closes the orphan-database window - if IAM
 // creation fails hard, no database exists yet for _destructive-guard.mjs to
 // refuse to clean up. A hard failure here is already rare (the
-// dev-credentials fallback absorbs most permission gaps), but this ordering
+// personal-key fallback absorbs most permission gaps), but this ordering
 // removes the window entirely rather than just shrinking it.
 const STEPS = ["preflight", "ensureIamAccess", "ensureDatabase", "storeSecret", "installDriver", "swapDriver"];
 const completed = [];
 const warnings = [];
 let current = null;
 let WEB_DIR = null;
-// Set when ensureIamAccess fell back to the operator's personal key (no
-// IAMManager, no admin-delegated pair yet) - storeSecret() reads it to know
-// whether to record a dev fingerprint for /publish's gate.
-let usedDevFallback = false;
 // State accumulated during the run; emitted as JSON on success.
 const state = {
   databaseName: null,
@@ -315,8 +311,7 @@ async function ensureIamAccess() {
       }
       state.applicationId = dev.principalId;
       state.dbSecretKey = dev.secretKey;
-      usedDevFallback = true;
-      ok("Using your personal Scaleway key for now - the app runs on it until you run /publish.");
+      ok("Using your personal Scaleway key for now.");
       return;
     }
 
@@ -364,10 +359,6 @@ async function storeSecret() {
   });
   // Never persisted to disk, never logged - handed straight to Secret Manager.
   await putSecret("DATABASE_URL", state.connectionString);
-  if (usedDevFallback) {
-    await recordDevFingerprint("DATABASE_URL", state.connectionString);
-    ok("Recorded a dev fingerprint for /publish's gate (BAUDRIER_DEV_FINGERPRINTS).");
-  }
   // Drop the in-memory copy of the raw secret once it's safely stored; keep
   // only what the rest of the script and the handoff banner need.
   delete state.dbSecretKey;

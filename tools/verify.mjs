@@ -919,7 +919,7 @@ define("18", "Node floor: the required version is stated once and agrees everywh
   return fails;
 });
 
-define("19", "Delegation: secret names and the publish gate agree everywhere", () => {
+define("19", "Delegation: the adoption and fingerprint layers stay deleted", () => {
   const fails = [];
   const src = "scripts/scaleway/iam.mjs";
   if (!exists(src)) return [{ file: src, detail: "iam.mjs is missing" }];
@@ -928,13 +928,12 @@ define("19", "Delegation: secret names and the publish gate agree everywhere", (
     fails.push({ file: src, detail: "does not export DELEGATED_DB_KEY_SECRET_NAME as a string literal" });
     return fails;
   }
+  // The Cas A path still mints this key, so CONTRACT.md must still name it.
+  // The admin guide no longer does: an administrator provisions one IAM
+  // application per Project now, not one secret per service.
   const name = m[1];
-  for (const f of ["CONTRACT.md", "docs/ADMIN-SCALEWAY.md"]) {
-    if (!exists(f)) {
-      fails.push({ file: f, detail: "expected to exist and mention the delegated DB secret name" });
-      continue;
-    }
-    if (!read(f).includes(name)) fails.push({ file: f, detail: `does not mention the delegated DB secret name "${name}"` });
+  if (!read("CONTRACT.md").includes(name)) {
+    fails.push({ file: "CONTRACT.md", detail: `does not mention the delegated DB secret name "${name}"` });
   }
 
   // Each caller must go through the exported constant, never a hardcoded
@@ -949,9 +948,8 @@ define("19", "Delegation: secret names and the publish gate agree everywhere", (
     }
   }
 
-  // Credentials are env-only now (CONTRACT.md §2): the CLI that used to
-  // collect a Scaleway key in chat and persist it through a shared helper is
-  // gone outright, not merely rewired. Guard against it creeping back.
+  // Credentials are env-only (CONTRACT.md §2): the CLI that used to collect a
+  // Scaleway key in chat and persist it is gone outright, not merely rewired.
   if (exists("scripts/collect-scw-credentials.mjs")) {
     fails.push({
       file: "scripts/collect-scw-credentials.mjs",
@@ -959,144 +957,66 @@ define("19", "Delegation: secret names and the publish gate agree everywhere", (
     });
   }
 
-  // The all-powerful delegated-application-key handover design was rejected
-  // by the user and replaced by per-request delegation. It must not creep
-  // back into any shipped file.
-  for (const dir of ["skills", "scripts", "docs"]) {
-    for (const f of FILES.filter((x) => x.startsWith(`${dir}/`))) {
-      let s;
-      try {
-        s = read(f);
-      } catch {
-        continue;
-      }
-      if (/CALOPSYS_OPERATOR_CREDENTIALS|adopt-provisioned-credentials/.test(s)) {
-        fails.push({ file: f, detail: "references the removed operator-credentials handover design (CALOPSYS_OPERATOR_CREDENTIALS / adopt-provisioned-credentials)" });
-      }
+  // Two rejected designs must never creep back: the all-powerful operator
+  // handover, and the BAUDRIER_APP_KEY adoption that /publish used to run.
+  // Adoption went with the two-shape model: a Cas B key IS the app credential
+  // from the start, so there is no key to adopt and no gate to pass.
+  const DEAD_DESIGNS = /CALOPSYS_OPERATOR_CREDENTIALS|adopt-provisioned-credentials|adoptAppKey|APP_KEY_SECRET_NAME|BAUDRIER_APP_KEY|recordDevFingerprint|DEV_FINGERPRINTS_SECRET_NAME/;
+  for (const f of FILES) {
+    if (f === "tools/verify.mjs" || f === "CHANGELOG.md") continue;
+    let s;
+    try {
+      s = read(f);
+    } catch {
+      continue;
     }
-  }
-  for (const f of ["CONTRACT.md", "README.md"]) {
-    if (!exists(f)) continue;
-    if (/CALOPSYS_OPERATOR_CREDENTIALS|adopt-provisioned-credentials/.test(read(f))) {
-      fails.push({ file: f, detail: "references the removed operator-credentials handover design (CALOPSYS_OPERATOR_CREDENTIALS / adopt-provisioned-credentials)" });
+    if (DEAD_DESIGNS.test(s)) {
+      fails.push({ file: f, detail: "references a deleted delegation mechanism (operator handover, BAUDRIER_APP_KEY adoption, or the dev-fingerprint manifest)" });
     }
   }
 
-  // The dev-fallback layer: the fingerprint manifest name must agree between
-  // its exporter and CONTRACT.md, or /publish's gate and the admin's recipe
-  // catalog silently describe two different secrets.
-  const devCredsFile = "scripts/scaleway/dev-credentials.mjs";
-  if (!exists(devCredsFile)) {
-    fails.push({ file: devCredsFile, detail: "dev-credentials.mjs is missing" });
-  } else {
-    const devM = read(devCredsFile).match(/export const DEV_FINGERPRINTS_SECRET_NAME\s*=\s*"([A-Z0-9_]+)"/);
-    if (!devM) {
-      fails.push({ file: devCredsFile, detail: "does not export DEV_FINGERPRINTS_SECRET_NAME as a string literal" });
-    } else {
-      const devName = devM[1];
-      if (!read("CONTRACT.md").includes(devName)) {
-        fails.push({ file: "CONTRACT.md", detail: `does not mention the dev-fingerprint manifest secret name "${devName}"` });
-      }
-    }
-
-    // Every dev-fallback caller must keep feeding the manifest, or /publish's
-    // gate would silently pass while the app still runs on the personal key.
-    for (const f of ["scripts/setup-db.mjs", "scripts/deploy.mjs", "scripts/setup-agent.mjs"]) {
-      if (!exists(f)) {
-        fails.push({ file: f, detail: "expected dev-fallback caller is missing" });
-        continue;
-      }
-      if (!/recordDevFingerprint/.test(read(f))) {
-        fails.push({ file: f, detail: "does not call recordDevFingerprint - a dev-backed secret here would go undetected by /publish's gate" });
-      }
-    }
+  // The dev-credential module was renamed when it stopped describing a
+  // temporary state: in Cas B the operator key IS the app credential.
+  if (exists("scripts/scaleway/dev-credentials.mjs")) {
+    fails.push({
+      file: "scripts/scaleway/dev-credentials.mjs",
+      detail: "still exists - it is renamed app-credentials.mjs, since the credential it serves is permanent in Cas B, not a dev fallback",
+    });
   }
 
-  // /publish must gate on dev-backed secrets BEFORE it flips ACCESS_RESTRICTED
-  // open, or the app could go public still running on the operator's personal
-  // key - the exact risk the gate exists to stop.
+  // /publish now does exactly one thing. The gate it used to run is gone, so
+  // the flip is the whole skill and must still be there.
   const publishSkill = "skills/publish/SKILL.md";
   if (!exists(publishSkill)) {
     fails.push({ file: publishSkill, detail: "publish skill is missing" });
   } else {
     const pSrc = read(publishSkill);
-    if (!/dev-credentials\.mjs["'`]?\s+check\b/.test(pSrc)) {
-      fails.push({ file: publishSkill, detail: "does not run `dev-credentials.mjs check` - the dev-backed-secret gate is missing" });
+    if (!pSrc.includes('ACCESS_RESTRICTED: "false"')) {
+      fails.push({ file: publishSkill, detail: 'never flips ACCESS_RESTRICTED: "false" - that flip is now the entire purpose of /publish' });
     }
-    // indexOf ordering: the gate check must textually precede the flip, or a
-    // careless edit could move the flip earlier without verify noticing.
-    const gateAt = pSrc.indexOf("dev-credentials.mjs");
-    const flipAt = pSrc.indexOf('ACCESS_RESTRICTED: "false"');
-    if (gateAt < 0) {
-      fails.push({ file: publishSkill, detail: "never mentions dev-credentials.mjs" });
-    } else if (flipAt < 0) {
-      fails.push({ file: publishSkill, detail: 'never flips ACCESS_RESTRICTED: "false"' });
-    } else if (gateAt > flipAt) {
-      fails.push({ file: publishSkill, detail: "the dev-backed-secret gate appears AFTER the ACCESS_RESTRICTED flip - it must run before the app can go public" });
-    }
-  }
-
-  // BAUDRIER_APP_KEY (CONTRACT.md §2 exception 4): the entry-name constant,
-  // the admin recipe heading, and skills/publish/SKILL.md's recipe-mapping
-  // table must all agree, or a rename half-lands - same spirit as the
-  // DELEGATED_DB_KEY_SECRET_NAME/DEV_FINGERPRINTS_SECRET_NAME checks above.
-  const APP_RECIPE_HEADING = "Recette « clé applicative »";
-  const admin = "docs/ADMIN-SCALEWAY.md";
-  const adminSrc = exists(admin) ? read(admin) : "";
-  const publishSrcForRecipes = exists(publishSkill) ? read(publishSkill) : "";
-
-  if (!exists(devCredsFile)) {
-    fails.push({ file: devCredsFile, detail: "dev-credentials.mjs is missing" });
-  } else {
-    const devCredsSrc = read(devCredsFile);
-    const appM = devCredsSrc.match(/export const APP_KEY_SECRET_NAME\s*=\s*"([A-Z0-9_]+)"/);
-    if (!appM) {
-      fails.push({ file: devCredsFile, detail: "does not export APP_KEY_SECRET_NAME as a string literal" });
-    }
-
-    if (appM) {
-      const appName = appM[1];
-      if (!exists(admin)) {
-        fails.push({ file: admin, detail: "admin guide is missing" });
-      } else if (!adminSrc.includes(appName)) {
-        fails.push({ file: admin, detail: `does not mention the app key secret name "${appName}"` });
-      }
-      if (!adminSrc.includes(APP_RECIPE_HEADING)) {
-        fails.push({ file: admin, detail: `does not carry the "${APP_RECIPE_HEADING}" heading` });
-      }
-      if (!publishSrcForRecipes.includes(appName)) {
-        fails.push({ file: publishSkill, detail: `recipe-mapping table does not mention "${appName}"` });
-      }
-      if (!publishSrcForRecipes.includes(APP_RECIPE_HEADING)) {
-        fails.push({ file: publishSkill, detail: `recipe-mapping table does not mention "${APP_RECIPE_HEADING}"` });
-      }
+    if (/dev-credentials\.mjs|swap-all|devBacked/.test(pSrc)) {
+      fails.push({ file: publishSkill, detail: "still runs the deleted dev-backed-credentials gate" });
     }
   }
 
   // BAUDRIER_CI_KEY: the whole CI-key IAM machinery was deleted outright
   // (CONTRACT.md §5's flagged fallout, now cleaned up) - no code path, admin
   // recipe, or skill prose may reintroduce any trace of it.
-  if (exists(devCredsFile)) {
-    const devCredsSrc = read(devCredsFile);
-    if (/CI_KEY_ENTRY_NAME/.test(devCredsSrc)) {
-      fails.push({ file: devCredsFile, detail: "still references CI_KEY_ENTRY_NAME - the CI-key machinery was deleted outright" });
+  const appCredsFile = "scripts/scaleway/app-credentials.mjs";
+  if (exists(appCredsFile)) {
+    const appCredsSrc = read(appCredsFile);
+    if (/CI_KEY_ENTRY_NAME/.test(appCredsSrc)) {
+      fails.push({ file: appCredsFile, detail: "still references CI_KEY_ENTRY_NAME - the CI-key machinery was deleted outright" });
     }
-    if (/swapCiKey|case ["'`]swap-ci["'`]/.test(devCredsSrc)) {
-      fails.push({ file: devCredsFile, detail: "still has swapCiKey/swap-ci - the CI-key swap was deleted outright" });
+    if (/swapCiKey|case ["\'`]swap-ci["\'`]/.test(appCredsSrc)) {
+      fails.push({ file: appCredsFile, detail: "still has swapCiKey/swap-ci - the CI-key swap was deleted outright" });
     }
   }
   const rotateSecretFile = "scripts/rotate-secret.mjs";
   if (exists(rotateSecretFile)) {
     const rotateSrc = read(rotateSecretFile);
-    if (/rotateCi|case ["'`]rotate-ci["'`]/.test(rotateSrc)) {
+    if (/rotateCi|case ["\'`]rotate-ci["\'`]/.test(rotateSrc)) {
       fails.push({ file: rotateSecretFile, detail: "still has rotateCi/rotate-ci - the CI-key rotation was deleted outright" });
-    }
-  }
-  for (const f of [admin, publishSkill]) {
-    if (!exists(f)) continue;
-    const s = read(f);
-    if (s.includes("BAUDRIER_CI_KEY") || s.includes("Recette « clé CI »")) {
-      fails.push({ file: f, detail: "still mentions BAUDRIER_CI_KEY / «Recette « clé CI »» - the CI-key machinery was deleted outright" });
     }
   }
 
@@ -2376,14 +2296,14 @@ define("43", "Scope: no mode env var; a configured Project id short-circuits cre
 
   // The operator "mode" is gone. It had two values and gated exactly one
   // thing: whether scwProject() may call createProject. The scope is inferred
-  // now - a Project id configured through --scw-project-id,
-  // BAUDRIER_SCW_PROJECTS_IDS or SCW_DEFAULT_PROJECT_ID means "use this one",
+  // now - a Project id configured through --scw-project-id or
+  // SCW_DEFAULT_PROJECT_ID means "use this one",
   // and its absence means "act at organization level", where a 403 already
   // raises the needs_admin error /bootstrap recovers from. A returning
   // variable would put a maturity label ("poc") back on what is really a
   // permission scope, so its tokens must not reappear anywhere.
   // CHANGELOG.md is history and tools/verify.mjs carries the literals below.
-  const DEAD = ["BAUDRIER_SCW_MODE", "readScwMode", "poc_needs_project_id"];
+  const DEAD = ["BAUDRIER_SCW_MODE", "readScwMode", "poc_needs_project_id", "BAUDRIER_SCW_PROJECTS_IDS", "projectIdFromEnvMap"];
   for (const f of FILES) {
     if (f === "tools/verify.mjs" || f === "CHANGELOG.md") continue;
     let src;
@@ -2483,75 +2403,10 @@ define("44", "GH CLI: dropped from the toolchain - no `gh secret set` survives",
   return fails;
 });
 
-define("45", "Adoption: the candidate app key never touches a child process's argv", () => {
-  const fails = [];
-  const file = "scripts/scaleway/dev-credentials.mjs";
-  if (!exists(file)) return [{ file, detail: "missing" }];
-  const src = stripComments(read(file));
-
-  const fnMatch = src.match(/async function liveValidateAppKey\s*\([^)]*\)\s*\{/);
-  if (!fnMatch) {
-    fails.push({ file, detail: "liveValidateAppKey() not found - the app-key live-validation helper is missing or renamed" });
-    return fails;
-  }
-
-  let depth = 0;
-  let end = fnMatch.index;
-  for (let i = fnMatch.index + fnMatch[0].length - 1; i < src.length; i++) {
-    if (src[i] === "{") depth++;
-    else if (src[i] === "}" && --depth === 0) {
-      end = i;
-      break;
-    }
-  }
-  const body = src.slice(fnMatch.index, end + 1);
-
-  const spawnMatch = body.match(/spawnSync\s*\(/);
-  if (!spawnMatch) {
-    fails.push({
-      file,
-      detail:
-        "liveValidateAppKey() does not call spawnSync - validation must run in a CHILD process, never in-process (the SDK client _scw-auth.mjs memoises is per-module-lifetime and would still hold the operator's own credentials)",
-    });
-    return fails;
-  }
-  const openParen = body.indexOf("(", spawnMatch.index);
-  let d = 0;
-  let closeParen = body.length - 1;
-  for (let i = openParen; i < body.length; i++) {
-    if (body[i] === "(") d++;
-    else if (body[i] === ")" && --d === 0) {
-      closeParen = i;
-      break;
-    }
-  }
-  const call = body.slice(openParen, closeParen + 1);
-
-  // The argv array is the call's SECOND positional argument - up to the first
-  // top-level comma after the array closes, not the whole call (the object
-  // options argument that follows legitimately contains "accessKey"/"secretKey"
-  // as env VALUES, which is the point: key material belongs there, not in argv).
-  const argsArrayMatch = call.match(/\[[\s\S]*?\]/);
-  const argsArray = argsArrayMatch ? argsArrayMatch[0] : "";
-  if (/\baccessKey\b|\bsecretKey\b/.test(argsArray)) {
-    fails.push({
-      file,
-      detail: "liveValidateAppKey()'s spawnSync argv array references accessKey/secretKey directly - key material must travel via env only, never argv",
-    });
-  }
-  if (!/\benv\s*:/.test(call)) {
-    fails.push({ file, detail: "liveValidateAppKey()'s spawnSync call has no env: option - the candidate key has no channel to reach the child process" });
-  } else if (!/SCW_ACCESS_KEY\s*:\s*accessKey/.test(call) || !/SCW_SECRET_KEY\s*:\s*secretKey/.test(call)) {
-    fails.push({ file, detail: "liveValidateAppKey()'s spawnSync env does not set SCW_ACCESS_KEY/SCW_SECRET_KEY from the candidate key" });
-  }
-  // BAUDRIER_CREDENTIALS_FILE=none used to guard against a stale repo-local
-  // credentials file shadowing the candidate key under validation. Credentials
-  // are env-only now (CONTRACT.md §2): there is no repo-local file left to
-  // shadow anything, so this assertion is dropped rather than reworked - the
-  // env-only model already covers the underlying risk (check 20).
-
-  return fails;
-});
+// Check 45 ("Adoption: the candidate app key never touches a child process's
+// argv") was deleted with BAUDRIER_APP_KEY: there is no candidate key to
+// adopt any more. Check 19 keeps the token itself from coming back, and
+// check 47 still guards every other secret against argv exposure.
 
 define("46", "Agent tools fail safe", () => {
   const fails = [];
@@ -3098,34 +2953,35 @@ define("54", "Env-only: no reference to deleted credential-persistence machinery
     }
   }
 
-  // BAUDRIER_SCW_PROJECTS_IDS is the "Cas B" half of the env-only model
-  // (CONTRACT.md §2): a per-app map so one cloud environment serves several
-  // apps. It must stay wired end to end: consulted by resolveProjectId()
-  // BEFORE the global SCW_DEFAULT_PROJECT_ID override (an entry names one
-  // app, so it is more specific), and named in every document a Cas B user
-  // is sent to.
+  // A Cas B key is scoped to one Project and cannot list Projects, so
+  // SCW_DEFAULT_PROJECT_ID is how it declares which one it owns
+  // (CONTRACT.md §2). resolveProjectId() must consult it before falling
+  // through to the session cache and the org-level lookup, both of which a
+  // Project-scoped key cannot reach.
   const scwAuth = "scripts/scaleway/_scw-auth.mjs";
   if (!exists(scwAuth)) {
     fails.push({ file: scwAuth, detail: "missing" });
   } else {
     const src = read(scwAuth);
     const resolver = src.slice(src.indexOf("export async function resolveProjectId"));
-    const mapAt = resolver.indexOf("projectIdFromEnvMap");
     const envAt = resolver.indexOf("SCW_DEFAULT_PROJECT_ID");
-    if (!src.includes("BAUDRIER_SCW_PROJECTS_IDS") || mapAt === -1) {
-      fails.push({ file: scwAuth, detail: "resolveProjectId() no longer consults the BAUDRIER_SCW_PROJECTS_IDS per-app map - the Cas B one-environment flow (CONTRACT.md §2) is broken" });
-    } else if (envAt !== -1 && envAt < mapAt) {
-      fails.push({ file: scwAuth, detail: "resolveProjectId() reads SCW_DEFAULT_PROJECT_ID before the BAUDRIER_SCW_PROJECTS_IDS entry - the global override would shadow every per-app entry (CONTRACT.md §2)" });
+    const lookupAt = resolver.indexOf("listProjects");
+    if (envAt === -1) {
+      fails.push({ file: scwAuth, detail: "resolveProjectId() no longer consults SCW_DEFAULT_PROJECT_ID - a Project-scoped key has no way to declare its Project (CONTRACT.md §2)" });
+    } else if (lookupAt !== -1 && lookupAt < envAt) {
+      fails.push({ file: scwAuth, detail: "resolveProjectId() attempts the org-level listProjects lookup before reading SCW_DEFAULT_PROJECT_ID - a Cas B key would 403 on a Project it already declared" });
     }
     if (!src.includes("cache-project")) {
       fails.push({ file: scwAuth, detail: "the cache-project CLI command is gone - a Cas B id given in the chat has no way to reach the session cache (CONTRACT.md §2, §3)" });
     }
   }
+  // The per-app Project map is gone: one key now serves one Project, so a
+  // Cas B environment declares its Project with SCW_DEFAULT_PROJECT_ID alone.
   for (const f of ["README.md", "skills/_preflight/SKILL.md", "CONTRACT.md"]) {
     if (!exists(f)) {
       fails.push({ file: f, detail: "missing" });
-    } else if (!read(f).includes("BAUDRIER_SCW_PROJECTS_IDS")) {
-      fails.push({ file: f, detail: "never names BAUDRIER_SCW_PROJECTS_IDS - a Cas B user reading this document cannot discover the one-environment setup (CONTRACT.md §2)" });
+    } else if (!read(f).includes("SCW_DEFAULT_PROJECT_ID")) {
+      fails.push({ file: f, detail: "never names SCW_DEFAULT_PROJECT_ID - a Project-scoped key cannot list Projects, so this document leaves it no way to declare its own (CONTRACT.md §2)" });
     }
   }
 
@@ -3522,6 +3378,86 @@ define("60", "Branch cleanup: dispatch-only maintenance workflow ships and stays
     fails.push({ file: "scripts/bootstrap-init.mjs", detail: 'no step("cleanupWorkflow", ...) in the pipeline' });
   } else if (commitAt >= 0 && wfAt > commitAt) {
     fails.push({ file: "scripts/bootstrap-init.mjs", detail: "cleanupWorkflow runs after commit - the workflow misses the initial commit" });
+  }
+
+  return fails;
+});
+
+define("61", "Chokepoint: only the credentials module hands the operator key to an app", () => {
+  const fails = [];
+
+  // In Cas B the environment's key IS the application's credential. That is
+  // safe only because the key is scoped to one Project. An organization key
+  // taking the same path would put organization-wide rights inside a
+  // container, so exactly one function may perform that hand-off, and it must
+  // probe the key's reach before it does.
+  const file = "scripts/scaleway/app-credentials.mjs";
+  if (!exists(file)) return [{ file, detail: "missing - the credential chokepoint has nowhere to live" }];
+  const src = stripComments(read(file));
+
+  for (const fn of ["operatorKeyAsAppCredential", "credentialShape"]) {
+    if (!new RegExp(`export (async )?function ${fn}\\s*\\(`).test(src)) {
+      fails.push({ file, detail: `does not export ${fn}() - the skills have no sanctioned way to ask for the shape or the pair` });
+    }
+  }
+
+  // The guard must run BEFORE the credentials are read, not beside it.
+  const m = src.match(/export async function operatorKeyAsAppCredential\s*\([^)]*\)\s*\{/);
+  if (!m) {
+    fails.push({ file, detail: "operatorKeyAsAppCredential() not found as an async function - check needs updating to its new shape" });
+  } else {
+    let depth = 0;
+    let body = src.slice(m.index);
+    for (let i = m[0].length - 1; i < body.length; i++) {
+      if (body[i] === "{") depth++;
+      else if (body[i] === "}" && --depth === 0) {
+        body = body.slice(m[0].length - 1, i + 1);
+        break;
+      }
+    }
+    const probeAt = body.search(/probeOrgReach|orgReach/);
+    const readAt = body.indexOf("loadCredentials");
+    if (probeAt === -1) {
+      fails.push({ file, detail: "operatorKeyAsAppCredential() never consults the org-reach probe - it would hand out an organization key" });
+    } else if (readAt !== -1 && probeAt > readAt) {
+      fails.push({ file, detail: "operatorKeyAsAppCredential() reads the credentials before probing - the refusal must come first" });
+    }
+  }
+
+  // A permission verdict must not outlive the process. The Project-id cache in
+  // _scw-auth.mjs is a session file on purpose, because an id is an
+  // identifier; this is not the same thing and must stay in memory.
+  if (/writeFileSync|tmpdir\s*\(/.test(src)) {
+    fails.push({ file, detail: "writes to disk - the org-reach verdict must be memoized in-process only, never cached across runs" });
+  }
+
+  // process.env.SCW_SECRET_KEY belongs to loadCredentials() alone. Any other
+  // reader is a second hand-off path that bypasses the probe above.
+  for (const f of MJS) {
+    if (f === "tools/verify.mjs" || f === "scripts/scaleway/_scw-auth.mjs") continue;
+    if (/process\.env\.SCW_SECRET_KEY/.test(stripComments(read(f)))) {
+      fails.push({ file: f, detail: "reads process.env.SCW_SECRET_KEY directly - it must go through loadCredentials(), and through operatorKeyAsAppCredential() to reach an app" });
+    }
+  }
+
+  return fails;
+});
+
+define("62", "Shapes: every IAM-minting skill carries a Cas B branch", () => {
+  const fails = [];
+
+  // A skill that mints a scoped key covers Cas A only. Without a Cas B branch
+  // beside it, a Project-scoped operator hits a permission_denied the skill
+  // cannot act on, and the addon is simply unreachable for them.
+  for (const f of SKILL_MDS) {
+    const src = read(f);
+    if (!/iam\.mjs["'`]?\s+create-key/.test(src)) continue;
+    if (!/operatorKeyAsAppCredential|credentialShape/.test(src)) {
+      fails.push({
+        file: f,
+        detail: "mints an IAM key with no Cas B branch - a Project-scoped key cannot mint, so this addon would be unreachable for that shape",
+      });
+    }
   }
 
   return fails;

@@ -31,6 +31,36 @@ Per CONTRACT.md: **Scaleway Serverless Containers cannot reference Secret Manage
 
 Invoke `_detect-project-root` to get `PROJECT_NAME`. If this doesn't look like a baudrier project (no `CLAUDE.md`, no Next.js `package.json`), abort with a clear message (*"This command is used inside an existing project, not at the root."*).
 
+Before any rotation runs, check the credential shape:
+
+```bash
+APP_CREDENTIALS_MJS="${CLAUDE_SKILL_DIR}/../../scripts/scaleway/app-credentials.mjs" \
+node --input-type=module -e '
+import { pathToFileURL } from "node:url";
+const { credentialShape } = await import(pathToFileURL(process.env.APP_CREDENTIALS_MJS).href);
+console.log(await credentialShape());
+'
+```
+
+If the result is `"project"` (Cas B), **stop here** - do not run Step 1 or any later step. A Cas B operator holds no per-app IAM key of their own to rotate: the environment key already serves every connection permanently. Say, in French:
+
+> ⚠️ **Renouvellement impossible depuis Baudrier**
+>
+> Votre installation utilise une clé Scaleway unique, propre à ce projet (Cas B). Cette clé sert l’application en permanence : il n’existe pas de clé IAM séparée que ce script puisse renouveler à votre place.
+>
+> Transmettez ce message à votre administrateur Scaleway :
+>
+> « Merci d’émettre une nouvelle clé pour l’application IAM de ce projet Scaleway. »
+>
+> Une fois la nouvelle clé reçue, faites ceci :
+> 1. Remplacez `SCW_ACCESS_KEY` et `SCW_SECRET_KEY` dans les variables de l’environnement cloud.
+> 2. Enregistrez la nouvelle valeur dans Secret Manager.
+> 3. Relancez un déploiement pour que le conteneur charge la nouvelle valeur.
+>
+> Démarrez ensuite une **nouvelle conversation** : celle-ci ne peut pas relire des variables d’environnement modifiées après son démarrage.
+
+If the result is `"org"` (Cas A) or `"unknown"`, continue silently to Step 1 - the existing `needs_admin` handling below already covers Cas A.
+
 ## Step 1 - Identify the secret to renew
 
 ### 1.a - If the user passed an argument
@@ -61,9 +91,7 @@ External keys (`MATOMO_TOKEN`, `PAGESPEED_API_KEY`, `GSC_SERVICE_ACCOUNT`) skip 
 
 ## Step 3 - Rotate, by category
 
-**IAM-backed keys and `needs_admin`** (Categories C, D, E below - anything that goes through `rotate-secret.mjs rotate-database-url` or `rotate-iam`): the operator's key can only rotate a key on an application it can also mint keys for. When it lacks `IAMManager`, per-request delegation applies (CONTRACT.md §1): the script fails with `"type":"needs_admin"`. Relay the script's French message to the user as-is - it already points at `docs/ADMIN-SCALEWAY.md`, section Recette « rotation » - and wait. The admin mints a new key on the named application, updates the corresponding secret (or secret pair), and deletes the old key by hand. Once the user confirms this is done, re-run the exact same rotation command - it completes normally, because the new value is already the one Secret Manager holds.
-
-A secret listed as dev-backed by `scripts/scaleway/dev-credentials.mjs check --json` (still running on the operator's own personal key, CONTRACT.md §1, §2) is **not** rotatable through the admin recipes above - there is no dedicated application yet for the admin to mint a new key on. It is replaced, not rotated, at `/publish` time instead.
+**IAM-backed keys and `needs_admin`** (Categories C, D, E below - anything that goes through `rotate-secret.mjs rotate-database-url` or `rotate-iam`): the operator's key can only rotate a key on an application it can also mint keys for. When it lacks `IAMManager`, per-request delegation applies (CONTRACT.md §1): the script fails with `"type":"needs_admin"`. Relay the script's French message to the user as-is - it already points at `docs/ADMIN-SCALEWAY.md`, section « Renouveler la clé » - and wait. The admin mints a new key on the named application, updates the corresponding secret (or secret pair), and deletes the old key by hand. Once the user confirms this is done, re-run the exact same rotation command - it completes normally, because the new value is already the one Secret Manager holds.
 
 ### Category A - Auto-generated (`AUTH_SECRET`, `CRON_SECRET`)
 

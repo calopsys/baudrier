@@ -42,6 +42,10 @@ From the script's final JSON line, present:
 
 If `byCategory` is empty, say plainly that there was no billed usage this period (likely still inside Scaleway's free tier) rather than implying something went wrong.
 
+**Cas B - spend figure unavailable.** Some installations use a Scaleway key scoped to one Project only. The real-spend figure needs an organization-level permission, which that key does not carry, so the total and the per-service breakdown stay unavailable. The script still works and still reports Transactional Email consumption normally. When the JSON shows the spend figure as unavailable for this reason, do not describe it as an error or a wrong setting - it is the intended shape for this kind of key. Show the Transactional Email figures as usual, then say, in French:
+
+> ℹ️ Le montant dépensé n’est pas accessible depuis cette installation : il exige une permission au niveau de l’organisation que votre clé ne porte pas. Consultez la facturation directement dans la console Scaleway (console.scaleway.com, rubrique Facturation).
+
 ---
 
 ## Step 3 - Reference limits [ALWAYS include this caveat]

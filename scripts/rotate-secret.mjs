@@ -82,7 +82,7 @@ function needsAdminRotationMessage(appName, key) {
   return (
     `Votre clé Scaleway n’a pas les droits nécessaires pour créer une nouvelle clé sur l’application ${appName}. ` +
     `Demandez à l’administrateur de créer une nouvelle clé sur cette application, de mettre à jour le secret ${key} ` +
-    "avec la nouvelle valeur, puis de supprimer l’ancienne clé. Voir docs/ADMIN-SCALEWAY.md (recette « rotation »)."
+    "avec la nouvelle valeur, puis de supprimer l’ancienne clé. Voir docs/ADMIN-SCALEWAY.md, section « Renouveler la clé »."
   );
 }
 
@@ -92,7 +92,7 @@ function needsAdminDbRotationMessage(projectName) {
     "Demandez à l’administrateur de créer une nouvelle clé sur cette application, de mettre à jour le secret " +
     `${DELEGATED_DB_KEY_SECRET_NAME} avec la nouvelle paire {"application_id":"...","secret_key":"..."}, ` +
     "de supprimer l’ancienne clé, puis relancez cette commande pour reconstruire DATABASE_URL. " +
-    "Voir docs/ADMIN-SCALEWAY.md (recette « rotation »)."
+    "Voir docs/ADMIN-SCALEWAY.md, section « Renouveler la clé »."
   );
 }
 

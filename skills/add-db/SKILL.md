@@ -107,11 +107,22 @@ Everything goes through the Scaleway API with the operator's `SCW_ACCESS_KEY`/`S
 
 5. Update `apps/web` (and other apps) to import the DB from the shared package instead of local files.
 
-6. Provision the database and dedicated IAM access via the same primitives `setup-db.mjs` uses:
+6. Provision the database, the same way regardless of credential shape:
    ```bash
    node "${CLAUDE_SKILL_DIR}/../../scripts/scaleway/sdb.mjs" ensure "<project-name>"
    # note the returned id, endpoint, port
    node "${CLAUDE_SKILL_DIR}/../../scripts/scaleway/sdb.mjs" wait "<database-id>"
+   ```
+
+   Then ask which credential shape the environment holds, and branch:
+   ```bash
+   shape_result=$(node "${CLAUDE_SKILL_DIR}/../../scripts/scaleway/app-credentials.mjs" shape)
+   credential_shape=$(echo "$shape_result" | node -e "console.log(JSON.parse(require('fs').readFileSync(0,'utf8')).shape)")
+   ```
+   `credentialShape()` (CONTRACT.md §1, §2 `app-credentials.mjs`) returns `"org"` when the environment's key is an organization administrator (Cas A), `"project"` when it is an IAM application scoped to this Project alone (Cas B), or `"unknown"`. Ask it before acting - never guess the shape from a failed call.
+
+   **Cas A - `credential_shape = "org"`**: mint dedicated IAM access:
+   ```bash
    node "${CLAUDE_SKILL_DIR}/../../scripts/scaleway/iam.mjs" ensure-app "<project-name>-db"
    node "${CLAUDE_SKILL_DIR}/../../scripts/scaleway/iam.mjs" ensure-policy "<app-id>" "<project-id>" "ServerlessSQLDatabaseReadWrite"
    node "${CLAUDE_SKILL_DIR}/../../scripts/scaleway/iam.mjs" create-key "<app-id>" "<project-id>" "DATABASE_URL for <project-name> (no expiry)" --reveal
@@ -123,11 +134,14 @@ Everything goes through the Scaleway API with the operator's `SCW_ACCESS_KEY`/`S
    node "${CLAUDE_SKILL_DIR}/../../scripts/scaleway/sdb.mjs" connection-string --endpoint "<endpoint>" --port "<port>" --db-name "<project-name>" --application-id "<app-id>" --secret-key "<secret-key>"
    ```
 
-   **If `ensure-app`, `ensure-policy`, or `create-key` fails with `"type":"permission_denied"`** (the operator's key lacks `IAMManager`): do **not** retry the manual `iam.mjs` commands, and do not relay a request to an administrator here - that no longer happens at this stage. Instead abandon the manual `sdb.mjs`/`iam.mjs` sequence and run the deterministic script:
+   **Cas B - `credential_shape = "project"`**: mint nothing. `devDbCredentials()` is the Cas B path for the database - not a temporary fallback, and nothing swaps it out later. It plays the same standing role that `operatorKeyAsAppCredential()` plays for Object Storage, generative AI, and email, adapted to what a database connection string needs: an IAM principal id, not an access key. Run the deterministic script instead of the manual `iam.mjs` sequence:
    ```bash
    node "${CLAUDE_SKILL_DIR}/../../scripts/setup-db.mjs" --name "<project-name>" --web-dir "packages/db"
    ```
-   It tries the delegated `BAUDRIER_DB_KEY` pair first, then falls back to the operator's own personal Scaleway key, silently, recording the fallback in the `BAUDRIER_DEV_FINGERPRINTS` manifest secret so `/publish` can find and swap it later. It provisions the database and stores `DATABASE_URL` in Secret Manager on its own - skip straight to step 8 below once it succeeds. No administrator action is needed at this point: the admin is only asked once, later, when the user runs `/publish` (CONTRACT.md §1), which refuses to proceed while any secret is still dev-backed and prints one consolidated request covering every addon at once.
+   It builds `DATABASE_URL` from `devDbCredentials()` and stores it in Secret Manager on its own - skip straight to step 8 below once it succeeds.
+
+   Tell the user once, in plain French, before continuing (Cas B only - do not repeat this warning elsewhere in this skill):
+   > ℹ️ Votre clé Scaleway a les droits administrateur sur ce projet. L’application se connectera à la base de données avec cette même clé. Concrètement : toute personne qui accède à l’application en ligne accède à tout ce que contient ce projet Scaleway (base de données, stockage, emails...). Gardez l’accès à l’application restreint tant que vous n’acceptez pas ce risque.
 
 7. Store the resulting connection string directly in Secret Manager - **never** via `_push-env-vars` (that helper also writes a local `.env`, which is exactly what must never happen for `DATABASE_URL`). `secrets.mjs put` no longer accepts the value as an argv positional (it would sit in plaintext in the process list and shell history) - pipe it in instead:
    ```bash
@@ -141,6 +155,16 @@ Everything goes through the Scaleway API with the operator's `SCW_ACCESS_KEY`/`S
 ---
 
 ## Step 3 - Run setup-db.mjs
+
+Before running it, ask which credential shape the environment holds:
+```bash
+shape_result=$(node "${CLAUDE_SKILL_DIR}/../../scripts/scaleway/app-credentials.mjs" shape)
+credential_shape=$(echo "$shape_result" | node -e "console.log(JSON.parse(require('fs').readFileSync(0,'utf8')).shape)")
+```
+`credentialShape()` (CONTRACT.md §1, §2 `app-credentials.mjs`) returns `"org"` for an organization-administrator key (Cas A), or `"project"` for a key scoped to this Project alone (Cas B). `setup-db.mjs` branches on it itself, at its `ensureIamAccess` step: in Cas A it mints a dedicated IAM Application, policy, and key; in Cas B it mints nothing and uses `devDbCredentials()` - the Cas B path for the database, not a temporary fallback - to build `DATABASE_URL` from the environment's own key.
+
+If `credential_shape = "project"`, tell the user once, in plain French, before running the script (do not repeat this warning elsewhere in this skill):
+> ℹ️ Votre clé Scaleway a les droits administrateur sur ce projet. L’application se connectera à la base de données avec cette même clé. Concrètement : toute personne qui accède à l’application en ligne accède à tout ce que contient ce projet Scaleway (base de données, stockage, emails...). Gardez l’accès à l’application restreint tant que vous n’acceptez pas ce risque.
 
 Run the script from the `WEB_DIR`:
 
@@ -174,7 +198,7 @@ Mark the step ✅, capture `databaseId` and `endpoint` from the final JSON, and 
 3. **Diagnose**:
    - `preflight` failed then usually missing Scaleway credentials (tell the user to check the four `SCW_*` variables in the cloud environment dialog, then start a new conversation) or no Next.js / no Drizzle in the project (go back to Step 1).
    - `ensureDatabase` failed then a Scaleway API error provisioning the Serverless SQL Database (quota, transient API issue - the error message is shown as-is).
-   - `ensureIamAccess` failed then an IAM error creating the Application/policy/key - check the operator's Scaleway credentials have IAM rights.
+   - `ensureIamAccess` failed then an IAM error creating the Application/policy/key - check the operator's Scaleway credentials have IAM rights. This only applies in Cas A (an organization-administrator key); in Cas B this step calls `devDbCredentials()` instead and does not depend on IAM rights.
    - `storeSecret` failed then the database AND the IAM key exist, but the Secret Manager write failed (region mismatch, API error). The connection string was never persisted anywhere - retry the step by hand using `printf '%s' "<uri>" | node scripts/scaleway/secrets.mjs put DATABASE_URL --stdin` with a freshly rebuilt connection string (you'll need to mint a new IAM key, since the old one's secret was only ever held in memory - see `scripts/scaleway/iam.mjs create-key --reveal`).
    - `installDriver` failed then a pnpm error (network, registry). Retry by hand: `cd <WEB_DIR> && pnpm add pg && pnpm add -D @types/pg`.
    - `swapDriver` failed then T3 may have moved `src/server/db/index.ts`. Patch the file manually, following `templates/db/index.ts`.

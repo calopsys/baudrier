@@ -13,8 +13,7 @@
 //
 // The Project id is the one field env alone may not carry, since /bootstrap
 // creates one Scaleway Project per app: resolveProjectId() below covers the
-// per-app map -> env -> session cache -> live-lookup-by-name order
-// (CONTRACT.md §2).
+// env -> session cache -> live-lookup-by-name order (CONTRACT.md §2).
 
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -320,27 +319,7 @@ export function cacheProjectId(appName, projectId) {
 }
 
 /**
- * Read the per-app entry for `appName` in BAUDRIER_SCW_PROJECTS_IDS, the map
- * a "Cas B" operator maintains when their key cannot list the organization's
- * Projects (README, CONTRACT.md §2). Format: "app-un:id1,app-deux:id2".
- * An entry names one app, so it wins over the global SCW_DEFAULT_PROJECT_ID.
- */
-function projectIdFromEnvMap(appName) {
-  const raw = process.env.BAUDRIER_SCW_PROJECTS_IDS;
-  if (!raw) return undefined;
-  for (const entry of raw.split(",")) {
-    const sep = entry.indexOf(":");
-    if (sep === -1) continue;
-    const name = entry.slice(0, sep).trim();
-    const id = entry.slice(sep + 1).trim();
-    if (name && id && name === appName) return id;
-  }
-  return undefined;
-}
-
-/**
- * The configured Project id for `appName`, from the environment only: the
- * BAUDRIER_SCW_PROJECTS_IDS entry that matches `appName`, else
+ * The configured Project id for `appName`, from the environment only:
  * SCW_DEFAULT_PROJECT_ID. Makes no API call and does not read the session
  * cache - a caller uses this to decide whether a Project already exists,
  * before deciding whether to create one.
@@ -348,30 +327,26 @@ function projectIdFromEnvMap(appName) {
  * @returns {string|undefined}
  */
 export function projectIdFromEnv(appName) {
-  return projectIdFromEnvMap(appName) ?? process.env.SCW_DEFAULT_PROJECT_ID ?? undefined;
+  return process.env.SCW_DEFAULT_PROJECT_ID ?? undefined;
 }
 
 /**
  * Resolve the Scaleway Project id for `appName` (CONTRACT.md §2), in order:
- *   1. the BAUDRIER_SCW_PROJECTS_IDS entry that matches `appName`
- *   2. SCW_DEFAULT_PROJECT_ID env
- *   3. the session cache file (one process's lookup feeds every later call in
+ *   1. SCW_DEFAULT_PROJECT_ID env
+ *   2. the session cache file (one process's lookup feeds every later call in
  *      the same sandbox session, since CLAUDE_ENV_FILE does not reach a Bash
  *      tool call and cannot carry the id between processes)
- *   4. a live lookup: list the organization's Projects and match `appName`
+ *   3. a live lookup: list the organization's Projects and match `appName`
  *      exactly, then write the cache file
  *
  * Throws a clear error naming the fixes when the lookup 403s or finds no
- * match: widen the key's IAM policy, add a BAUDRIER_SCW_PROJECTS_IDS entry,
- * or seed the session cache with the `cache-project` command below.
+ * match: widen the key's IAM policy, or seed the session cache with the
+ * `cache-project` command below.
  * @param {{appName?: string}} [o]
  * @returns {Promise<string>}
  */
 export async function resolveProjectId({ appName } = {}) {
   const name = appName || deriveAppName();
-
-  const mapped = projectIdFromEnvMap(name);
-  if (mapped) return mapped;
 
   const envProjectId = process.env.SCW_DEFAULT_PROJECT_ID;
   if (envProjectId) return envProjectId;
@@ -404,9 +379,9 @@ function projectLookupError(name) {
   return new ScwError(
     `Cannot find or list the Scaleway Project named "${name}". Three fixes are possible: ` +
       `(1) give the API key the permission to list Projects in the organization (IAM); ` +
-      `(2) add "${name}:<project-id>" to BAUDRIER_SCW_PROJECTS_IDS in the cloud environment ` +
-      `(Menu → Edit environment; format "app-un:id1,app-deux:id2"), then start a NEW session - ` +
-      `a running session cannot reread modified env vars; ` +
+      `(2) set SCW_DEFAULT_PROJECT_ID to that Project's id in the cloud environment ` +
+      `(Menu → Edit environment), then start a NEW session - a running session cannot ` +
+      `reread modified env vars; ` +
       `(3) for this session only: ask the user for the Project id in the chat (it is an ` +
       `identifier, not a secret), then run ` +
       `\`node scripts/scaleway/_scw-auth.mjs cache-project <project-id>\` from the plugin root ` +
@@ -462,8 +437,8 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   }
   console.log(`Session cache set: Project ${projectId} for the app "${app}".`);
   console.log(
-    `This lasts for the current session only. For future sessions, add "${app}:${projectId}" ` +
-      `to BAUDRIER_SCW_PROJECTS_IDS in the cloud environment (Menu → Edit environment).`,
+    `This lasts for the current session only. For future sessions, set SCW_DEFAULT_PROJECT_ID=${projectId} ` +
+      `in the cloud environment (Menu → Edit environment).`,
   );
 }
 

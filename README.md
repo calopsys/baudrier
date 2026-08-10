@@ -64,9 +64,11 @@ Sur https://claude.ai/code, connectez votre compte GitHub. Rendez-vous ensuite s
 
 Rendez-vous sur https://console.scaleway.com/iam/api-keys et créez une nouvelle clé d’API.
 
-**Cas A - Vous êtes l’administrateur de l’organisation Scaleway.** Créez la clé avec la permission `ProjectManager`, à l’échelle de l’organisation entière, pas d’un seul projet. `/bootstrap` crée un Projet Scaleway séparé pour chaque application, et cette action exige ce droit. Une clé limitée à un seul projet échoue avec une erreur 403 dès la première tentative, et Baudrier vous l’indique clairement.
+**Cas A - Vous êtes l’administrateur de l’organisation Scaleway.** Créez la clé à l’échelle de l’organisation entière, pas d’un seul projet, avec les permissions `ProjectManager` **et** `IAMManager`. Les deux sont nécessaires : `/bootstrap` crée un Projet Scaleway séparé pour chaque application (`ProjectManager`), puis fabrique une clé technique dédiée par service - base de données, stockage, email, IA (`IAMManager`). Votre clé d’environnement, elle, n’entre jamais dans l’application qui tourne. Ajoutez `BillingReadOnly` pour que `/costs` affiche le montant dépensé, ainsi que les permissions de service listées dans [CONTRACT.md](CONTRACT.md) §1. Si vous êtes propriétaire du compte Scaleway, vous avez déjà tous ces droits.
 
-**Cas B - Vous êtes membre de l’organisation, pas administrateur.** Demandez à votre administrateur de suivre [docs/ADMIN-SCALEWAY.md](docs/ADMIN-SCALEWAY.md). Votre administrateur crée un Projet Scaleway pour chaque application et vous transmet son identifiant. Ajoutez chaque identifiant à la variable `BAUDRIER_SCW_PROJECTS_IDS` de l’environnement cloud (étape 4 ci-dessous), sous la forme `nom-du-depot:identifiant`, avec une virgule entre les entrées. Un seul environnement cloud sert ainsi toutes vos applications : à chaque nouvelle application, complétez la liste via « Edit environment » puis ouvrez une nouvelle session. Pour une seule application, la variable `SCW_DEFAULT_PROJECT_ID=<identifiant>` fonctionne aussi.
+Une clé qui porte `ProjectManager` sans `IAMManager` est refusée : elle ne peut ni fabriquer les clés techniques, ni servir d’identifiant à l’application. Une clé limitée à un seul Projet relève du Cas B ci-dessous.
+
+**Cas B - Vous êtes membre de l’organisation, pas administrateur.** Demandez à votre administrateur de suivre [docs/ADMIN-SCALEWAY.md](docs/ADMIN-SCALEWAY.md). Il prépare un Projet Scaleway et une application IAM dédiés à cette application précise, puis vous transmet une clé d’accès, une clé secrète et l’identifiant du Projet. Cette clé fait tourner votre application autant qu’elle la construit, avant `/publish` comme après : gardez-la, avec l’identifiant de Projet, dans un environnement cloud dédié à cette seule application. **Un environnement cloud « Cas B » sert exactement une application** ; pour une deuxième application, recommencez cette étape avec votre administrateur et créez un second environnement cloud.
 
 Notez la **clé d’accès** et la **clé secrète**. La clé secrète ne s’affiche qu’une fois, à la création.
 
@@ -87,7 +89,7 @@ SCW_DEFAULT_ORGANIZATION_ID=<l’identifiant de votre organisation Scaleway>
 SCW_DEFAULT_REGION=fr-par
 ```
 
-Si vous suivez le **Cas B**, ajoutez `BAUDRIER_SCW_PROJECTS_IDS=<nom-du-depot>:<l’identifiant de projet transmis par votre administrateur>` (une entrée par application, avec une virgule entre les entrées).
+Si vous suivez le **Cas B**, ajoutez aussi `SCW_DEFAULT_PROJECT_ID=<l’identifiant de projet transmis par votre administrateur>`. Cette variable est obligatoire dans ce cas : votre clé est limitée à un seul Projet et ne peut pas lister ceux de l’organisation.
 
 Ces valeurs sont visibles par toute personne qui utilise cet environnement cloud. Sur un environnement personnel, cela veut dire vous seul(e). Claude Code ne propose aucun autre coffre-fort de secrets pour cet usage : c’est le mécanisme prévu.
 
@@ -114,7 +116,8 @@ Le dépôt GitHub doit rester vide avant cette étape, car Baudrier construit l�
 |---|---|---|
 | L’application répond 403 alors qu’elle n’est pas encore publiée | C’est le comportement normal : elle est restreinte à votre IP, et votre IP a changé | Ouvrez https://ip.me, copiez l’adresse affichée, donnez-la à Claude. Baudrier met à jour `ACCESS_ALLOWED_IPS`. |
 | Une variable Scaleway manque, ou le plugin n’est pas installé | L’environnement n’a pas encore le bon réglage, ou vous êtes dans une conversation ouverte avant la correction | Corrigez l’environnement (variables ou script), puis **ouvrez une nouvelle conversation**. Une conversation en cours ne peut pas rafraîchir sa propre liste de commandes. |
-| `/bootstrap` signale une clé Scaleway qui échoue avec une erreur 403 sur la liste des projets | La clé n’a pas la permission `ProjectManager` au niveau de l’organisation | Recréez une clé avec cette permission (étape 3 ci-dessus), et mettez à jour la variable `SCW_SECRET_KEY` de l’environnement |
+| `/bootstrap` signale une erreur 403 sur la liste des projets | En Cas A, la clé n’a pas la permission `ProjectManager` à l’échelle de l’organisation. En Cas B, la variable `SCW_DEFAULT_PROJECT_ID` manque : une clé limitée à un seul Projet ne peut pas lister ceux de l’organisation | En Cas A, recréez la clé avec `ProjectManager` et `IAMManager` (étape 3 ci-dessus), puis mettez à jour `SCW_ACCESS_KEY` et `SCW_SECRET_KEY`. En Cas B, ajoutez `SCW_DEFAULT_PROJECT_ID` à l’environnement |
+| Baudrier annonce qu’il manque la permission `IAMManager` à votre clé | La clé porte un droit sur toute l’organisation (par exemple `ProjectManager` ou `BillingReadOnly`) mais pas `IAMManager`. Elle ne correspond alors ni au Cas A ni au Cas B, et Baudrier refuse de deviner | Choisissez une forme. Cas A : ajoutez `IAMManager` à la clé. Cas B : demandez à votre administrateur une clé limitée au seul Projet, sans aucun droit d’organisation ([docs/ADMIN-SCALEWAY.md](docs/ADMIN-SCALEWAY.md)) |
 | Le réseau bloque un domaine dont vous ne comprenez pas le rôle | L’environnement est en accès réseau **Custom** et un domaine manque à la liste | Passez l’accès réseau en **Complet** (le réglage recommandé, étape 4), puis ouvrez une nouvelle conversation |
 
 **Après tout changement de l’environnement cloud, démarrez une NOUVELLE conversation.** Une conversation en cours ne voit pas le changement.
@@ -123,7 +126,7 @@ Le dépôt GitHub doit rester vide avant cette étape, car Baudrier construit l�
 
 | Vous voulez une explication d’abord ? | Vous voulez construire tout de suite ? |
 |---|---|
-| `/prof` - explique comment Baudrier fonctionne | `/bootstrap` - vérifie vos prérequis, puis démarre l'architecture de l'application |
+| `/prof` - explique comment Baudrier fonctionne | `/bootstrap` - vérifie vos prérequis, puis démarre l’architecture de l’application |
 
 ## Comment ça marche
 
@@ -161,7 +164,7 @@ Les tableaux ci-dessous sont établis en lisant chaque `skills/*/SKILL.md` prés
 | `/security` | Audit de sécurité (secrets, auth, headers, dépendances, RGPD) |
 | `/rgpd-audit` | Audit de conformité RGPD - détecte les services tiers utilisés, met à jour le registre des sous-traitants, génère ou rafraîchit la page de politique de confidentialité |
 | `/clean` | Trouve les fichiers inutilisés, le code mort, les env vars et tables DB orphelines - revue + suppression sur une branche |
-| `/rotate-secret` | Renouvelle une clé secrète partout où elle vit |
+| `/rotate-secret` | Renouvelle une clé secrète partout où elle vit. En Cas B, la clé Scaleway elle-même est renouvelée par votre administrateur, et Baudrier vous donne le message à lui transmettre |
 | `/save-project` | Crée une sauvegarde complète et horodatée d’un projet (code, base de données, env vars, stockage de fichiers, configs) |
 | `/delete-project` | Décommissionne proprement un projet et son infrastructure cloud, avec double confirmation avant toute suppression |
 
@@ -170,10 +173,10 @@ Les tableaux ci-dessous sont établis en lisant chaque `skills/*/SKILL.md` prés
 | Skill | Ce que ça fait |
 |---|---|
 | `/deploy` | Construit l’image du conteneur, la pousse vers Scaleway Container Registry, exécute les migrations, et la déploie sur Scaleway Serverless Containers - production ou preview |
-| `/publish` | Rend l’app accessible publiquement en désactivant la restriction VPN |
-| `/unpublish` | Rétablit la restriction par IP au VPN par défaut |
+| `/publish` | Rend l’app accessible publiquement en retirant la restriction par IP |
+| `/unpublish` | Rétablit la restriction par IP |
 | `/scale` | Affiche ou modifie la taille de calcul d’un conteneur déployé (S/M/L/XL) et son min-scale (scale-to-zero ou toujours actif) |
-| `/costs` | Affiche la consommation Scaleway réelle du projet (par service et au total), ainsi que la consommation TEM |
+| `/costs` | Affiche la consommation Scaleway réelle du projet (par service et au total), ainsi que la consommation TEM. En Cas B, le montant dépensé reste indisponible - il exige un droit sur toute l’organisation, que la clé ne porte pas - et seule la consommation TEM s’affiche |
 
 ### Skills addon
 
@@ -243,7 +246,7 @@ Chaque projet reçoit, quel que soit le mode :
 - Page 404 personnalisée
 - Mentions légales + page de politique de confidentialité data-driven, alimentée par un registre central des sous-traitants (`src/lib/subprocessors.json`) qui se met à jour automatiquement à chaque ajout de service via les skills `/add-*`
 - CLAUDE.md avec toutes les conventions du projet
-- Restriction par IP au VPN d’entreprise (jusqu’à l’exécution de `/publish`)
+- Restriction par IP à votre adresse (jusqu’à l’exécution de `/publish`)
 
 ## Attribution
 

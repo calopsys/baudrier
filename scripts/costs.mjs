@@ -18,14 +18,23 @@
 import { requireCredentials, resolveProjectId as resolveScwProjectId, deriveAppName } from "./scaleway/_scw-auth.mjs";
 import { getProjectCosts } from "./scaleway/billing.mjs";
 import { getConsumption as getTemConsumption } from "./scaleway/tem.mjs";
+import { credentialShape } from "./scaleway/app-credentials.mjs";
 import { pathToFileURL } from "node:url";
+
+// BillingReadOnly (CONTRACT.md §1) is organization-scoped, so a Project-scoped
+// key (credentialShape() === "project") 403s on getProjectCosts(). The spend
+// figure is then unavailable, not the whole command: TEM consumption still
+// works on a Project-scoped key, so the command degrades instead of failing.
+const BILLING_UNAVAILABLE_MESSAGE =
+  "Le montant dépensé nécessite un droit de niveau organisation (BillingReadOnly) que cette clé Scaleway " +
+  "ne porte pas. Consultez le montant réel dans la console Scaleway, rubrique Facturation.";
 
 // The APP's own Project, not the operator's default one - resolved by name
 // (CONTRACT.md §2, §7: app repos carry no Scaleway metadata at all).
 // SCW_DEFAULT_PROJECT_ID is the operator's default Project and reports the
 // wrong numbers when this script runs inside an app directory, unless that
-// env var IS the intended override (resolveProjectId() honours the per-app
-// BAUDRIER_SCW_PROJECTS_IDS entry, then that env var, before any lookup).
+// env var IS the intended override (resolveProjectId() honours it before any
+// by-name lookup).
 async function resolveProjectId(creds) {
   const explicit = flag("project-id");
   if (typeof explicit === "string") return { projectId: explicit, projectSource: "flag" };
@@ -118,8 +127,27 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
       );
     }
     console.log(`▸ calcul des coûts réels du projet Scaleway ${projectId} (${from} → ${to})`);
-    const costs = await getProjectCosts({ projectId, from, to });
-    console.log(`✅ ${costs.totalAmount} ${costs.currency} au total sur la période`);
+    // credentialShape() itself can throw (e.g. shape_deadlock) - a probe
+    // failure must not take the whole command down, so it degrades to
+    // "unknown" and falls through to the 403 catch below instead.
+    let shape = "unknown";
+    try {
+      shape = await credentialShape();
+    } catch {
+      shape = "unknown";
+    }
+    let costs = null;
+    if (shape === "project") {
+      console.log(`⚠️ ${BILLING_UNAVAILABLE_MESSAGE}`);
+    } else {
+      try {
+        costs = await getProjectCosts({ projectId, from, to });
+        console.log(`✅ ${costs.totalAmount} ${costs.currency} au total sur la période`);
+      } catch (e) {
+        if (e?.status !== 403) throw e;
+        console.log(`⚠️ ${BILLING_UNAVAILABLE_MESSAGE}`);
+      }
+    }
 
     console.log("▸ récupération de la consommation Transactional Email (TEM)");
     let temRaw = null;
@@ -136,18 +164,22 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     console.log("\n────────────────────────────────────────────────────────");
     console.log(`Coûts Scaleway - projet ${projectId} - ${from} → ${to}`);
     console.log("────────────────────────────────────────────────────────");
-    console.log(`Total : ${costs.totalAmount} ${costs.currency}`);
-    if (costs.byCategory.length) {
-      console.log("\nPar service :");
-      for (const c of [...costs.byCategory].sort((a, b) => b.amount - a.amount)) {
-        console.log(`  - ${c.category}: ${round2(c.amount)} ${costs.currency}`);
+    if (costs) {
+      console.log(`Total : ${costs.totalAmount} ${costs.currency}`);
+      if (costs.byCategory.length) {
+        console.log("\nPar service :");
+        for (const c of [...costs.byCategory].sort((a, b) => b.amount - a.amount)) {
+          console.log(`  - ${c.category}: ${round2(c.amount)} ${costs.currency}`);
+        }
+      } else {
+        console.log("\nAucune ligne de coût sur cette période (compte probablement dans son quota gratuit).");
+      }
+      if (costs.byPeriod.length > 1) {
+        console.log("\nPar mois :");
+        for (const p of costs.byPeriod) console.log(`  - ${p.billingPeriod}: ${round2(p.amount)} ${costs.currency}`);
       }
     } else {
-      console.log("\nAucune ligne de coût sur cette période (compte probablement dans son quota gratuit).");
-    }
-    if (costs.byPeriod.length > 1) {
-      console.log("\nPar mois :");
-      for (const p of costs.byPeriod) console.log(`  - ${p.billingPeriod}: ${round2(p.amount)} ${costs.currency}`);
+      console.log(`Total : indisponible. ${BILLING_UNAVAILABLE_MESSAGE}`);
     }
 
     console.log(
@@ -171,10 +203,11 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
         projectSource,
         from,
         to,
-        currency: costs.currency,
-        totalAmount: costs.totalAmount,
-        byCategory: costs.byCategory,
-        byPeriod: costs.byPeriod,
+        currency: costs?.currency ?? null,
+        totalAmount: costs?.totalAmount ?? null,
+        byCategory: costs?.byCategory ?? [],
+        byPeriod: costs?.byPeriod ?? [],
+        billingUnavailable: costs === null ? BILLING_UNAVAILABLE_MESSAGE : null,
         tem: { emailsSent, raw: temRaw, error: temError },
         referenceLimits: REFERENCE_LIMITS,
         referenceLimitsAreLive: false,

@@ -261,112 +261,117 @@ v22.22.2, pnpm 10.33.0, git 2.43.0, docker 29.3.1.
 
 ### IAM permission sets the operator's key must carry
 
-An account **owner** implicitly has every permission below - the table matters
-for an **organization member**, and for the narrow, single-purpose IAM
-applications an organization admin creates by hand when fulfilling a delegated
-request (`docs/ADMIN-SCALEWAY.md`). Verify the exact set names against
-https://www.scaleway.com/en/docs/iam/reference-content/permission-sets/ at the
-first live run; Scaleway can rename or split a set.
+An account **owner** implicitly has every permission below. For anyone else,
+the environment key (§2) must be one of exactly two shapes, never a mix and
+never a third shape:
 
-| Permission set | Scope | Called by |
-|---|---|---|
-| `ProjectManager` | organization | `bootstrap-init.mjs` (per-app Project creation), `check-name-collision.mjs` |
-| `IAMManager` | organization | `iam.mjs` callers: `setup-db.mjs`, `deploy.mjs`, `setup-agent.mjs`, `rotate-secret.mjs`, skills `add-db`, `add-storage`, `add-workflow` |
-| `SecretManagerFullAccess` | project | `secrets.mjs` |
-| `ContainersFullAccess` | project | `container.mjs` |
-| `ContainerRegistryFullAccess` | project | `registry.mjs` |
-| `ServerlessSQLDatabaseFullAccess` | project | `sdb.mjs` |
-| `ServerlessJobsFullAccess` | project | `jobs.mjs` |
-| `ObjectStorageFullAccess` | project | `object-storage.mjs` |
-| `DomainsDNSFullAccess` | project | `dns.mjs` |
-| `TransactionalEmailFullAccess` | project | `tem.mjs` |
-| `GenerativeApisFullAccess` | project | `setup-agent.mjs` policy target |
-| `BillingReadOnly` | organization | `billing.mjs` |
-| `ObservabilityFullAccess` | project | `cockpit.mjs` |
+- **Cas A** - the key belongs to an organization admin. `/bootstrap` creates
+  the Scaleway Project itself and mints one scoped IAM application plus API
+  key per service connection (database, Object Storage, Generative APIs,
+  Transactional Email), each stored in Secret Manager. The environment key
+  itself never reaches a running container.
+- **Cas B** - the key is a single IAM application scoped to one Project,
+  created ahead of time by the organization admin (`docs/ADMIN-SCALEWAY.md`).
+  The harness mints nothing: that same key serves every service connection,
+  permanently, before and after `/publish`. One key, one application, one
+  cloud environment, one app.
 
-`ProjectManager` and `IAMManager` are organization-scoped because the harness
-creates a new Project per app - a project-scoped rule could not reach a
-Project that does not exist yet.
+`operatorKeyAsAppCredential()` (`scripts/scaleway/app-credentials.mjs`, §3) is
+the one place that tells the two shapes apart - see "The chokepoint" below.
+Verify the exact permission-set names against
+https://www.scaleway.com/en/docs/iam/reference-content/permission-sets/ at
+the first live run; Scaleway can rename or split a set.
 
-Both sets are **optional** on the operator's own key. Their presence or
-absence changes how `scwProject()` resolves the app's Project, and how
-service credentials get minted - not through a mode flag, but through what
-is already configured (§2, §7).
+| Permission set | Scope | Cas A | Cas B | Called by |
+|---|---|---|---|---|
+| `ProjectManager` | organization | yes | never | `bootstrap-init.mjs` (per-app Project creation), `check-name-collision.mjs` |
+| `IAMManager` | organization | yes | never | `iam.mjs` callers: `setup-db.mjs`, `deploy.mjs`, `setup-agent.mjs`, `rotate-secret.mjs`, skills `add-db`, `add-storage`, `add-workflow` |
+| `SecretManagerFullAccess` | project | yes | yes | `secrets.mjs` |
+| `ContainersFullAccess` | project | yes | yes | `container.mjs` |
+| `ContainerRegistryFullAccess` | project | yes | yes | `registry.mjs` |
+| `ServerlessSQLDatabaseFullAccess` | project | yes | yes | `sdb.mjs` |
+| `ServerlessJobsFullAccess` | project | yes | yes | `jobs.mjs` |
+| `ObjectStorageFullAccess` | project | yes | yes | `object-storage.mjs` |
+| `DomainsDNSFullAccess` | project | yes | yes | `dns.mjs` |
+| `TransactionalEmailFullAccess` | project | yes | yes | `tem.mjs` |
+| `GenerativeApisFullAccess` | project | yes | yes | `setup-agent.mjs` policy target |
+| `BillingReadOnly` | organization | yes | never | `billing.mjs` |
+| `ObservabilityFullAccess` | project | yes | yes | `cockpit.mjs` |
 
-**Project scope resolution.** If a Project id is already configured for the
-app - a `--scw-project-id` flag, a matching `BAUDRIER_SCW_PROJECTS_IDS`
-entry, or `SCW_DEFAULT_PROJECT_ID` (§2) - `scwProject()` uses that Project
-and never calls `createProject`. It also refuses a Project that already
-holds a known Baudrier secret name - accepting it would break the
-name-equals-var invariant (§2) by colliding two apps' secrets in one
-Project. If no id is configured, `scwProject()` lists the organization's
-Projects and creates one if needed (`ProjectManager`, org-scoped). A 403 on
-that list-or-create call raises `ScwError type "needs_admin"`, which
-`/bootstrap` already recovers from: it asks the user for an existing
-Project id and retries with `--scw-project-id`.
+`ProjectManager` and `IAMManager` stay Cas A only because both are
+organization-scoped: a Project-scoped Cas B key cannot hold either one by
+definition, and the harness must never ask a Cas B admin to widen the key
+past its one Project (`docs/ADMIN-SCALEWAY.md` says so explicitly).
 
-**Minting service credentials.** When the operator's key also carries
-`IAMManager`, `/bootstrap` mints every service credential itself: a scoped
-IAM key per capability (`SCW_GENERATIVE_API_KEY`, `TEM_API_SECRET_KEY`,
-`STORAGE_ACCESS_KEY`/`STORAGE_SECRET_KEY`, the delegated-database pair).
-`check-scw-permissions.mjs` is a read-only advisory probe for both rights;
-it recommends setting `BAUDRIER_SCW_PROJECTS_IDS` or
-`SCW_DEFAULT_PROJECT_ID` when they are missing, and persists nothing.
+`BillingReadOnly` is Cas A only for a related but distinct reason: it is
+organization-scoped (above), and a Cas B key reaches the running
+container - Cas A's environment key never does. Granting `BillingReadOnly`
+to a Cas B key would let a leaked container expose organization-wide spend
+figures. The user-visible consequence: `/costs` cannot show the Scaleway
+spend figure for a Cas B app; it still shows Transactional Email
+consumption, since `TransactionalEmailFullAccess` stays in the Cas B set.
 
-**`delegated` is a per-app state, not a mode.** It is entered when
-`/publish`'s adoption step live-validates an admin-provisioned
-`BAUDRIER_APP_KEY` (one `listSecrets` call under the candidate key, §2). On
-success it prints the `SCW_*` env lines the operator must set (the secret
-value is never echoed) and persists nothing. The delegated state is not a
-stored flag: it exists when the operator's env holds the app-scoped key
-instead of a personal key. On web the operator sets the lines in the cloud
-environment dialog; on Linux, in their gitignored env file.
+**The chokepoint.** `operatorKeyAsAppCredential()` is the only code allowed
+to turn the environment key into an application credential - a value that
+ends up in a container's `secret_environment_variables`. It probes the
+key's own rights before doing so (`probeOrgReach()`, §3), and:
+- refuses outright any key that shows organization reach and can mint
+  (`ProjectManager`/`IAMManager` together) - that key is Cas A, and Cas A's
+  environment key must never reach a container;
+- refuses a key with organization reach but no `IAMManager` too - stuck
+  between shapes, it can neither mint as Cas A nor be adopted as an app
+  credential, and the admin must fix the key rather than the harness
+  guessing around it;
+- refuses when the probe itself is inconclusive - an ambiguous answer is
+  treated as "could be Cas A", never as "assume Cas B";
+- fails closed in every case above: refusal blocks the operation, it never
+  falls back to a weaker check.
 
-Project creation is unchanged by this split: `bootstrap-init.mjs` still
-needs `ProjectManager` at the moment it runs, whenever no Project id is
-already configured, nothing can fake it, and a 403 there still fails
-immediately with `ScwError type "needs_admin"` carrying a forwardable
-French request (`docs/ADMIN-SCALEWAY.md`, « Recette « projet » »).
+The probe result is what decides which shape the harness is running under.
+There is no mode flag and no user-facing setting to pick a shape by hand -
+the key itself carries the answer.
 
-Service credentials (`BAUDRIER_DB_KEY`, `SCW_GENERATIVE_API_KEY`,
-`TEM_API_SECRET_KEY`, `STORAGE_ACCESS_KEY`/`STORAGE_SECRET_KEY`) no longer
-interrupt per request when `IAMManager` is absent from the operator's key.
-On a 403
-from an IAM mint the script tries, in order: the delegated secret an
-organization admin provisioned by hand; then, silently, the operator's own
-personal Scaleway key, recorded as dev-backed in the
-`BAUDRIER_DEV_FINGERPRINTS` manifest secret (§2, §3 `dev-credentials.mjs`);
-`"needs_admin"` fires only as a rare last resort, when even the personal-key
-fallback is unavailable. Object Storage is the one exception still handled
-per request: `scripts/scaleway/dev-credentials.mjs` has no fill command for
-it, so `/add-storage` keeps relaying a `docs/ADMIN-SCALEWAY.md` request
-immediately on a `permission_denied` from its IAM mint.
+**Project scope resolution, Cas A.** `bootstrap-init.mjs` calls
+`ProjectManager` whenever no Project id is already configured - a
+`--scw-project-id` flag or `SCW_DEFAULT_PROJECT_ID` (§2) - so `scwProject()`
+lists the organization's Projects and creates one if needed. It also refuses
+a Project that already holds a known Baudrier secret name - accepting it
+would break the name-equals-var invariant (§2) by colliding two apps'
+secrets in one Project. A 403 on that list-or-create call raises `ScwError
+type "needs_admin"`, which `/bootstrap` already recovers from: it asks the
+user for an existing Project id and retries with `--scw-project-id`.
 
-Every request that *did* fall back to the operator's personal key is
-batched, not silent forever: `/publish` (`skills/publish/SKILL.md`) refuses
-to make an app public while `dev-credentials.mjs check --json` still reports
-any `devBacked` secret for it, and prints one consolidated French request
-covering every addon at once. This is the security rationale for the gate:
-the personal key is acceptable only while the app stays IP-restricted.
+**Project scope resolution, Cas B.** There is no list-or-create call: a
+Project-scoped key cannot list Projects at all. `SCW_DEFAULT_PROJECT_ID` is
+therefore not optional for Cas B - it is the only way the key declares which
+Project it owns (§2), and the admin hands it over alongside the key pair
+(`docs/ADMIN-SCALEWAY.md`).
 
-**Known 1.x trade-off: there is no per-project harness control-plane key.**
-Even when the operator's key carries both `ProjectManager` and
-`IAMManager`, every harness-side mint and every `createProject` call runs
-under the operator's own, human-held key - never under a separate, narrower
-credential scoped to one project. A control-plane key of that shape would
-need `ProjectManager` and `IAMManager`, and both are organization-scoped by
-construction (above): granting them to anything still means granting
-org-wide rights, this time to a non-human credential sitting in Secret
-Manager, which is the exposure the harness exists to avoid, not a way
-around it. A second, technical constraint reinforces the same choice:
+**Minting service credentials.** Cas A's `/bootstrap` mints every service
+credential itself: a scoped IAM key per capability (`SCW_GENERATIVE_API_KEY`,
+`TEM_API_SECRET_KEY`, `STORAGE_ACCESS_KEY`/`STORAGE_SECRET_KEY`, the
+database pair). Cas B mints nothing - `operatorKeyAsAppCredential()` reshapes
+the one environment key into each of those same variables instead.
+`check-scw-permissions.mjs` is a read-only advisory probe for
+`ProjectManager`/`IAMManager`; it recommends setting `SCW_DEFAULT_PROJECT_ID`
+when it is missing, and persists nothing.
+
+**Known 1.x trade-off, Cas A only: there is no per-project harness
+control-plane key.** Every harness-side mint and every `createProject` call
+runs under the operator's own, human-held admin key - never under a
+separate, narrower credential scoped to one project. A control-plane key of
+that shape would need `ProjectManager` and `IAMManager`, and both are
+organization-scoped by construction (above): granting them to anything still
+means granting org-wide rights, this time to a non-human credential sitting
+in Secret Manager, which is the exposure the harness exists to avoid, not a
+way around it. A second, technical constraint reinforces the same choice:
 `_scw-auth.mjs#api()` memoises one SDK instance per `(product, version,
 cls)` for the process's one active identity, so juggling a second,
 per-project identity alongside the operator's own inside a single script
-run is not something the current code supports. Adoption into the
-`delegated` state needs no such juggling: an operator's key that never
-carried `ProjectManager`/`IAMManager` to begin with already 403s on every
-org-scoped call it makes, and already routes into the fallback chain above
-- by design, not by accident.
+run is not something the current code supports. Cas B sidesteps the problem
+rather than solving it: its key already is a narrow, per-project credential,
+handed to the collaborator by the admin ahead of time, so the harness never
+mints anything and never juggles a second identity.
 
 ---
 
@@ -389,43 +394,36 @@ any platform.
 | `SCW_SECRET_KEY` | IAM API key secret key |
 | `SCW_DEFAULT_ORGANIZATION_ID` | Scaleway Organization |
 | `SCW_DEFAULT_REGION` | always `fr-par`; this is the default applied when unset |
-| `SCW_DEFAULT_PROJECT_ID` | optional override: skip the by-name Project lookup below and target this Project id directly |
-| `BAUDRIER_SCW_PROJECTS_IDS` | optional per-app map for a key that cannot list the organization's Projects (README « Cas B »): `app-un:id1,app-deux:id2`; a matching entry wins over `SCW_DEFAULT_PROJECT_ID`, so one cloud environment serves several apps |
+| `SCW_DEFAULT_PROJECT_ID` | Cas A: optional override, skips the by-name Project lookup and targets this Project id directly. Cas B: mandatory - a Project-scoped key cannot list Projects, so this is the only way it declares which Project it owns (§1) |
 
-**Per-app scope resolves by Scaleway Project name, never by a stored id.**
-App repos carry **no Scaleway metadata at all** - `.scaleway/container.json`
-no longer exists. A Project's name is always the app name, which is always
-the repo name, so `_scw-auth.mjs` resolves the active Project in this order:
-a `BAUDRIER_SCW_PROJECTS_IDS` entry matching the app name → the
-`SCW_DEFAULT_PROJECT_ID` env override → a session-scoped `/tmp` cache keyed
-by app name → an SDK `listProjects` call filtered by name, which then writes
-that cache. **The operator's API key must therefore carry org-level Project
-`list`/`create` rights** (`ProjectManager`, §1) whenever neither env var is
-set; a key that lacks them must set `BAUDRIER_SCW_PROJECTS_IDS` (several
-apps, one environment) or `SCW_DEFAULT_PROJECT_ID` (one app) instead of
-relying on the lookup - this is exactly the condition under which
-`scwProject()` skips the org-level list-or-create call (§1). An env-var
-edit only reaches a NEW session; for the current session
-the `cache-project` command of `_scw-auth.mjs` (§3) seeds the session cache
-from a Project id the user gives in the chat - an id is an identifier, not a
-secret, so the chat is an acceptable channel for it. Containers and registry
-namespaces are likewise found by name, never by a stored id.
+**Per-app scope resolves by Scaleway Project id or name, never by a stored
+file.** App repos carry **no Scaleway metadata at all** -
+`.scaleway/container.json` does not exist. `_scw-auth.mjs` resolves the
+active Project in this order: the `SCW_DEFAULT_PROJECT_ID` env override → a
+session-scoped `/tmp` cache keyed by app name → an SDK `listProjects` call
+filtered by the app's name, which then writes that cache (`ProjectManager`,
+§1, Cas A only). A Cas B key cannot take that last path at all, which is
+exactly why `SCW_DEFAULT_PROJECT_ID` is mandatory for it, not optional
+(§1). This is also why one Cas B cloud environment serves exactly one app:
+there is no per-app map any more, so a second app under the same key would
+have no way to pick a different Project. An env-var edit only reaches a NEW
+session; for the current session the `cache-project` command of
+`_scw-auth.mjs` (§3) seeds the session cache from a Project id the user
+gives in the chat - an id is an identifier, not a secret, so the chat is an
+acceptable channel for it. Containers and registry namespaces are likewise
+found by name, never by a stored id.
 
-When `IAMManager` is absent from the operator's key (§1), the operator's own
-personal key MAY back one or more of a restricted app's own secrets while
-that app is still under development -
-until `/publish` runs. Every such fallback is tracked by fingerprint (never
-the raw key) in the `BAUDRIER_DEV_FINGERPRINTS` manifest secret (see the
-named secret exceptions below). `/publish` refuses to proceed while any
-secret for the target app is still dev-backed, so the personal key never
-reaches a published app.
-
-**Runtime credentials are always scoped.** A generated app never receives
-`SCW_SECRET_KEY` — that key can administer the whole Project. Each capability
-gets its own IAM-scoped key instead: `TEM_API_SECRET_KEY` for email,
-`STORAGE_ACCESS_KEY`/`STORAGE_SECRET_KEY` for Object Storage,
-`SCW_GENERATIVE_API_KEY` for Generative APIs, and the IAM application id +
-secret embedded in `DATABASE_URL` for the database.
+**Runtime credentials are always scoped to the app's own Project, never to
+the whole organization - but how they get there differs by shape (§1).** In
+Cas A each capability gets its own IAM-scoped key, minted by `/bootstrap`:
+`TEM_API_SECRET_KEY` for email, `STORAGE_ACCESS_KEY`/`STORAGE_SECRET_KEY`
+for Object Storage, `SCW_GENERATIVE_API_KEY` for Generative APIs, and the
+IAM application id + secret embedded in `DATABASE_URL` for the database. In
+Cas B there is only one key: `operatorKeyAsAppCredential()` (§1, §3) reshapes
+the environment key itself into every one of those same container
+variables, since the admin already scoped it to exactly this Project and
+nothing wider. In neither shape does a generated app ever receive
+`SCW_ACCESS_KEY`/`SCW_SECRET_KEY` under those names.
 
 ### Generated app (`.env` locally, `secret_environment_variables` in the container)
 
@@ -489,42 +487,26 @@ repo-access gate is `git ls-remote origin`, never `gh auth status` or
 `gh api /user` (§1, §7). No script in this repo reads a `GITHUB_TOKEN`
 secret, and `gh` is no longer part of the toolchain at all (§5, §7).
 
-Four exceptions to the name-equals-var rule:
+Two exceptions to the name-equals-var rule:
 
 1. Preview environments each need their own database, so `/deploy` stores
    preview connection strings as `DATABASE_URL_PREVIEW_<BRANCH_SLUG>` and maps
    them onto the literal `DATABASE_URL` at point of use (the Job's
    `secretRefs` and the container's `secret_environment_variables`).
 2. `BAUDRIER_DB_KEY`: its body is JSON with two fields (`application_id`,
-   `secret_key`) - the delegated IAM Application id and API secret key an
-   organization admin provisions by hand for the database, one pair per app
-   Project (`docs/ADMIN-SCALEWAY.md`, « Recette « base de données » »). It
-   lives in the app's own Project, like every other secret, but is read
-   **in-process only** by `setup-db.mjs`, `deploy.mjs` (preview databases -
-   same pair) and `rotate-secret.mjs` on a `permission_denied` fallback -
-   never via the `secrets.mjs` CLI `get` command, which would print it. Its
-   name is exported as `DELEGATED_DB_KEY_SECRET_NAME` from
-   `scripts/scaleway/iam.mjs`.
-3. `BAUDRIER_DEV_FINGERPRINTS`: a hashes-only manifest secret, one per app
-   Project, that `scripts/scaleway/dev-credentials.mjs` writes and reads. It
-   records which service credentials (§1) are currently backed by the
-   operator's own personal Scaleway key instead of a delegated or scoped one
-   - by fingerprint, never the raw key value. `dev-credentials.mjs check
-   --json` reads it to answer "which secrets are dev-backed"; `/publish`
-   (`skills/publish/SKILL.md`) is the caller that acts on the answer. Its
-   name is exported as `DEV_FINGERPRINTS_SECRET_NAME` from
-   `scripts/scaleway/dev-credentials.mjs`.
-4. `BAUDRIER_APP_KEY`: body is JSON with two fields (`access_key`,
-   `secret_key`) - an admin-minted IAM application carrying the project's
-   service permission sets (never `ProjectManager`/`IAMManager`, §1).
-   `/publish`'s adoption step live-validates it with one `listSecrets` call
-   under the candidate key, then prints the `SCW_*` env lines the operator
-   must set (§1). Nothing is persisted; the operator's env is the only
-   credential store (§7).
+   `secret_key`) - the IAM Application id and API secret key backing the
+   database connection, one pair per app Project. In Cas A `/bootstrap` mints
+   this pair itself (§1); in Cas B it is derived from the environment key by
+   `operatorKeyAsAppCredential()` instead (§1, §3) - no separate database
+   application exists. It lives in the app's own Project, like every other
+   secret, but is read **in-process only** by `setup-db.mjs`, `deploy.mjs`
+   (preview databases - same pair) and `rotate-secret.mjs` - never via the
+   `secrets.mjs` CLI `get` command, which would print it. Its name is
+   exported as `DELEGATED_DB_KEY_SECRET_NAME` from `scripts/scaleway/iam.mjs`.
 
-`BAUDRIER_APP_KEY` is covered by the existing `BAUDRIER_*` container-exclusion
+`BAUDRIER_DB_KEY` is covered by the existing `BAUDRIER_*` container-exclusion
 prefix (`CONTAINER_EXCLUDED_SECRETS`, §1) like every other operator-side
-secret - it is never projected into a container.
+secret - it is never projected into a container under that name.
 
 ### Additional app vars set by addon skills
 
@@ -720,19 +702,53 @@ export async function deleteApiKey(accessKey);
 ```
 
 A 403 on a mint operation (`ensureApplication`, `ensurePolicy`, `createApiKey`)
-maps to `ScwError type "permission_denied"` - the delegation signal callers
-fall back on (§1, §7).
+maps to `ScwError type "permission_denied"`. Cas A's key always carries
+`IAMManager` by construction (§1), so this is an unexpected-failure path, not
+a routed fallback.
 
-### `dev-credentials.mjs` — dev-key fallback tracking (batch-at-publish, §1)
+### `app-credentials.mjs` - the operator-key-to-app-credential chokepoint (§1)
 
 ```js
-export const DEV_FINGERPRINTS_SECRET_NAME;  // "BAUDRIER_DEV_FINGERPRINTS"
+export async function devDbCredentials();
+                                    // -> {principalId, secretKey}: the IAM
+                                    // user/application id behind the operator's
+                                    // own key, for a Cas B database connection
+export async function credentialShape();
+                                    // -> "org" | "project" | "unknown"
+                                    // throws ScwError type "shape_deadlock"
+export async function operatorKeyAsAppCredential({purpose});
+                                    // -> {accessKey, secretKey}
+                                    // throws ScwError type "shape_unknown" |
+                                    // "shape_deadlock" | "org_key_refused"
 ```
 
-CLI, one JSON line each: `check --json` → `{"ok":true,"devBacked":[...],"cleared":[...]}`;
-`swap-db --project-name <name> --json` → `{"ok":true,"swapped":true|false,...}` (retries a
-`DATABASE_URL` already dev-backed against a `BAUDRIER_DB_KEY` an admin may since have
-stored). `/publish` (`skills/publish/SKILL.md`) is its only caller.
+Renamed from the module's earlier name and earlier job: tracking which
+secrets were still backed by the operator's personal key, for `/publish` to
+gate on. That job is gone along with the fallback chain it tracked (§1). Its
+new job is narrower and stricter: `operatorKeyAsAppCredential()` is the
+**only** code allowed to turn the environment key (§2) into a credential that
+reaches a container's `secret_environment_variables`. It delegates the actual
+probe to `probeOrgReach()` (`check-scw-permissions.mjs`, below), memoised for
+the lifetime of the process only - never written to disk (§7) - and refuses,
+fail-closed, in every case but one:
+- `shape_unknown` - the probe itself was inconclusive (a probe call failed
+  for a reason other than a clean 403/401): never guess Cas B from a probe
+  that could not finish;
+- `shape_deadlock` - the key has organization reach (`ProjectManager` and/or
+  `BillingReadOnly`) but not `IAMManager`: it can neither mint a scoped key
+  as Cas A, nor be adopted as an app credential, since it does have
+  organization reach. The admin must either add `IAMManager` or reissue a
+  Project-scoped key;
+- `org_key_refused` - the key has organization reach and `IAMManager` too:
+  a genuine Cas A key, refused outright as an app credential.
+
+Only when none of these fire - no organization reach at all - does it return
+the credential pair, confirming the key is Cas B (§1). Callers use it to
+build `DATABASE_URL` (via `devDbCredentials()` for the connection string's
+IAM principal), `STORAGE_ACCESS_KEY`/`STORAGE_SECRET_KEY`,
+`SCW_GENERATIVE_API_KEY` and `TEM_API_SECRET_KEY` directly from the
+environment key, instead of minting a separate scoped key the way Cas A
+does.
 
 ### `registry.mjs`
 
@@ -879,17 +895,16 @@ the tiers they wrote (§7): there is nothing left for `_preflight` to persist.
 
 | Script | Role |
 |---|---|
-| `scripts/check-scw-permissions.mjs` | read-only probe for `ProjectManager`/`IAMManager`; a 403 is a hard "missing" signal, a clean probe is not a create-rights guarantee. Advisory only - it recommends setting `BAUDRIER_SCW_PROJECTS_IDS` or `SCW_DEFAULT_PROJECT_ID` (§1, §2), it does not set either itself. |
+| `scripts/check-scw-permissions.mjs` | read-only probe for the three organization-scoped permission sets: `ProjectManager`, `IAMManager`, `BillingReadOnly`. Exports `probeOrgReach({organizationId?})` -> `{orgReach, canMint, conclusive, probes}` - `orgReach` is true when any of the three succeeds, `canMint` mirrors `IAMManager` alone, `conclusive` is false on anything other than a clean success or a clean 403/401. This is what `operatorKeyAsAppCredential()` (`app-credentials.mjs`, §1) calls to decide the shape. Run directly it is advisory only - it recommends setting `SCW_DEFAULT_PROJECT_ID` (§1, §2), it does not set it itself. |
 
-Credential adoption exists in exactly one place: `/publish`'s migration into
-the `delegated` state, `dev-credentials.mjs swap-all` (§1, `dev-credentials.mjs`
-above). It is
-admin-initiated - an organization admin provisions `BAUDRIER_APP_KEY` in Secret
-Manager first, the harness never asks for org-wide rights on its own behalf -
-it live-validates the candidate key, then prints the `SCW_*` env lines for the
-operator to set (§1). It writes nothing to disk. It can never grant
-organization-wide rights: the key it adopts is itself project-scoped (§1, §2).
-See `docs/ADMIN-SCALEWAY.md`.
+Credential adoption exists in exactly one place: `operatorKeyAsAppCredential()`
+(§1, `app-credentials.mjs` above). It runs automatically, on every script that
+needs an app-facing credential - there is no separate admin-initiated step
+and no secret an admin provisions after the fact. The admin's one action is
+upstream of all of this: provisioning the Cas B key itself, scoped to one
+Project, per `docs/ADMIN-SCALEWAY.md`. The chokepoint never grants
+organization-wide rights - it refuses outright rather than adopt a key it
+cannot confirm is Project-scoped (§1). See `docs/ADMIN-SCALEWAY.md`.
 
 ---
 
@@ -1144,6 +1159,10 @@ Preserve upstream's structure — it works and users rely on it.
 - Dockerfile `COPY` paths always use forward slashes.
 - Environment variables are the **only** Scaleway credential mechanism (§2)
   - the harness never reads the `scw` config file.
+- `operatorKeyAsAppCredential()` (`scripts/scaleway/app-credentials.mjs`, §1)
+  is the only code allowed to turn the environment key into an app-facing
+  credential. It must refuse a key with organization reach and refuse an
+  inconclusive probe - fail closed, never guess Cas B.
 
 ### Web session rules (Claude Code web, added 2026-08-05)
 
@@ -1198,10 +1217,10 @@ Preserve upstream's structure — it works and users rely on it.
 
 `_scw-auth.mjs#loadCredentials()` reads `SCW_ACCESS_KEY`, `SCW_SECRET_KEY`,
 `SCW_DEFAULT_ORGANIZATION_ID`, `SCW_DEFAULT_REGION` (default `fr-par`), and
-the optional `SCW_DEFAULT_PROJECT_ID` override straight from `process.env`
-(§2). `resolveProjectId()` additionally reads the optional per-app map
-`BAUDRIER_SCW_PROJECTS_IDS` (§2), also straight from `process.env`.
-**There is no other tier.** The old three-tier system - a repo-local
+`SCW_DEFAULT_PROJECT_ID` straight from `process.env` (§2).
+`resolveProjectId()` reads that same `SCW_DEFAULT_PROJECT_ID`, also straight
+from `process.env` - a Cas B key has no other source, since it cannot list
+Projects (§1). **There is no other tier.** The old three-tier system - a repo-local
 `<repo>/.baudrier/credentials.json`, then env vars, then the `scw` config
 file - is gone, along with the scripts that wrote it
 (`_persist-scw-credentials.mjs`, `collect-scw-credentials.mjs`,
@@ -1211,13 +1230,13 @@ The active Project resolves at call time, by name, as described in §2 -
 never from a file the harness wrote earlier.
 
 Project scope resolution is likewise read fresh on every run, from
-`SCW_DEFAULT_PROJECT_ID` and `BAUDRIER_SCW_PROJECTS_IDS` (§1, §2). There is
-no persisted operator-level default file (`~/.claude/baudrier/defaults.json`
-is gone) and no mode-selection fallback chain: a configured Project id wins
-outright, and its absence is what makes `scwProject()` fall through to the
-org-level list-or-create call. `check-scw-permissions.mjs` remains as a
-read-only advisory probe - it recommends setting one of the two env vars,
-it never sets either itself.
+`SCW_DEFAULT_PROJECT_ID` (§1, §2). There is no persisted operator-level
+default file (`~/.claude/baudrier/defaults.json` is gone) and no
+mode-selection fallback chain: a configured Project id wins outright, and
+its absence is what makes `scwProject()` fall through to the org-level
+list-or-create call - available to Cas A only (§1). `check-scw-permissions.mjs`
+remains as a read-only advisory probe - it recommends setting
+`SCW_DEFAULT_PROJECT_ID`, it never sets it itself.
 
 **Every consumer resolves through `loadCredentials()`.** A script must not
 read `SCW_ACCESS_KEY`/`SCW_SECRET_KEY` from `process.env` directly: going

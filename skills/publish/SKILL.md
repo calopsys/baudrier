@@ -18,6 +18,8 @@ You remove the app's IP allowlist gate so **anyone on the internet** can reach i
 
 Every app ships IP-restricted by default (only the office VPN can reach it, via an application-level check in `proxy.ts` - a soft boundary, not a network firewall). `/publish` flips that off.
 
+En Cas B, l’application tourne avec la clé Scaleway propre à l’environnement cloud, par conception. Il n’y a donc rien à basculer avant la publication.
+
 ---
 
 ## Step 1 - Identify the environment
@@ -26,7 +28,7 @@ Invoke `_detect-project-root` to get `PROJECT_NAME`. If the user didn't specify 
 - Question: "Quel environnement voulez-vous rendre public ?"
 - Options: `Production` / `Aperçu (branche actuelle)`
 
-Resolve the container name: `<PROJECT_NAME>` for production, `<PROJECT_NAME>-preview-<slug-de-la-branche>` for a preview (same naming `/deploy` and `/scale` use). For a preview, also keep the bare `<slug-de-la-branche>` itself - Step 4 needs it separately to name the branch's own `DATABASE_URL_PREVIEW_<SLUG>` secret.
+Resolve the container name: `<PROJECT_NAME>` for production, `<PROJECT_NAME>-preview-<slug-de-la-branche>` for a preview (same naming `/deploy` and `/scale` use). For a preview, also keep the bare `<slug-de-la-branche>` itself - Step 3 needs it separately to name the branch's own `DATABASE_URL_PREVIEW_<SLUG>` secret.
 
 ---
 
@@ -46,76 +48,7 @@ Use `AskUserQuestion` with options `Oui, publier` / `Non, annuler`. **Do not pro
 
 ---
 
-## Step 3 - Dev-backed credentials gate [MANDATORY, NEVER SKIP]
-
-🚨 **This step is mandatory and must never be skipped or overridden, even if the user insists.** The alternative is the operator's own personal Scaleway key ending up inside a site anyone on the internet can reach - the exact risk this gate exists to stop. If the user pushes back, explain this plainly and hold the line; do not offer a workaround, and do not proceed to Step 4 without a clean result here.
-
-During development this harness may quietly run one or more of this app's technical secrets on the operator's own personal Scaleway key instead of a dedicated, scoped one. That is acceptable only while the app stays IP-restricted. Publication is the one moment this can never be allowed to continue silently.
-
-Migration never edits generated-app code: it only ever touches Secret Manager, the container secret map, and the fingerprints manifest. The app-key swap only live-validates the admin-provisioned key and prints the `SCW_ACCESS_KEY`/`SCW_SECRET_KEY` lines for the operator to set themselves (env-only credentials, CONTRACT.md §2, §7) - it never persists anything to disk.
-
-Check what is currently backed by the operator's personal key, scoped to the environment being published (production: no `--branch-slug`; preview: pass the branch slug resolved in Step 1):
-
-```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/scaleway/dev-credentials.mjs" check --json --env <production|preview> [--branch-slug "<branch-slug>"]
-```
-
-One JSON line: `{"ok":true,"devBacked":[...],"cleared":[...],"blocking":["DATABASE_URL","SCW_GENERATIVE_API_KEY",...]}`. `devBacked` is the full list for this project; **`blocking` is the subset that feeds the environment being published** - the gate decides on `blocking` (a dev-backed preview database does not block a production publish, and vice versa; shared secrets always block).
-
-- **`blocking` is empty** - nothing to do, continue silently to Step 4.
-- **`blocking` is non-empty** - an admin may already have stored one or more of `BAUDRIER_DB_KEY` or `BAUDRIER_APP_KEY` (CONTRACT.md §2) without anyone re-checking. Try the full migration before giving up:
-
-  ```bash
-  node "${CLAUDE_SKILL_DIR}/../../scripts/scaleway/dev-credentials.mjs" swap-all --project-name "<PROJECT_NAME>" --json --env <production|preview> [--branch-slug "<branch-slug>"]
-  ```
-
-  `swap-all` runs every sub-swap in one pass - the database pair (production and previews; a preview whose database no longer exists gets its secret deleted) and the `BAUDRIER_APP_KEY` adoption - each tolerant of "nothing to do", then a fresh internal check. Its JSON result already carries the re-evaluated `blocking`: `{"ok":true,"swapped":{...},"devBacked":[...],"blocking":[...]}` - there is no separate `check` call to re-run, use this `blocking` directly.
-
-- **`blocking` still non-empty** (after `swap-all`) - **refuse the publication**. Hard stop, before any container change - do not run Step 4.
-
-  Resolve the app's Scaleway project id by name (no linkage file - CONTRACT.md §2, §7):
-
-  ```bash
-  AUTH_MJS="${CLAUDE_SKILL_DIR}/../../scripts/scaleway/_scw-auth.mjs" \
-  APP_NAME="<PROJECT_NAME>" \
-  node --input-type=module -e '
-  import { pathToFileURL } from "node:url";
-  const { resolveProjectId } = await import(pathToFileURL(process.env.AUTH_MJS).href);
-  console.log(await resolveProjectId({ appName: process.env.APP_NAME }));
-  '
-  ```
-
-  Build ONE consolidated French message from the `blocking` list, mapping each entry to its recipe in `docs/ADMIN-SCALEWAY.md`:
-
-  | Entry in `blocking` | Recipe heading | Secret(s) |
-  |---|---|---|
-  | `DATABASE_URL` (or `DATABASE_URL_PREVIEW_*`) | Recette « base de données » | `BAUDRIER_DB_KEY` |
-  | `SCW_GENERATIVE_API_KEY` | Recette « IA » | `SCW_GENERATIVE_API_KEY` |
-  | `TEM_API_SECRET_KEY` | Recette « emails » | `TEM_API_SECRET_KEY` |
-  | `STORAGE_ACCESS_KEY` or `STORAGE_SECRET_KEY` | Recette « stockage » | `STORAGE_ACCESS_KEY` / `STORAGE_SECRET_KEY` |
-  | (n’importe laquelle des entrées ci-dessus) | Recette « clé applicative » | `BAUDRIER_APP_KEY` |
-
-  The last row is different in kind from the others: it does not name one specific blocking secret, it names a single broader recipe that replaces the operator's personal key for every one of this app's harness operations at once, so it belongs alongside whichever specific bullets above are triggered, never alone. Include only the rows that actually appear in `blocking`, plus this last row whenever at least one other row is included (one bullet per recipe, not per secret - `STORAGE_ACCESS_KEY` and `STORAGE_SECRET_KEY` together still give a single bullet). Print exactly this shape:
-
-  > ⚠️ **Publication impossible pour le moment**
-  >
-  > Votre application utilise encore votre clé Scaleway personnelle pour au moins un identifiant technique. Tant que l’application tourne avec la clé personnelle de l’opérateur, l’ouvrir au public exposerait cette clé : c’est pour cette raison précise que la publication est bloquée.
-  >
-  > Transmettez ce message à votre administrateur Scaleway. Pour le projet Scaleway **`<projectId>`**, il trouvera la marche à suivre dans `docs/ADMIN-SCALEWAY.md` :
-  >
-  > - Recette « base de données » (secret `BAUDRIER_DB_KEY`)
-  > - Recette « IA »
-  > - Recette « emails »
-  > - Recette « stockage »
-  > - Recette « clé applicative » (remplace la clé personnelle une fois pour toutes sur ce projet)
-  >
-  > Une fois les clés enregistrées par votre administrateur, relancez `/publish` : Baudrier bascule automatiquement les identifiants puis publie le site.
-
-  (The five recipe bullets above are the full set - keep only the ones whose secret actually appears in `blocking`, plus the « clé applicative » bullet whenever any other one is kept.) Stop here. Do not ask the user to confirm again, do not retry Step 3 in a loop - the user's next move is `/publish` again, once their admin confirms.
-
----
-
-## Step 4 - Flip the flag and redeploy
+## Step 3 - Flip the flag and redeploy
 
 There is no dedicated script for this (it's a single field flip, reusing `scripts/scaleway/container.mjs` and `scripts/scaleway/secrets.mjs` directly) - use the same cross-platform-safe inline-import pattern used elsewhere in this harness (`node --input-type=module -e` + `pathToFileURL`, never a bare relative `import` which breaks depending on the shell's cwd).
 
@@ -167,7 +100,7 @@ console.log(JSON.stringify({ ok: true, status: ready.status, url: ready.domain_n
 
 ---
 
-## Step 5 - Confirm to the user
+## Step 4 - Confirm to the user
 
 On success:
 > ✅ Le site est maintenant **public** : <url>
@@ -191,4 +124,4 @@ If the user reports a 403 while the app is still IP-restricted (they haven't ask
 printf '%s' "<adresse collée>" | node "${CLAUDE_SKILL_DIR}/../../scripts/scaleway/secrets.mjs" put ACCESS_ALLOWED_IPS --stdin
 ```
 
-followed by the same container-secret sync used in Step 4 above (production only - never touch `ACCESS_ALLOWED_IPS` for a preview). Never re-ask this while the secret already holds a value that could still be correct - only prompt again once the user reports the same symptom a second time.
+followed by the same container-secret sync used in Step 3 above (production only - never touch `ACCESS_ALLOWED_IPS` for a preview). Never re-ask this while the secret already holds a value that could still be correct - only prompt again once the user reports the same symptom a second time.

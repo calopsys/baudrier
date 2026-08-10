@@ -57,13 +57,13 @@ import { ensureRegistryNamespace, listImages, pruneTags } from "./scaleway/regis
 import { ensureDatabase, waitForDatabaseReady, buildConnectionString } from "./scaleway/sdb.mjs";
 import { ensureApplication, ensurePolicy, createApiKey, DELEGATED_DB_KEY_SECRET_NAME } from "./scaleway/iam.mjs";
 import { getSecret, putSecret, secretExists, listSecrets } from "./scaleway/secrets.mjs";
-import { devDbCredentials, recordDevFingerprint } from "./scaleway/dev-credentials.mjs";
+import { devDbCredentials } from "./scaleway/app-credentials.mjs";
 import { ensureDocker } from "./ensure-dockerd.mjs";
 import { buildAndPushImage } from "./_docker-build.mjs";
 
 // Per-request delegation: falls back to the admin-provisioned raw key pair
 // when the operator's own key lacks IAMManager, then to the operator's
-// personal key (see scripts/scaleway/dev-credentials.mjs) when even that
+// personal key (see scripts/scaleway/app-credentials.mjs) when even that
 // pair is absent. This message is now a RARE last resort, only reached when
 // the personal-key fallback itself fails (devDbCredentials()'s principal
 // cannot be resolved). Same message as setup-db.mjs's ensureIamAccess - one
@@ -74,7 +74,7 @@ const NEEDS_ADMIN_DB_MESSAGE =
   "L’administrateur doit créer une application IAM, une politique limitée à ce projet avec le droit " +
   "ServerlessSQLDatabaseReadWrite, une clé API, puis stocker " +
   '{"application_id":"...","secret_key":"..."} dans le secret BAUDRIER_DB_KEY de ce projet. ' +
-  "Voir docs/ADMIN-SCALEWAY.md (recette « base de données »).";
+  "Voir docs/ADMIN-SCALEWAY.md.";
 
 const MALFORMED_DELEGATED_KEY_MESSAGE =
   `Le secret ${DELEGATED_DB_KEY_SECRET_NAME} ne contient pas le format attendu. ` +
@@ -405,8 +405,7 @@ async function resolveDatabaseSecret() {
   });
   await putSecret(secretName, connectionString);
   if (devFallbackUsed) {
-    await recordDevFingerprint(secretName, connectionString);
-    ok("This preview database runs on your personal Scaleway key until /publish.");
+    ok("This preview database runs on your personal Scaleway key for now.");
   }
   const secrets = await listSecrets();
   const found = secrets.find((s) => s.name === secretName);

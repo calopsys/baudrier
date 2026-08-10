@@ -29,6 +29,16 @@ Everything that used to be a manual step (creating a third-party LLM console key
 
 This skill needs `SCW_ACCESS_KEY` / `SCW_SECRET_KEY` / `SCW_DEFAULT_PROJECT_ID` to be available. If `setup-agent.mjs` fails at its `generativeApiKey` or `temApiKey` step with a credentials error, tell the user to check the four `SCW_*` variables in the cloud environment dialog, then start a new conversation.
 
+The environment's key has one of two shapes (`credentialShape()`, CONTRACT.md §1-§2 `app-credentials.mjs`): an organization administrator (Cas A), or an IAM application scoped to this Project alone (Cas B). Ask it before Step 3:
+```bash
+shape_result=$(node "${CLAUDE_SKILL_DIR}/../../scripts/scaleway/app-credentials.mjs" shape)
+credential_shape=$(echo "$shape_result" | node -e "console.log(JSON.parse(require('fs').readFileSync(0,'utf8')).shape)")
+```
+`setup-agent.mjs` branches on it itself, at its `generativeApiKey` step: in Cas A it mints a dedicated, narrowly-scoped IAM Application as before; in Cas B it mints nothing and calls `operatorKeyAsAppCredential({ purpose: "generative-api" })` to store the environment's own key as `SCW_GENERATIVE_API_KEY` directly - this skill never reads `SCW_SECRET_KEY` itself.
+
+If `credential_shape = "project"`, tell the user once, in plain French, before running Step 3 (do not repeat this warning elsewhere in this skill):
+> ℹ️ Votre clé Scaleway a les droits administrateur sur ce projet. L’agent utilisera cette même clé pour accéder aux modèles d’IA. Concrètement : toute personne qui accède à l’agent en ligne accède à tout ce que contient ce projet Scaleway (base de données, stockage, emails...). Gardez l’accès à l’application restreint tant que vous n’acceptez pas ce risque.
+
 ---
 
 ## Step 0 - Quick detection
@@ -324,7 +334,7 @@ From the JSON captured in Step 3, display exactly:
 
 ## Important conventions
 
-- **Scaleway keys minted automatically**: `SCW_GENERATIVE_API_KEY` and `TEM_API_SECRET_KEY` are per-app Secret Manager secrets, minted by `setup-agent.mjs` via a narrowly-scoped IAM Application (`GenerativeApisModelAccess` / `TransactionalEmailEmailApiCreate` - never the operator's own broad `SCW_SECRET_KEY`). Nothing to paste, nothing in the repo.
+- **Scaleway keys, minted or reused depending on the environment**: `SCW_GENERATIVE_API_KEY` and `TEM_API_SECRET_KEY` are per-app Secret Manager secrets. With an organization-administrator key (Cas A), `setup-agent.mjs` mints a dedicated, narrowly-scoped IAM Application for each (`GenerativeApisModelAccess` / `TransactionalEmailEmailApiCreate`). With a Project-scoped key (Cas B), the `generativeApiKey` step mints nothing and stores the environment's own key as `SCW_GENERATIVE_API_KEY` instead, via `operatorKeyAsAppCredential({ purpose: "generative-api" })`. Nothing to paste, nothing in the repo, and the operator's own broad `SCW_SECRET_KEY` is never read directly by this skill.
 - **Jobs are fully API-driven**: `/deploy` creates and updates the agent's Scaleway Serverless Job directly via `scripts/scaleway/jobs.mjs`, reading `apps/<name>/job-definition.json`. No manual dashboard step.
 - **Finite runs, not an always-on server**: a Serverless Job run is capped at 24h. `apps/<name>/entry.ts` picks a run shape (`cron` / `manual` / `continuous`) from `AGENT_TRIGGER_MODE` - see that file's header comment for the exact trade-offs of each. Be honest with the user about the "manual" and "cron" trigger lag (minutes, not seconds) - it buys real scale-to-zero economics an always-on worker never had.
 - **Migrations, never applied by the operator directly**: `setup-agent.mjs` runs `drizzle-kit generate` (writes SQL, no DB connection - CONTRACT.md §4). The migration is applied by `/deploy`'s migration Job, not by this script.
