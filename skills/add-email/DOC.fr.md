@@ -45,7 +45,7 @@ Contrairement à d'autres services d'emailing, **TEM n'a pas d'adresse de test p
 ## Prérequis
 
 - Le projet doit être en Next.js avec tRPC (typiquement initialisé par `/bootstrap`)
-- Votre compte Scaleway doit être connecté (`/start` s'en occupe) - pas de clé de provider email séparée nécessaire
+- Les quatre variables `SCW_*` doivent être renseignées dans votre environnement cloud « Baudrier » - pas de clé de provider email séparée nécessaire
 - Une adresse email sur un domaine que vous possédez, à utiliser comme expéditeur
 
 ## Astuces

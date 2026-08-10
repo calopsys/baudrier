@@ -27,7 +27,7 @@ Everything that used to be a manual step (creating a third-party LLM console key
 
 ## Preflight - Scaleway credentials
 
-This skill needs `SCW_ACCESS_KEY` / `SCW_SECRET_KEY` / `SCW_DEFAULT_PROJECT_ID` to be available (set up by `/start`). If `setup-agent.mjs` fails at its `generativeApiKey` or `temApiKey` step with a credentials error, tell the user to re-run `/start`.
+This skill needs `SCW_ACCESS_KEY` / `SCW_SECRET_KEY` / `SCW_DEFAULT_PROJECT_ID` to be available. If `setup-agent.mjs` fails at its `generativeApiKey` or `temApiKey` step with a credentials error, tell the user to check the four `SCW_*` variables in the cloud environment dialog, then start a new conversation.
 
 ---
 
@@ -247,7 +247,7 @@ Capture this JSON, use it for the final summary (Step 5).
 
 Read the error just above the handoff banner. Diagnose by step:
 - `preflight` → bad args (invalid slug, folder already existing, missing `--cron-schedule` for a cron trigger) - fix then re-run
-- `generativeApiKey` / `temApiKey` → Scaleway credentials issue - re-check `SCW_ACCESS_KEY`/`SCW_SECRET_KEY` (re-run `/start` if needed)
+- `generativeApiKey` / `temApiKey` → Scaleway credentials issue - re-check `SCW_ACCESS_KEY`/`SCW_SECRET_KEY` (have the user check the four `SCW_*` variables in the cloud environment dialog, then start a new conversation, if needed)
 - `ensureMonorepo` → `_convert-to-turborepo` did not run, back to Step 2
 - `scaffoldAgent` / `patchXxx` → rare (filesystem issue), inspect
 - `patchMemory` (pgvector) → the embeddings smoke test failed, or `drizzle-kit generate --custom` failed - read the exact error, usually a transient API issue or a missing `drizzle.config.ts`

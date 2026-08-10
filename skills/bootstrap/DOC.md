@@ -42,7 +42,7 @@ At the end, you have an online, functional site, with all the technical building
 
 ## Prerequisites
 
-- `/start` must have been run once on your machine (tools installed + Scaleway credentials configured)
+- The four `SCW_*` variables must be set in your Baudrier cloud environment
 
 ## Tips
 

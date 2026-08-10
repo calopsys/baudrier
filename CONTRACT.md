@@ -289,48 +289,49 @@ creates a new Project per app - a project-scoped rule could not reach a
 Project that does not exist yet.
 
 Both sets are **optional** on the operator's own key. Their presence or
-absence selects one of three explicit modes, tracked by the
-`BAUDRIER_SCW_MODE` env var (§2, §7):
+absence changes how `scwProject()` resolves the app's Project, and how
+service credentials get minted - not through a mode flag, but through what
+is already configured (§2, §7).
 
-- **`full`** - the operator's key carries both `ProjectManager` and
-  `IAMManager`. `/bootstrap` creates one Scaleway Project per app
-  (`scwProject()`, `createProject`) and mints every service credential
-  itself: a scoped IAM key per capability
-  (`SCW_GENERATIVE_API_KEY`, `TEM_API_SECRET_KEY`,
-  `STORAGE_ACCESS_KEY`/`STORAGE_SECRET_KEY`, the delegated-database pair).
-- **`poc`** - set by exporting `BAUDRIER_SCW_MODE=poc` (§2) when the
-  operator's key lacks `ProjectManager` and/or `IAMManager`.
-  `check-scw-permissions.mjs` is a read-only advisory probe that recommends
-  the value; it does not persist anything, and there is no operator-level
-  default file - the env var is read fresh every run and defaults to `full`
-  when unset. In `poc` mode `/bootstrap` never calls `createProject`: it
-  asks the user for an existing Project id (`--scw-project-id`, or
-  `SCW_DEFAULT_PROJECT_ID` set directly, §2) instead, and refuses a Project
-  that already holds a known Baudrier secret name - accepting it would break
-  the name-equals-var invariant (§2) by colliding two apps' secrets in one
-  Project. This is exactly the condition `SCW_DEFAULT_PROJECT_ID` (§2)
-  exists to declare up front: a `poc`-mode key is not expected to be able to
-  list or create Projects by name at all. Service secrets fall back to the
-  operator's own personal key, tracked by fingerprint, exactly as described
-  below.
-- **`delegated`** - entered per app, not chosen up front: `/publish`'s
-  adoption step live-validates an admin-provisioned `BAUDRIER_APP_KEY`
-  (one `listSecrets` call under the candidate key, §2). On success it prints
-  the `SCW_*` env lines the operator must set (the secret value is never
-  echoed) and persists nothing. The delegated state is not a stored flag:
-  it exists when the operator's env holds the app-scoped key instead of a
-  personal key. On web the operator sets the lines in the cloud environment
-  dialog; on Linux, in their gitignored env file.
+**Project scope resolution.** If a Project id is already configured for the
+app - a `--scw-project-id` flag, a matching `BAUDRIER_SCW_PROJECTS_IDS`
+entry, or `SCW_DEFAULT_PROJECT_ID` (§2) - `scwProject()` uses that Project
+and never calls `createProject`. It also refuses a Project that already
+holds a known Baudrier secret name - accepting it would break the
+name-equals-var invariant (§2) by colliding two apps' secrets in one
+Project. If no id is configured, `scwProject()` lists the organization's
+Projects and creates one if needed (`ProjectManager`, org-scoped). A 403 on
+that list-or-create call raises `ScwError type "needs_admin"`, which
+`/bootstrap` already recovers from: it asks the user for an existing
+Project id and retries with `--scw-project-id`.
+
+**Minting service credentials.** When the operator's key also carries
+`IAMManager`, `/bootstrap` mints every service credential itself: a scoped
+IAM key per capability (`SCW_GENERATIVE_API_KEY`, `TEM_API_SECRET_KEY`,
+`STORAGE_ACCESS_KEY`/`STORAGE_SECRET_KEY`, the delegated-database pair).
+`check-scw-permissions.mjs` is a read-only advisory probe for both rights;
+it recommends setting `BAUDRIER_SCW_PROJECTS_IDS` or
+`SCW_DEFAULT_PROJECT_ID` when they are missing, and persists nothing.
+
+**`delegated` is a per-app state, not a mode.** It is entered when
+`/publish`'s adoption step live-validates an admin-provisioned
+`BAUDRIER_APP_KEY` (one `listSecrets` call under the candidate key, §2). On
+success it prints the `SCW_*` env lines the operator must set (the secret
+value is never echoed) and persists nothing. The delegated state is not a
+stored flag: it exists when the operator's env holds the app-scoped key
+instead of a personal key. On web the operator sets the lines in the cloud
+environment dialog; on Linux, in their gitignored env file.
 
 Project creation is unchanged by this split: `bootstrap-init.mjs` still
-needs `ProjectManager` at the moment it runs in `full` mode, nothing can
-fake it, and a 403 there still fails immediately with `ScwError type
-"needs_admin"` carrying a forwardable French request
-(`docs/ADMIN-SCALEWAY.md`, « Recette « projet » »).
+needs `ProjectManager` at the moment it runs, whenever no Project id is
+already configured, nothing can fake it, and a 403 there still fails
+immediately with `ScwError type "needs_admin"` carrying a forwardable
+French request (`docs/ADMIN-SCALEWAY.md`, « Recette « projet » »).
 
 Service credentials (`BAUDRIER_DB_KEY`, `SCW_GENERATIVE_API_KEY`,
 `TEM_API_SECRET_KEY`, `STORAGE_ACCESS_KEY`/`STORAGE_SECRET_KEY`) no longer
-interrupt per request in `poc` mode, where `IAMManager` is absent. On a 403
+interrupt per request when `IAMManager` is absent from the operator's key.
+On a 403
 from an IAM mint the script tries, in order: the delegated secret an
 organization admin provisioned by hand; then, silently, the operator's own
 personal Scaleway key, recorded as dev-backed in the
@@ -349,21 +350,22 @@ covering every addon at once. This is the security rationale for the gate:
 the personal key is acceptable only while the app stays IP-restricted.
 
 **Known 1.x trade-off: there is no per-project harness control-plane key.**
-Even in `full` mode, every harness-side mint and every `createProject` call
-runs under the operator's own, human-held key - never under a separate,
-narrower credential scoped to one project. A control-plane key of that
-shape would need `ProjectManager` and `IAMManager`, and both are
-organization-scoped by construction (above): granting them to anything
-still means granting org-wide rights, this time to a non-human credential
-sitting in Secret Manager, which is the exposure the harness exists to
-avoid, not a way around it. A second, technical constraint reinforces the
-same choice: `_scw-auth.mjs#api()` memoises one SDK instance per
-`(product, version, cls)` for the process's one active identity, so juggling
-a second, per-project identity alongside the operator's own inside a single
-script run is not something the current code supports. PoC adoption
-(`delegated` mode) needs no such juggling: a `poc` operator's key never
-carried `ProjectManager`/`IAMManager` to begin with, so every org-scoped
-call it makes already 403s and already routes into the fallback chain above
+Even when the operator's key carries both `ProjectManager` and
+`IAMManager`, every harness-side mint and every `createProject` call runs
+under the operator's own, human-held key - never under a separate, narrower
+credential scoped to one project. A control-plane key of that shape would
+need `ProjectManager` and `IAMManager`, and both are organization-scoped by
+construction (above): granting them to anything still means granting
+org-wide rights, this time to a non-human credential sitting in Secret
+Manager, which is the exposure the harness exists to avoid, not a way
+around it. A second, technical constraint reinforces the same choice:
+`_scw-auth.mjs#api()` memoises one SDK instance per `(product, version,
+cls)` for the process's one active identity, so juggling a second,
+per-project identity alongside the operator's own inside a single script
+run is not something the current code supports. Adoption into the
+`delegated` state needs no such juggling: an operator's key that never
+carried `ProjectManager`/`IAMManager` to begin with already 403s on every
+org-scoped call it makes, and already routes into the fallback chain above
 - by design, not by accident.
 
 ---
@@ -389,7 +391,6 @@ any platform.
 | `SCW_DEFAULT_REGION` | always `fr-par`; this is the default applied when unset |
 | `SCW_DEFAULT_PROJECT_ID` | optional override: skip the by-name Project lookup below and target this Project id directly |
 | `BAUDRIER_SCW_PROJECTS_IDS` | optional per-app map for a key that cannot list the organization's Projects (README « Cas B »): `app-un:id1,app-deux:id2`; a matching entry wins over `SCW_DEFAULT_PROJECT_ID`, so one cloud environment serves several apps |
-| `BAUDRIER_SCW_MODE` | `full` \| `poc` (§1); defaults to `full` when unset |
 
 **Per-app scope resolves by Scaleway Project name, never by a stored id.**
 App repos carry **no Scaleway metadata at all** - `.scaleway/container.json`
@@ -402,15 +403,17 @@ that cache. **The operator's API key must therefore carry org-level Project
 `list`/`create` rights** (`ProjectManager`, §1) whenever neither env var is
 set; a key that lacks them must set `BAUDRIER_SCW_PROJECTS_IDS` (several
 apps, one environment) or `SCW_DEFAULT_PROJECT_ID` (one app) instead of
-relying on the lookup - this is exactly the `BAUDRIER_SCW_MODE=poc` case
-(§1). An env-var edit only reaches a NEW session; for the current session
+relying on the lookup - this is exactly the condition under which
+`scwProject()` skips the org-level list-or-create call (§1). An env-var
+edit only reaches a NEW session; for the current session
 the `cache-project` command of `_scw-auth.mjs` (§3) seeds the session cache
 from a Project id the user gives in the chat - an id is an identifier, not a
 secret, so the chat is an acceptable channel for it. Containers and registry
 namespaces are likewise found by name, never by a stored id.
 
-In `poc` mode (§1), the operator's own personal key MAY back one or more
-of a restricted app's own secrets while that app is still under development -
+When `IAMManager` is absent from the operator's key (§1), the operator's own
+personal key MAY back one or more of a restricted app's own secrets while
+that app is still under development -
 until `/publish` runs. Every such fallback is tracked by fingerprint (never
 the raw key) in the `BAUDRIER_DEV_FINGERPRINTS` manifest secret (see the
 named secret exceptions below). `/publish` refuses to proceed while any
@@ -584,7 +587,7 @@ to the scan, which is the reason the scan exists.
 invents `~/.claude/plugins/data/baudrier` — that was the old wrong guess.
 
 `bootstrap-deps.mjs --json` prints exactly one JSON line on stdout (human logs go
-to stderr) and exits non-zero on failure, for `/start` to parse:
+to stderr) and exits non-zero on failure, for the `_preflight` skill to parse:
 
 ```json
 {"ok":true,"dir":"...","source":"scan","action":"installed|up-to-date|failed|check",
@@ -866,20 +869,21 @@ export async function queryLogs({query, since, limit, opts});  // LogQL via Loki
 
 ### Operator credential scripts (top-level `scripts/`, not `scripts/scaleway/`)
 
-`/start` validates the operator's env-only credentials (§2, §7) and prints
-platform-specific instructions when one is missing: the cloud environment
-dialog on web, or the gitignored env file example on Linux - it never
-prompts for a secret in chat. The credential-writing scripts this section
-used to describe (`_persist-scw-credentials.mjs`, `collect-scw-credentials.mjs`,
-`persist-scw-mode.mjs`) are gone along with the tiers they wrote (§7): there
-is nothing left for `/start` to persist.
+The `_preflight` skill validates the operator's env-only credentials (§2, §7)
+and prints platform-specific instructions when one is missing: the cloud
+environment dialog on web, or the gitignored env file example on Linux - it
+never prompts for a secret in chat. The credential-writing scripts this
+section used to describe (`_persist-scw-credentials.mjs`,
+`collect-scw-credentials.mjs`, `persist-scw-mode.mjs`) are gone along with
+the tiers they wrote (§7): there is nothing left for `_preflight` to persist.
 
 | Script | Role |
 |---|---|
-| `scripts/check-scw-permissions.mjs` | read-only probe for `ProjectManager`/`IAMManager`; a 403 is a hard "missing" signal, a clean probe is not a create-rights guarantee. Advisory only - it recommends a `BAUDRIER_SCW_MODE` value (§1, §2), it does not set one. |
+| `scripts/check-scw-permissions.mjs` | read-only probe for `ProjectManager`/`IAMManager`; a 403 is a hard "missing" signal, a clean probe is not a create-rights guarantee. Advisory only - it recommends setting `BAUDRIER_SCW_PROJECTS_IDS` or `SCW_DEFAULT_PROJECT_ID` (§1, §2), it does not set either itself. |
 
-Credential adoption exists in exactly one place: `/publish`'s `poc`-to-`delegated`
-migration, `dev-credentials.mjs swap-all` (§1, `dev-credentials.mjs` above). It is
+Credential adoption exists in exactly one place: `/publish`'s migration into
+the `delegated` state, `dev-credentials.mjs swap-all` (§1, `dev-credentials.mjs`
+above). It is
 admin-initiated - an organization admin provisions `BAUDRIER_APP_KEY` in Secret
 Manager first, the harness never asks for org-wide rights on its own behalf -
 it live-validates the candidate key, then prints the `SCW_*` env lines for the
@@ -1154,6 +1158,13 @@ Preserve upstream's structure — it works and users rely on it.
   it is run from; there is no sibling-directory mode and no `gh repo create`
   path - the repo pre-exists (§1's architecture, §4 below describes pushing
   into it).
+- **The preflight guard refuses a non-empty repository, not just a
+  JavaScript one.** Because bootstrap scaffolds in place, it must never
+  merge into an existing codebase. The old check only caught `package.json`
+  or `src/`, so a Python or Go repository passed and got a Next.js app
+  merged on top. The guard now also refuses any tracked file other than a
+  README, a licence, `.gitignore`, `.gitattributes`, `CHANGELOG.md`, or
+  anything under `.github/`.
 - **Never gate GitHub auth on `gh auth status` or `gh api /user`.** Both are
   unreliable on web (§1: `gh auth status` exits 1 even against a working
   token) and `gh` is no longer part of the toolchain at all. Use
@@ -1176,6 +1187,12 @@ Preserve upstream's structure — it works and users rely on it.
   production build runs `pnpm build` inside the image, on the image's own
   Node - only host-side checks (`tools/verify.mjs`, `engines.node`) ever see
   a version skew between the two.
+- **`/bootstrap` is the only documented entry point.** The old standalone
+  first-run skill is gone; its three surviving checks now live in the
+  internal `_preflight` skill, which `/bootstrap` runs itself at Step 0.
+- **The web sandbox commits as the `claude` user.** The harness configures
+  no git identity and ships no `setup-git-identity.mjs` - the sandbox's own
+  git identity is already correct for every commit.
 
 ### Credential resolution (env-only)
 
@@ -1193,12 +1210,14 @@ of any kind: no `.scaleway/container.json`, no repo-local credentials file.
 The active Project resolves at call time, by name, as described in §2 -
 never from a file the harness wrote earlier.
 
-`BAUDRIER_SCW_MODE` (`full` \| `poc`, §1, §2) is likewise a plain env var,
-read fresh on every run. There is no persisted operator-level default file
-(`~/.claude/baudrier/defaults.json` is gone) and no `readMode()` fallback
-chain: the env var is the only source, defaulting to `full` when unset.
-`check-scw-permissions.mjs` remains as a read-only advisory probe - it
-recommends a value, it never sets one.
+Project scope resolution is likewise read fresh on every run, from
+`SCW_DEFAULT_PROJECT_ID` and `BAUDRIER_SCW_PROJECTS_IDS` (§1, §2). There is
+no persisted operator-level default file (`~/.claude/baudrier/defaults.json`
+is gone) and no mode-selection fallback chain: a configured Project id wins
+outright, and its absence is what makes `scwProject()` fall through to the
+org-level list-or-create call. `check-scw-permissions.mjs` remains as a
+read-only advisory probe - it recommends setting one of the two env vars,
+it never sets either itself.
 
 **Every consumer resolves through `loadCredentials()`.** A script must not
 read `SCW_ACCESS_KEY`/`SCW_SECRET_KEY` from `process.env` directly: going
@@ -1222,9 +1241,9 @@ and the templates no longer list it.
 relative import resolves, every `scripts/...` path named in a `SKILL.md` exists,
 every referenced skill exists and no deleted skill is referenced, template
 manifests are valid, and no removed-provider token or env var survives outside
-allowlisted attribution docs. It also checks: `BAUDRIER_SCW_MODE` resolves
-from the environment only, with no persisted default file (§1, §2, §7);
-agent tools fail safe (`db-query.ts`'s read-only transaction and timeout,
+allowlisted attribution docs. It also checks: Project scope resolves from
+the environment only, with no persisted default file (§1, §2, §7); agent
+tools fail safe (`db-query.ts`'s read-only transaction and timeout,
 `http-fetch.ts`'s manual-redirect re-validation); no plaintext secret reaches
 argv or a script's default stdout (`secrets.mjs`, `iam.mjs`, the persist
 scripts); and version agreement across the three manifests

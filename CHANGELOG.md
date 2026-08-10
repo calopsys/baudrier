@@ -1,5 +1,50 @@
 # Changelog
 
+## v1.1.0 (2026-08-10)
+
+Retires `/start`. `/bootstrap` is now the only documented entry point, and it
+runs the preflight checks itself, so no separate first-run command is needed.
+
+### Removed
+
+- **The public `/start` skill.** `skills/start/` is deleted. Its three
+  surviving checks move into the new internal `skills/_preflight/SKILL.md`
+  (`user-invocable: false`), which `/bootstrap` invokes at its own Step 0.
+  Internal `_`-prefixed skills are never named to the user, so the README no
+  longer mentions `/start` anywhere.
+- **The git-identity step and `scripts/audit-clis.mjs`.** The Claude Code web
+  sandbox already commits as the `claude` user, so the harness configures no
+  git identity of its own. `scripts/setup-git-identity.mjs` and
+  `scripts/audit-clis.mjs` are gone, and `scripts/bootstrap-init.mjs` no
+  longer calls either.
+- **All references to the `baudrier-template` repository.** The team retired
+  this GitHub repository. `README.md` now describes the current flow: the
+  user opens a Claude Code web conversation on their own repository, with
+  the « Baudrier » environment, then runs `/bootstrap`.
+- **The `BAUDRIER_SCW_MODE` env var.** It gated one thing: whether
+  `scwProject()` could create a Scaleway Project. `needsProjectIdError()`
+  and its `"type":"poc_needs_project_id"` error contract are gone too, along
+  with the variable. A Cas B user who already set `BAUDRIER_SCW_PROJECTS_IDS`
+  needs no migration. A stale `BAUDRIER_SCW_MODE` left in a cloud environment
+  is simply ignored.
+
+### Changed
+
+- **The Project scope now resolves by inference, not by a mode flag.** If a
+  Project id is already configured - `--scw-project-id`, a matching
+  `BAUDRIER_SCW_PROJECTS_IDS` entry, or `SCW_DEFAULT_PROJECT_ID` - the
+  harness uses that Project and never creates one. If no id is configured,
+  it lists the organization's Projects and creates one if needed; a 403
+  still raises `"type":"needs_admin"`, which `/bootstrap` already recovers
+  from by asking the user for a Project id and retrying with
+  `--scw-project-id`.
+- **`/bootstrap`'s preflight guard now refuses more than a JavaScript
+  scaffold.** The old guard checked only for `package.json` or `src/`, so a
+  Python or Go repository passed the check and got a Next.js app merged
+  into it, then committed and deployed. The guard now also refuses any
+  tracked file other than a README, a licence, `.gitignore`,
+  `.gitattributes`, `CHANGELOG.md`, or anything under `.github/`.
+
 ## v1.0.1 (2026-08-09)
 
 Removes the local review from `/deploy`. The harness runs on Claude Code web,

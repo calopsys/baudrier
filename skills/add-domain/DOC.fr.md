@@ -43,7 +43,7 @@ L'architecture cible : **votre domaine (acheté n'importe où) → DNS Scaleway 
 
 - Une app déjà déployée sur un container Scaleway Serverless (typiquement via `/bootstrap` puis `/deploy`)
 - Un nom de domaine que vous possédez déjà, avec accès pour changer ses nameservers chez votre registrar (ou quelqu'un dans votre équipe qui l'a)
-- Votre compte Scaleway connecté (`/start` s'en occupe)
+- Les quatre variables `SCW_*` doivent être renseignées dans votre environnement cloud « Baudrier »
 
 ## Astuces
 

@@ -34,7 +34,7 @@ Renews a secret key everywhere it lives - Scaleway Secret Manager, and the runni
 
 ## Prerequisites
 
-- You must be inside an existing baudrier project, with Scaleway credentials configured (`/start`)
+- You must be inside an existing baudrier project, with the four `SCW_*` variables set in your Baudrier cloud environment
 - For external credentials: access to the relevant dashboard (GitHub, Matomo, Google Cloud)
 
 ## Tips

@@ -91,6 +91,12 @@ Also ask (or infer from `PROJECT_NAME`) the **display name**:
 
 Store as `SENDER_NAME` (default = `PROJECT_NAME`).
 
+Before configuring the domain, show this note:
+
+> ℹ️ **Vérification d’identité Scaleway**
+>
+> Sans vérification d’identité, votre compte Scaleway envoie au maximum 500 emails par mois, sur 2 domaines. Après vérification, ces plafonds passent à 5 000 emails par mois et 5 domaines. Le plafond arrête l’envoi sans avertissement. Vérifiez votre identité depuis la console Scaleway avant d’envoyer un vrai volume d’emails.
+
 ---
 
 ## Step 2 - Run setup-email.mjs
@@ -122,7 +128,7 @@ Let the output through live (no `> /tmp/...`, no capture).
 2. **Identify the failed step** in the banner (`❌ Failed at: <step>`). The name maps 1:1 to a function in the script - open `setup-email.mjs` and read the function to understand.
 3. **Diagnose**:
    - `preflight` then usually an already existing file (`mail.ts` or `contact.ts`) or no Next.js / no tRPC. Handle specifically.
-   - `configureDomain` then likely a Scaleway credentials problem (`/start` was never run, or the API key expired) - the error message from `_scw-auth.mjs` tells the user exactly what to do. This step is otherwise resilient: DNS-not-delegated is a warning, not a hard failure - continue past it and hand the user the manual DNS records from the handoff banner.
+   - `configureDomain` then likely a Scaleway credentials problem (a missing or expired `SCW_*` variable) - the error message from `_scw-auth.mjs` tells the user exactly what to do; have them check the four `SCW_*` variables in the cloud environment dialog, then start a new conversation. This step is otherwise resilient: DNS-not-delegated is a warning, not a hard failure - continue past it and hand the user the manual DNS records from the handoff banner.
    - `writeMailTs` / `writeContactRouter` then FS permission (rare).
    - `registerRouter` then T3 may have reorganized `root.ts`. Patch manually: add `import { contactRouter } from "~/server/api/routers/contact";` + `contact: contactRouter,` in the `createTRPCRouter({...})`.
    - `pushEnvVars` then the code and the TEM domain are in place, only the env vars/secrets didn't land. Retry: `printf '%s' "<email>" | node scripts/scaleway/secrets.mjs put TEM_SENDER_EMAIL --stdin` and same for `TEM_SENDER_NAME`, plus append both to `.env`.
@@ -208,7 +214,7 @@ If `dnsAutoPublished = false`, add:
 Always add:
 > ⏳ La vérification du domaine par Scaleway peut prendre **jusqu'à 48h**. Tant qu'elle n'est pas terminée, l'envoi d'emails échouera.
 >
-> 📉 Rappel : un compte Scaleway récent (avant vérification d'identité) est limité à **500 emails/mois et 2 domaines d'envoi**. Après vérification d'identité (KYC) : **5 000 emails/mois et 5 domaines**.
+> 📉 Rappel : les plafonds d’envoi indiqués plus haut s’appliquent tant que votre identité Scaleway n’est pas vérifiée.
 
 Then, as applicable:
 - *Le moteur d'envoi est prêt (la procédure tRPC `contact.send`, avec honeypot, échappement HTML et limitation de débit)*

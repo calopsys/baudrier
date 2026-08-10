@@ -143,7 +143,7 @@ try {
     --name PAGESPEED_API_KEY \
     --line "PAGESPEED_API_KEY : clé Google PageSpeed Insights, gratuite. La valeur est réutilisable : collez-la telle quelle dans le Secret Manager Scaleway de chaque nouveau projet. Lue par la skill seo-perf via scripts/psi-audit.mjs."
   ```
-- **`ok: false` with another `error`**: relay it plainly (likely missing/invalid Scaleway credentials - point to `/start`).
+- **`ok: false` with another `error`**: relay it plainly (likely missing/invalid Scaleway credentials - tell the user to check the four `SCW_*` variables in the cloud environment dialog, then start a new conversation).
 
 **Never display the value of the key.** It is read into a shell variable and passed to the script via the `PSI_KEY` env variable.
 

@@ -66,7 +66,7 @@ Rendez-vous sur https://console.scaleway.com/iam/api-keys et créez une nouvelle
 
 **Cas A - Vous êtes l’administrateur de l’organisation Scaleway.** Créez la clé avec la permission `ProjectManager`, à l’échelle de l’organisation entière, pas d’un seul projet. `/bootstrap` crée un Projet Scaleway séparé pour chaque application, et cette action exige ce droit. Une clé limitée à un seul projet échoue avec une erreur 403 dès la première tentative, et Baudrier vous l’indique clairement.
 
-**Cas B - Vous êtes membre de l’organisation, pas administrateur.** Demandez à votre administrateur de suivre [docs/ADMIN-SCALEWAY.md](docs/ADMIN-SCALEWAY.md). Votre administrateur crée un Projet Scaleway pour chaque application et vous transmet son identifiant. Ajoutez chaque identifiant à la variable `BAUDRIER_SCW_PROJECTS_IDS` de l’environnement cloud (étape 4 ci-dessous), sous la forme `nom-du-depot:identifiant`, avec une virgule entre les entrées. Un seul environnement cloud sert ainsi toutes vos applications : à chaque nouvelle application, complétez la liste via « Edit environment » puis ouvrez une nouvelle session. Pour une seule application, la variable `SCW_DEFAULT_PROJECT_ID=<identifiant>` fonctionne aussi. Vous pouvez aussi régler `BAUDRIER_SCW_MODE=poc` pour commencer avec votre propre clé ; rendre l’application publique demande ensuite des clés déléguées par votre administrateur.
+**Cas B - Vous êtes membre de l’organisation, pas administrateur.** Demandez à votre administrateur de suivre [docs/ADMIN-SCALEWAY.md](docs/ADMIN-SCALEWAY.md). Votre administrateur crée un Projet Scaleway pour chaque application et vous transmet son identifiant. Ajoutez chaque identifiant à la variable `BAUDRIER_SCW_PROJECTS_IDS` de l’environnement cloud (étape 4 ci-dessous), sous la forme `nom-du-depot:identifiant`, avec une virgule entre les entrées. Un seul environnement cloud sert ainsi toutes vos applications : à chaque nouvelle application, complétez la liste via « Edit environment » puis ouvrez une nouvelle session. Pour une seule application, la variable `SCW_DEFAULT_PROJECT_ID=<identifiant>` fonctionne aussi.
 
 Notez la **clé d’accès** et la **clé secrète**. La clé secrète ne s’affiche qu’une fois, à la création.
 
@@ -85,10 +85,9 @@ SCW_ACCESS_KEY=<votre clé d’accès Scaleway>
 SCW_SECRET_KEY=<votre clé secrète Scaleway>
 SCW_DEFAULT_ORGANIZATION_ID=<l’identifiant de votre organisation Scaleway>
 SCW_DEFAULT_REGION=fr-par
-BAUDRIER_SCW_MODE=full
 ```
 
-Si vous suivez le **Cas B**, ajoutez `BAUDRIER_SCW_PROJECTS_IDS=<nom-du-depot>:<l’identifiant de projet transmis par votre administrateur>` (une entrée par application, avec une virgule entre les entrées), et réglez `BAUDRIER_SCW_MODE=poc` au lieu de `full`.
+Si vous suivez le **Cas B**, ajoutez `BAUDRIER_SCW_PROJECTS_IDS=<nom-du-depot>:<l’identifiant de projet transmis par votre administrateur>` (une entrée par application, avec une virgule entre les entrées).
 
 Ces valeurs sont visibles par toute personne qui utilise cet environnement cloud. Sur un environnement personnel, cela veut dire vous seul(e). Claude Code ne propose aucun autre coffre-fort de secrets pour cet usage : c’est le mécanisme prévu.
 
@@ -102,11 +101,12 @@ Toute modification de ce script force une reconstruction de l’environnement, q
 
 ### Créer une application
 
-Une fois l’environnement « Baudrier » en place, chaque nouvelle application se crée en trois étapes :
+Une fois l’environnement « Baudrier » en place, chaque nouvelle application se crée en deux étapes :
 
-1. Allez sur le dépôt `baudrier-template` et cliquez sur **"Use this template"**. Choisissez un nom en kebab-case (des mots en minuscules séparés par des tirets, par exemple `site-vitrine-kine`) : ce nom devient le nom de votre application.
-2. Ouvrez une conversation Claude Code sur ce nouveau dépôt, avec l’environnement **Baudrier**.
-3. Tapez `/start`, puis `/bootstrap`. Décrivez en français ce que vous voulez, Baudrier s’occupe du reste.
+1. Créez un dépôt GitHub vide pour votre application. Choisissez un nom en kebab-case (des mots en minuscules séparés par des tirets, par exemple `site-vitrine-kine`) : ce nom devient le nom de votre application. Ouvrez ensuite une conversation Claude Code web sur ce dépôt, avec l’environnement **Baudrier**.
+2. Tapez `/bootstrap`. Décrivez en français ce que vous voulez, Baudrier s’occupe du reste.
+
+Le dépôt GitHub doit rester vide avant cette étape, car Baudrier construit l’application directement dedans.
 
 ### En cas de problème
 
@@ -114,19 +114,16 @@ Une fois l’environnement « Baudrier » en place, chaque nouvelle application 
 |---|---|---|
 | L’application répond 403 alors qu’elle n’est pas encore publiée | C’est le comportement normal : elle est restreinte à votre IP, et votre IP a changé | Ouvrez https://ip.me, copiez l’adresse affichée, donnez-la à Claude. Baudrier met à jour `ACCESS_ALLOWED_IPS`. |
 | Une variable Scaleway manque, ou le plugin n’est pas installé | L’environnement n’a pas encore le bon réglage, ou vous êtes dans une conversation ouverte avant la correction | Corrigez l’environnement (variables ou script), puis **ouvrez une nouvelle conversation**. Une conversation en cours ne peut pas rafraîchir sa propre liste de commandes. |
-| `/start` signale une clé Scaleway qui échoue avec une erreur 403 sur la liste des projets | La clé n’a pas la permission `ProjectManager` au niveau de l’organisation | Recréez une clé avec cette permission (étape 3 ci-dessus), et mettez à jour la variable `SCW_SECRET_KEY` de l’environnement |
+| `/bootstrap` signale une clé Scaleway qui échoue avec une erreur 403 sur la liste des projets | La clé n’a pas la permission `ProjectManager` au niveau de l’organisation | Recréez une clé avec cette permission (étape 3 ci-dessus), et mettez à jour la variable `SCW_SECRET_KEY` de l’environnement |
 | Le réseau bloque un domaine dont vous ne comprenez pas le rôle | L’environnement est en accès réseau **Custom** et un domaine manque à la liste | Passez l’accès réseau en **Complet** (le réglage recommandé, étape 4), puis ouvrez une nouvelle conversation |
 
 **Après tout changement de l’environnement cloud, démarrez une NOUVELLE conversation.** Une conversation en cours ne voit pas le changement.
 
-Tapez ensuite `/start` : il vérifie vos prérequis et vous présente le plugin.
-
 ## Par où commencer
 
-| Première fois ? | Déjà à l’aise ? |
+| Vous voulez une explication d’abord ? | Vous voulez construire tout de suite ? |
 |---|---|
-| `/start` - vérifie votre config et présente le plugin | `/bootstrap` - lancez-vous directement |
-| `/prof` - explique comment tout fonctionne | `/spec` - construisez un cahier des charges d’abord |
+| `/prof` - explique comment Baudrier fonctionne | `/bootstrap` - vérifie vos prérequis, puis démarre l'architecture de l'application |
 
 ## Comment ça marche
 
@@ -155,7 +152,6 @@ Les tableaux ci-dessous sont établis en lisant chaque `skills/*/SKILL.md` prés
 |---|---|
 | `/bootstrap` | Créer un nouveau projet T3 de zéro |
 | `/spec` | Construire un cahier des charges détaillé, étape par étape |
-| `/start` | Premier lancement : vérifie les prérequis, présente toutes les commandes |
 | `/prof` | Explique comment tout fonctionne simplement (mode pédagogique) |
 | `/seo` | Audit SEO et corrections (métadonnées, sitemap, OG, structure, URLs/slugs, accessibilité, lisibilité, profondeur sémantique, fraîcheur du contenu) |
 | `/seo-perf` | Mesure la performance réelle via l’API PageSpeed Insights et propose des correctifs classés par impact mesuré ; auto-invoquée en fin de `/seo` |

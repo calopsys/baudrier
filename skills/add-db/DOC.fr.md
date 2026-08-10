@@ -33,7 +33,7 @@ Cet ordinateur ne parle jamais directement à votre base de données - même pas
 ## Prérequis
 
 - Le projet doit être un projet Next.js (typiquement initialisé par `/bootstrap`)
-- Votre compte Scaleway doit être connecté (`/start` s'en occupe, une seule fois)
+- Les quatre variables `SCW_*` doivent être renseignées dans votre environnement cloud « Baudrier »
 
 ## Astuces
 

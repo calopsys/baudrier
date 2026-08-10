@@ -31,7 +31,7 @@ Supprime proprement et définitivement l'infrastructure Scaleway **jetable** d'u
 ## Prérequis
 
 - Le projet doit être un projet Baudrier (créé via `/bootstrap`), avec son propre Scaleway Project.
-- Les identifiants Scaleway doivent être configurés (`/start` s'en charge).
+- Les quatre variables `SCW_*` doivent être renseignées dans votre environnement cloud « Baudrier ».
 
 ## Astuces
 

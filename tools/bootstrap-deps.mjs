@@ -71,8 +71,8 @@ const healthScript = path.join(PLUGIN_ROOT, "tools", "check-deps-health.mjs");
 const selfPath = path.join(PLUGIN_ROOT, "tools", "bootstrap-deps.mjs");
 
 /**
- * With --json the JSON line must be the ONLY thing on stdout, because /start
- * parses it. Human logs are routed to stderr in that mode rather than dropped:
+ * With --json the JSON line must be the ONLY thing on stdout, because the
+ * preflight parses it. Human logs are routed to stderr in that mode rather than dropped:
  * they are still useful in a transcript.
  */
 const log = (msg) => {
@@ -206,8 +206,8 @@ const nodeError = nodeOk
 /* --------------------------------------------------------------- check mode */
 
 if (CHECK_ONLY) {
-  // --check has no side effects on purpose (it is a cheap gate /start can call
-  // any number of times), so it does not write the pointer. `pointerWritten`
+  // --check has no side effects on purpose (it is a cheap gate the preflight can
+  // call any number of times), so it does not write the pointer. `pointerWritten`
   // therefore reports whether the pointer on disk already agrees with what was
   // resolved - the useful signal at that point.
   const resolved = resolveDepsDir();

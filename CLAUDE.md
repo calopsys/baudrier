@@ -57,7 +57,7 @@ a check that only ever passes is worse than no check.
 
 Baudrier is web-only as of 2026-08-07: the harness runs on Claude Code web
 (claude.ai/code) only, and the native-OS install paths are gone. For the record: the
-first live `/start` + `/bootstrap` run happened on 2026-07-30 on Debian 13, headless,
+first live `/start` (now retired) + `/bootstrap` run happened on 2026-07-30 on Debian 13, headless,
 root, and created a real GitHub repository and real Scaleway resources - that Linux
 path is history now, not a supported install path. Live-verified platform facts get
 recorded in CONTRACT.md as the team confirms them.

@@ -31,7 +31,7 @@ Cleanly and permanently deletes a Baudrier project's **disposable** Scaleway inf
 ## Prerequisites
 
 - The project must be a Baudrier project (created via `/bootstrap`), with its own Scaleway Project.
-- Scaleway credentials must be configured (`/start` handles this).
+- The four `SCW_*` variables must be set in your Baudrier cloud environment.
 
 ## Tips
 

@@ -27,7 +27,7 @@ You guide the user to connect a domain name to their app, deployed on a Scaleway
 
 ## Step 0 - Preflight: Scaleway credentials
 
-This skill (and the `dns.mjs` / `container.mjs` modules it uses) needs Scaleway operator credentials. If `/start` was never run, `scripts/scaleway/_scw-auth.mjs` will throw a clear error naming the missing `SCW_*` variable(s) - relay that message verbatim and point to `/start`.
+This skill (and the `dns.mjs` / `container.mjs` modules it uses) needs Scaleway operator credentials. If they are missing, `scripts/scaleway/_scw-auth.mjs` throws a clear error naming the missing `SCW_*` variable(s) - relay that message verbatim, then tell the user to check the four `SCW_*` variables in the cloud environment dialog and start a new conversation.
 
 ---
 

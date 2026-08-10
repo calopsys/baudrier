@@ -45,7 +45,7 @@ Unlike some other email services, **TEM has no shared "test" sending address** y
 ## Prerequisites
 
 - The project must be in Next.js with tRPC (typically initialized by `/bootstrap`)
-- Your Scaleway account must be connected (`/start` handles it) - no separate email-provider key needed
+- The four `SCW_*` variables must be set in your Baudrier cloud environment - no separate email-provider key needed
 - An email address on a domain you own, to use as the sender
 
 ## Tips

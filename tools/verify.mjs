@@ -244,6 +244,19 @@ define("4", "Skills: referenced skills exist, deleted ones are gone", () => {
   for (const n of REQUIRED_NEW_SKILLS) {
     if (!SKILL_DIRS.includes(n)) fails.push({ file: "skills/", detail: `required new skill "${n}" not created` });
   }
+
+  // /start is retired. It is asserted by directory rather than through
+  // DELETED_SKILLS: that list matches whole words in every skill markdown, and
+  // "start" is an ordinary English word that appears in legitimate prose.
+  // Its surviving checks live in _preflight, which /bootstrap runs at Step 0 -
+  // a public onboarding skill coming back would restore the dead end where a
+  // user ran it, read "now type /bootstrap", and never did.
+  if (SKILL_DIRS.includes("start")) {
+    fails.push({ file: "skills/start", detail: "the retired /start skill is back - its checks belong in skills/_preflight, invoked by /bootstrap Step 0" });
+  }
+  if (!SKILL_DIRS.includes("_preflight")) {
+    fails.push({ file: "skills/_preflight", detail: "the internal preflight skill is missing - /bootstrap Step 0 has nothing to invoke" });
+  }
   return [...new Map(fails.map((x) => [x.file + x.detail, x])).values()];
 });
 
@@ -739,21 +752,21 @@ define("15", "Deps: one resolver, no reimplemented data directory", () => {
   return fails;
 });
 
-define("16", "Start: web-only flow wired, native-OS paths stay dead", () => {
+define("16", "Preflight: web-only flow wired, native-OS paths stay dead", () => {
   const fails = [];
-  const f = "skills/start/SKILL.md";
-  if (!exists(f)) return [{ file: f, detail: "the onboarding skill is missing" }];
+  const f = "skills/_preflight/SKILL.md";
+  if (!exists(f)) return [{ file: f, detail: "the preflight skill is missing" }];
   const src = read(f);
 
   // The linear web-only flow: every step's script must actually be invoked,
   // and the guard must stop a non-web session with the French marker phrase.
+  // The tool audit, the dockerd probe and the git identity all left with
+  // /start: the platform preinstalls the tools, /bootstrap and /deploy start
+  // dockerd lazily, and the sandbox commits as the `claude` user.
   const required = {
     "setup-clis-web.sh": "web sandbox setup script",
-    "bootstrap-deps.mjs": "dependency gate (Step 2b)",
-    "setup-git-identity.mjs": "git identity (Step 3b) - without it every commit the harness makes fails",
-    "audit-clis.mjs": "tool audit",
+    "bootstrap-deps.mjs": "dependency gate (Step 2)",
     "check-scw-permissions.mjs": "organization-member permission probe",
-    "ensure-dockerd.mjs": "docker daemon check",
     "CLAUDE_CODE_REMOTE": "web-session guard",
   };
   for (const [needle, what] of Object.entries(required)) {
@@ -779,10 +792,11 @@ define("16", "Start: web-only flow wired, native-OS paths stay dead", () => {
     }
   }
 
-  // Step 5 used to shell out to the scw binary through an inline `node -e`.
-  // It now goes through the SDK, so /start no longer needs that binary here.
+  // The Scaleway step used to shell out to the scw binary through an inline
+  // `node -e`. It now goes through the SDK, so the preflight never needs that
+  // binary here.
   if (/scw\s+account\s+project/.test(src)) {
-    fails.push({ file: f, detail: "still calls `scw account project` - Step 5 must use the SDK, not the scw CLI" });
+    fails.push({ file: f, detail: "still calls `scw account project` - the Scaleway step must use the SDK, not the scw CLI" });
   }
 
   // getSecret()'s CLI prints the value it resolves. BAUDRIER_DB_KEY holds raw
@@ -1260,7 +1274,7 @@ define("23", "copy-assets.js survives checkJs", () => {
   return fails;
 });
 
-define("24", "Start: no gh auth login survives - git ls-remote is the repo-access gate", () => {
+define("24", "Toolchain: no gh auth login survives - git ls-remote is the repo-access gate", () => {
   const fails = [];
 
   // `gh` is dropped from the toolchain entirely (CONTRACT.md §7): repo access
@@ -1292,13 +1306,9 @@ define("24", "Start: no gh auth login survives - git ls-remote is the repo-acces
     }
   }
 
-  const skillFile = "skills/start/SKILL.md";
-  if (!exists(skillFile)) {
-    fails.push({ file: skillFile, detail: "missing" });
-  } else if (!read(skillFile).includes("git ls-remote origin")) {
-    fails.push({ file: skillFile, detail: 'never runs "git ls-remote origin" - the repo-access gate is missing' });
-  }
-
+  // The skill-level copy of this gate is gone with /start: the platform hands
+  // the session an already-cloned repo, so bootstrap-init.mjs's own gate below
+  // is the one that decides whether the harness can reach the remote.
   const bootstrap = "scripts/bootstrap-init.mjs";
   if (!exists(bootstrap)) {
     fails.push({ file: bootstrap, detail: "missing" });
@@ -2361,26 +2371,38 @@ define("42", "Hooks: every command hook declares a timeout", () => {
   return fails;
 });
 
-define("43", "Modes: BAUDRIER_SCW_MODE is a plain env var, /bootstrap honors it", () => {
+define("43", "Scope: no mode env var; a configured Project id short-circuits creation", () => {
   const fails = [];
 
-  // The operator mode used to be persisted by /start via a dedicated CLI
-  // (~/.claude/baudrier/defaults.json). CONTRACT.md §1/§2 replaced that with
-  // a plain BAUDRIER_SCW_MODE environment variable, read fresh on every run
-  // (readScwMode() in _scw-auth.mjs) - there is nothing left for /start to
-  // persist, so the new invariant is that it explains this instead of
-  // invoking a script that no longer exists.
-  const startSkill = "skills/start/SKILL.md";
-  if (!exists(startSkill)) {
-    fails.push({ file: startSkill, detail: "missing" });
-  } else if (!/BAUDRIER_SCW_MODE/.test(read(startSkill))) {
-    fails.push({ file: startSkill, detail: "never mentions BAUDRIER_SCW_MODE - the operator-mode env var is undocumented" });
+  // The operator "mode" is gone. It had two values and gated exactly one
+  // thing: whether scwProject() may call createProject. The scope is inferred
+  // now - a Project id configured through --scw-project-id,
+  // BAUDRIER_SCW_PROJECTS_IDS or SCW_DEFAULT_PROJECT_ID means "use this one",
+  // and its absence means "act at organization level", where a 403 already
+  // raises the needs_admin error /bootstrap recovers from. A returning
+  // variable would put a maturity label ("poc") back on what is really a
+  // permission scope, so its tokens must not reappear anywhere.
+  // CHANGELOG.md is history and tools/verify.mjs carries the literals below.
+  const DEAD = ["BAUDRIER_SCW_MODE", "readScwMode", "poc_needs_project_id"];
+  for (const f of FILES) {
+    if (f === "tools/verify.mjs" || f === "CHANGELOG.md") continue;
+    let src;
+    try {
+      src = read(f);
+    } catch {
+      continue;
+    }
+    for (const token of DEAD) {
+      if (src.includes(token)) {
+        fails.push({ file: f, detail: `references "${token}" - the operator-mode env var is deleted (CONTRACT.md §1, §2)` });
+      }
+    }
   }
 
   if (exists("scripts/persist-scw-mode.mjs")) {
     fails.push({
       file: "scripts/persist-scw-mode.mjs",
-      detail: "still exists - the operator mode is a plain BAUDRIER_SCW_MODE env var now (CONTRACT.md §1, §2), nothing persists it to disk",
+      detail: "still exists - there is no operator mode left to persist (CONTRACT.md §1, §2)",
     });
   }
 
@@ -2389,8 +2411,11 @@ define("43", "Modes: BAUDRIER_SCW_MODE is a plain env var, /bootstrap honors it"
     fails.push({ file: auth, detail: "missing" });
   } else {
     const src = stripComments(read(auth));
-    if (!/\bBAUDRIER_SCW_MODE\b/.test(src) || !/\breadScwMode\b/.test(src)) {
-      fails.push({ file: auth, detail: "does not export a readScwMode() reading BAUDRIER_SCW_MODE - /bootstrap has no env var to honor" });
+    if (!/export function projectIdFromEnv\s*\(/.test(src)) {
+      fails.push({
+        file: auth,
+        detail: "does not export projectIdFromEnv() - scwProject() has no env-only way to tell a configured Project from an absent one",
+      });
     }
   }
 
@@ -2417,10 +2442,10 @@ define("43", "Modes: BAUDRIER_SCW_MODE is a plain env var, /bootstrap honors it"
       const createAt = body.indexOf("createProject");
       if (createAt === -1) {
         fails.push({ file: bootstrapInit, detail: "scwProject() no longer calls createProject - check is stale, update it" });
-      } else if (!/["']poc["']/.test(body.slice(0, createAt))) {
+      } else if (!/\bprojectIdFromEnv\b/.test(body.slice(0, createAt))) {
         fails.push({
           file: bootstrapInit,
-          detail: 'scwProject()\'s createProject call is reachable without a "poc" mode guard before it',
+          detail: "scwProject()'s createProject call is reachable without consulting projectIdFromEnv() first - a configured Project id must short-circuit creation",
         });
       }
     }
@@ -2975,7 +3000,6 @@ define("53", "Web detection: isRemoteSandbox() exists and is actually consumed",
     "scripts/bootstrap-init.mjs",
     "scripts/save-project/build-snapshot.mjs",
     "scripts/_docker-build.mjs",
-    "scripts/audit-clis.mjs",
   ]) {
     if (!exists(f)) {
       fails.push({ file: f, detail: "missing" });
@@ -3003,10 +3027,10 @@ define("53", "Web detection: isRemoteSandbox() exists and is actually consumed",
   }
 
   // The two SKILLs that actually branch on the platform must say so - either
-  // literally (start's own OS-detection table) or in the platform-aware
+  // literally (the preflight's own environment guard) or in the platform-aware
   // prose bootstrap actually carries ("Claude Code web sandbox").
   const WEB_MENTION_RE = /CLAUDE_CODE_REMOTE|OS=web|web sandbox/i;
-  for (const f of ["skills/start/SKILL.md", "skills/bootstrap/SKILL.md"]) {
+  for (const f of ["skills/_preflight/SKILL.md", "skills/bootstrap/SKILL.md"]) {
     if (!exists(f)) {
       fails.push({ file: f, detail: "missing" });
     } else if (!WEB_MENTION_RE.test(read(f))) {
@@ -3047,14 +3071,14 @@ define("54", "Env-only: no reference to deleted credential-persistence machinery
     }
   }
 
-  // The web /start section must never ask the user to paste a secret into
+  // The web preflight must never ask the user to paste a secret into
   // chat - it points at the environment dialog and a new session instead.
-  const startSkill = "skills/start/SKILL.md";
-  if (!exists(startSkill)) {
-    fails.push({ file: startSkill, detail: "missing" });
-  } else if (!/(nouvelle conversation|NEW session)/i.test(read(startSkill))) {
+  const preflightSkill = "skills/_preflight/SKILL.md";
+  if (!exists(preflightSkill)) {
+    fails.push({ file: preflightSkill, detail: "missing" });
+  } else if (!/(nouvelle conversation|NEW session)/i.test(read(preflightSkill))) {
     fails.push({
-      file: startSkill,
+      file: preflightSkill,
       detail: "never instructs the user to start a new session/conversation after fixing the environment - a running one cannot reread modified env vars",
     });
   }
@@ -3097,7 +3121,7 @@ define("54", "Env-only: no reference to deleted credential-persistence machinery
       fails.push({ file: scwAuth, detail: "the cache-project CLI command is gone - a Cas B id given in the chat has no way to reach the session cache (CONTRACT.md §2, §3)" });
     }
   }
-  for (const f of ["README.md", "skills/start/SKILL.md", "CONTRACT.md"]) {
+  for (const f of ["README.md", "skills/_preflight/SKILL.md", "CONTRACT.md"]) {
     if (!exists(f)) {
       fails.push({ file: f, detail: "missing" });
     } else if (!read(f).includes("BAUDRIER_SCW_PROJECTS_IDS")) {
@@ -3125,6 +3149,17 @@ define("55", "In-place bootstrap: ls-remote gate, scratch-scaffold move, no gh i
     if (!/function moveScaffoldIntoPlace\s*\(/.test(src)) {
       fails.push({ file: bootstrap, detail: "moveScaffoldIntoPlace() is missing - the scratch-scaffold move (create-t3-app under a temp name, then moved into place) may have regressed" });
     }
+    // The package.json / src/ test detects a JS scaffold, not a codebase: a
+    // Python or Go repo passes it, and moveScaffoldIntoPlace() only fails on a
+    // NAME collision, so the T3 app would be merged into that code, committed
+    // and deployed. preflight() must therefore also read the tracked files.
+    const code = stripComments(src);
+    if (!code.includes("git ls-files")) {
+      fails.push({
+        file: bootstrap,
+        detail: 'preflight() never runs "git ls-files" - a repo holding code with no package.json and no src/ would be scaffolded over in place',
+      });
+    }
   }
 
   // No `gh` subcommand invocation anywhere in scripts/*.mjs - scoped to .mjs
@@ -3138,14 +3173,14 @@ define("55", "In-place bootstrap: ls-remote gate, scratch-scaffold move, no gh i
     }
   }
 
-  // Skill prose: same regex. skills/start/SKILL.md's own "never gh auth
+  // Skill prose: same regex. skills/_preflight/SKILL.md's own "never gh auth
   // login, never gh auth status" prohibition sentence is the one documented
   // exception - allowed only on a line that actually carries the word
   // "never", never a blanket per-file allowlist.
   for (const f of FILES.filter((x) => x.startsWith("skills/") && x.endsWith(".md"))) {
     for (const line of read(f).split("\n")) {
       if (!GH_RE.test(line)) continue;
-      if (f === "skills/start/SKILL.md" && /\bnever\b/i.test(line)) continue;
+      if (f === "skills/_preflight/SKILL.md" && /\bnever\b/i.test(line)) continue;
       fails.push({ file: f, detail: `invokes a gh subcommand in prose: ${line.trim().slice(0, 140)}` });
     }
   }
@@ -3369,7 +3404,7 @@ define("58", "README: domains, checkbox, setup script agree; no settings templat
       fails.push({ file: "README.md", detail: "no ip.me troubleshooting entry for the 403-on-unpublished-app case" });
     }
     if (src.includes(".claude/settings.json")) {
-      fails.push({ file: "README.md", detail: "instructs committing a .claude/settings.json - the template repo ships a README only" });
+      fails.push({ file: "README.md", detail: "instructs committing a .claude/settings.json - the setup script is the only plugin install path" });
     }
   }
 
@@ -3392,11 +3427,11 @@ define("58", "README: domains, checkbox, setup script agree; no settings templat
       });
     }
   }
-  if (exists("skills/start/SKILL.md") && !read("skills/start/SKILL.md").includes("setup-clis-web.sh")) {
-    fails.push({ file: "skills/start/SKILL.md", detail: "never references setup-clis-web.sh - the web repair path is undocumented" });
+  if (exists("skills/_preflight/SKILL.md") && !read("skills/_preflight/SKILL.md").includes("setup-clis-web.sh")) {
+    fails.push({ file: "skills/_preflight/SKILL.md", detail: "never references setup-clis-web.sh - the web repair path is undocumented" });
   }
 
-  // Decision (2026-08-06): the template repo ships NO settings file. The
+  // Decision (2026-08-06): no settings file ships with a generated app. The
   // setup script is the only plugin install path, and web auto-mode behavior
   // is observed live before any permissions.allow template comes back. A
   // reappearing template must revisit that decision explicitly, so its mere
@@ -3405,7 +3440,7 @@ define("58", "README: domains, checkbox, setup script agree; no settings templat
   if (exists(settingsFile)) {
     fails.push({
       file: settingsFile,
-      detail: "exists - the baudrier-template repo ships a README only (decision 2026-08-06); a settings template must not silently return",
+      detail: "exists - no settings file ships with a generated app (decision 2026-08-06); a settings template must not silently return",
     });
   }
 

@@ -25,9 +25,10 @@
 //     single local file exists, so nothing needs cleanup - re-run with
 //     --scw-project-id and the run starts clean, instead of a ~5-minute
 //     scaffold-then-discover detour through create-t3-app + pnpm install.
-//     In poc mode (readScwMode(), CONTRACT.md §1) this step never calls
-//     createProject: it requires --scw-project-id instead, and refuses a
-//     Project that already carries another app's secret.
+//     When a Project id is already configured for this app (per-app map or
+//     SCW_DEFAULT_PROJECT_ID, CONTRACT.md §2), this step reuses it and never
+//     calls createProject, and refuses a Project that already carries
+//     another app's secret.
 //   3-13. Scaffold + harden the T3 app (unchanged in spirit from earlier
 //     iterations of this script): create-t3-app scaffold under a scratch
 //     directory then moved into place, .gitattributes + stage (the repo
@@ -103,7 +104,7 @@ import { render } from "./_render.mjs";
 import { isRemoteSandbox } from "./_platform.mjs";
 import { ensureDocker } from "./ensure-dockerd.mjs";
 import { buildAndPushImage } from "./_docker-build.mjs";
-import { requireCredentials, readScwMode, deriveAppName, cacheProjectId, api, sdkCall, slugify, ScwError } from "./scaleway/_scw-auth.mjs";
+import { requireCredentials, projectIdFromEnv, deriveAppName, cacheProjectId, api, sdkCall, slugify, ScwError } from "./scaleway/_scw-auth.mjs";
 import { ensureRegistryNamespace } from "./scaleway/registry.mjs";
 import { SCALE_PRESETS, ensureNamespace, findContainerByName, createContainer, updateContainer, syncContainerSecrets, waitForContainerReady } from "./scaleway/container.mjs";
 import { getSecret, putSecret, listSecrets } from "./scaleway/secrets.mjs";
@@ -179,12 +180,6 @@ if (!nameOverride && !KEBAB_RE.test(appName)) {
   );
 }
 const name = nameOverride || appName;
-
-// Resolved once, early - before any local file changes, so this reads the
-// operator-level BAUDRIER_SCW_MODE env var (CONTRACT.md §1, §2), never a
-// stale value. scwProject() and the linkage step (scwContainer()) both
-// depend on it.
-const scwMode = readScwMode();
 
 // In-place only (CONTRACT.md §7): the repo pre-exists, and this script
 // scaffolds into the checkout it is run from - there is no sibling-directory
@@ -412,6 +407,26 @@ function preflight() {
     fail(`${PROJECT_DIR} already looks scaffolded (package.json or src/ exists). /bootstrap only runs once, in a fresh checkout.`);
   }
 
+  // A scaffold-only check misses a codebase that uses neither name (a Python
+  // repo with pyproject.toml, a Go repo with main.go, a static site) - that
+  // codebase would pass the check above and moveScaffoldIntoPlace() would
+  // merge the T3 scaffold into it, since a name collision there is unlikely.
+  const STARTER_FILE_RE = /^(readme(\..+)?|licen[cs]e(\..+)?|changelog\.md|\.gitignore|\.gitattributes)$/i;
+  const trackedFiles = (capture("git ls-files", CWD).stdout || "").split("\n").map((l) => l.trim()).filter(Boolean);
+  // The starter names count only at the repo root: a nested "docs/LICENCE"
+  // means the repo already has a tree, which is exactly what must be refused.
+  const codeFiles = trackedFiles.filter((p) => {
+    if (/^\.github\//i.test(p)) return false;
+    return p.includes("/") || !STARTER_FILE_RE.test(p);
+  });
+  if (codeFiles.length) {
+    fail(
+      `${PROJECT_DIR} already contains code (e.g. ${codeFiles.slice(0, 3).join(", ")}). ` +
+        "/bootstrap scaffolds a Next.js app in place and would merge it into that code. " +
+        "Start from an empty repository (only a README, a licence, or .github/ files, if any).",
+    );
+  }
+
   // Scaleway credentials: SCW_ACCESS_KEY / SCW_SECRET_KEY env vars, the only
   // source (CONTRACT.md §2) - see scripts/scaleway/_scw-auth.mjs. `scw` has no
   // OAuth/device-code login (CONTRACT.md §1) so there is no CLI "logged in?"
@@ -427,34 +442,6 @@ function preflight() {
     }
   } catch (e) {
     fail(e.message);
-  }
-
-  // Git identity: off web, an unconfigured identity is a hard failure exactly
-  // like before. On a Claude Code web sandbox (isRemoteSandbox()), there is no
-  // human to have configured one - set it from the origin remote's owner
-  // instead (CONTRACT.md §7) and warn, rather than failing the whole run.
-  const identityStatus = {
-    "user.name": capture("git config --global user.name", CWD).stdout?.trim(),
-    "user.email": capture("git config --global user.email", CWD).stdout?.trim(),
-  };
-  const missingIdentity = Object.entries(identityStatus)
-    .filter(([, v]) => !v)
-    .map(([k]) => k);
-  if (missingIdentity.length) {
-    if (isRemoteSandbox()) {
-      const { owner } = getGhOwnerRepo();
-      if (!identityStatus["user.name"]) {
-        const r = spawnSync("git", ["config", "--global", "user.name", owner], { cwd: CWD, encoding: "utf8" });
-        if (r.status !== 0) fail(`git config user.name failed: ${(r.stderr || r.stdout || "").trim()}`);
-      }
-      if (!identityStatus["user.email"]) {
-        const r = spawnSync("git", ["config", "--global", "user.email", `${owner}@users.noreply.github.com`], { cwd: CWD, encoding: "utf8" });
-        if (r.status !== 0) fail(`git config user.email failed: ${(r.stderr || r.stdout || "").trim()}`);
-      }
-      warn(`git identity was not configured (${missingIdentity.join(", ")}) - set from the origin remote owner "${owner}".`);
-    } else {
-      fail(`git config --global ${missingIdentity.join(" / ")} is not set. Configure it and retry.`);
-    }
   }
 
   // Detect pnpm major version and set build flags accordingly (see comment above).
@@ -531,24 +518,11 @@ function needsAdminProjectError(e, slug) {
   );
 }
 
-// poc mode never calls createProject (CONTRACT.md §1) - mirrors
-// needsAdminProjectError's shape so /bootstrap's SKILL can catch it the same
-// way.
-function needsProjectIdError() {
-  return new ScwError(
-    "Le mode PoC est actif : Baudrier ne peut pas créer de projet Scaleway lui-même, il a besoin de l’identifiant " +
-      "d’un projet existant pour cette application. Utilisez le projet que votre administrateur a préparé pour " +
-      "elle, ou votre propre projet par défaut pour un premier essai, puis relancez /bootstrap avec " +
-      "--scw-project-id et cet identifiant.",
-    { type: "poc_needs_project_id" },
-  );
-}
-
 // A second app reusing one Project would collide two apps' secrets under
 // CONTRACT.md §2's name-equals-var invariant (Secret Manager naming) - this
 // is the one place left to catch that once scwProject() skips its own
-// find-or-create (poc mode, or a --scw-project-id retry after a full-mode
-// 403).
+// find-or-create (a Project id already configured for this app, or a
+// --scw-project-id retry after a 403).
 async function refuseIfProjectAlreadyUsed(projectId) {
   const KNOWN_NAMES = new Set(["DATABASE_URL", "AUTH_SECRET", "ACCESS_RESTRICTED", "APP_URL"]);
   const existing = await listSecrets({ projectId });
@@ -569,19 +543,12 @@ async function scwProject() {
     return;
   }
   const slug = slugify(name);
-  if (scwMode === "poc") {
-    if (!scwProjectIdArg) throw needsProjectIdError();
-    await refuseIfProjectAlreadyUsed(scwProjectIdArg);
-    scwProjectId = scwProjectIdArg;
+  const configuredProjectId = scwProjectIdArg ?? projectIdFromEnv(slug);
+  if (configuredProjectId) {
+    await refuseIfProjectAlreadyUsed(configuredProjectId);
+    scwProjectId = configuredProjectId;
     cacheProjectId(slug, scwProjectId);
-    ok(`Using the PoC Scaleway Project (${scwProjectId})`);
-    return;
-  }
-  if (scwProjectIdArg) {
-    await refuseIfProjectAlreadyUsed(scwProjectIdArg);
-    scwProjectId = scwProjectIdArg;
-    cacheProjectId(slug, scwProjectId);
-    ok(`Using the admin-provided Scaleway Project (${scwProjectId})`);
+    ok(`Using the configured Scaleway Project (${scwProjectId})`);
     return;
   }
   log(`Creating dedicated Scaleway Project "${name}"`);
@@ -1641,9 +1608,9 @@ function accessProxy() {
 // Writes the project's initial CLAUDE.md. Contains the unconditional T3-specific
 // conventions only - addons (add-db, add-email, ...) extend this file later via
 // _update-claude-md. Cross-project conventions (TypeScript no-any, responsive,
-// kebab-case URLs, etc.) live in the user's global ~/.claude/CLAUDE.md (managed
-// by /start), not here. The bootstrap SKILL also adds a "Cahier des charges"
-// line after the user-facing CDC step if a spec file was provided.
+// kebab-case URLs, etc.) live in the user's global ~/.claude/CLAUDE.md, not here.
+// The bootstrap SKILL also adds a "Cahier des charges" line after the
+// user-facing CDC step if a spec file was provided.
 function claudeMdCore() {
   log("Writing CLAUDE.md (project-level core)");
   // Template: templates/bootstrap/claude-md-core.md

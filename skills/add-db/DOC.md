@@ -33,7 +33,7 @@ This computer never talks directly to your database - not even to preview a chan
 ## Prerequisites
 
 - The project must be a Next.js project (typically initialized by `/bootstrap`)
-- Your Scaleway account must be connected (`/start` takes care of it, once)
+- The four `SCW_*` variables must be set in your Baudrier cloud environment
 
 ## Tips
 

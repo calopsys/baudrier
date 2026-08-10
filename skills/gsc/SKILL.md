@@ -27,7 +27,7 @@ TOK=$(node "$GSCTOKEN" --readonly); RC=$?     # read (audit, inspection)
 Handling `RC`:
 - **0** -> we have the token.
 - **4** (GSC not configured: no `GSC_SERVICE_ACCOUNT` secret yet) -> delegate to the internal skill **`_setup-gsc`** (creates the service account + stores the key in Secret Manager + authorizes it on GSC), then retry.
-- **1** (any other error: missing Scaleway credentials, invalid key, Google token exchange failure) -> relay the error plainly; if it looks like missing Scaleway credentials, point to `/start`.
+- **1** (any other error: missing Scaleway credentials, invalid key, Google token exchange failure) -> relay the error plainly; if it looks like missing Scaleway credentials, tell the user to check the four `SCW_*` variables in the cloud environment dialog, then start a new conversation.
 
 The token is valid for 1h; re-forge it if a session exceeds this duration. **Never display `$TOK`.**
 

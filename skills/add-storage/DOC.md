@@ -53,7 +53,7 @@ What that means in practice:
 ## Prerequisites
 
 - The project must be in Next.js (typically initialized by `/bootstrap`)
-- Your Scaleway account must be connected (`/start` takes care of it, once)
+- The four `SCW_*` variables must be set in your Baudrier cloud environment
 
 ## Tips
 

@@ -58,7 +58,7 @@ Creates an autonomous AI agent that runs in your project and decides on its own 
 - The project must be in Next.js (typically initialized by `/bootstrap`)
 - Database configured (`/add-db`)
 - Email sending configured (`/add-email`), otherwise the agent can't alert you when it breaks
-- Your Scaleway credentials set up (`/start`) - the agent mints its own scoped keys from there, nothing extra to create
+- The four `SCW_*` variables set in your Baudrier cloud environment - the agent mints its own scoped keys from there, nothing extra to create
 
 ## Tips
 

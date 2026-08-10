@@ -66,7 +66,7 @@ Continue normally to Step 1. This is the initial installation flow.
 
 Invoke the `_detect-project-root` internal skill to get `PROJECT_NAME`, `WEB_DIR`, `IS_NEXTJS`. Abort if `IS_NEXTJS=no`.
 
-Object Storage credentials go through the same Scaleway IAM path as everything else in this harness - there is no separate provider account to connect and no separate token to collect, unlike the storage provider this skill used to target. If the operator's Scaleway credentials aren't configured, the very first `scripts/scaleway/*.mjs` call below fails with a message pointing to `/start`; no separate check is needed here.
+Object Storage credentials go through the same Scaleway IAM path as everything else in this harness - there is no separate provider account to connect and no separate token to collect, unlike the storage provider this skill used to target. If the operator's Scaleway credentials aren't configured, the very first `scripts/scaleway/*.mjs` call below fails with a message about the missing variable; tell the user to check the four `SCW_*` variables in the cloud environment dialog, then start a new conversation.
 
 ## Step 2 - Context: what will be stored?
 

@@ -34,7 +34,7 @@ Renouvelle une clé secrète partout où elle vit - Scaleway Secret Manager, et 
 
 ## Prérequis
 
-- Vous devez être dans un projet baudrier existant, avec des identifiants Scaleway configurés (`/start`)
+- Vous devez être dans un projet baudrier existant, avec les quatre variables `SCW_*` renseignées dans votre environnement cloud « Baudrier »
 - Pour les identifiants externes : un accès au tableau de bord concerné (GitHub, Matomo, Google Cloud)
 
 ## Astuces

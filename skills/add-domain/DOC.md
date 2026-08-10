@@ -43,7 +43,7 @@ The target architecture: **your domain (bought anywhere) → Scaleway DNS (deleg
 
 - An app already deployed on a Scaleway Serverless Container (typically via `/bootstrap` then `/deploy`)
 - A domain name you already own, with access to change its nameservers at your registrar (or someone on your team who does)
-- Your Scaleway account connected (`/start` handles it)
+- The four `SCW_*` variables must be set in your Baudrier cloud environment
 
 ## Tips
 

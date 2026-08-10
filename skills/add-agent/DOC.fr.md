@@ -58,7 +58,7 @@ Crée un agent IA autonome qui tourne dans votre projet et décide tout seul des
 - Le projet doit être en Next.js (typiquement initialisé par `/bootstrap`)
 - Base de données configurée (`/add-db`)
 - Envoi d'emails configuré (`/add-email`), sinon l'agent ne peut pas vous alerter en cas de panne
-- Vos identifiants Scaleway configurés (`/start`) - l'agent crée ses propres clés à portée réduite à partir de là, rien d'autre à créer
+- Les quatre variables `SCW_*` renseignées dans votre environnement cloud « Baudrier » - l’agent crée ses propres clés à portée réduite à partir de là, rien d’autre à créer
 
 ## Astuces
 

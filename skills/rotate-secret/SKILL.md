@@ -47,7 +47,7 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/list-rotatable-secrets.mjs"
 
 This queries this project's Scaleway Secret Manager directly (never a local `.env` - `DATABASE_URL` in particular is never written to disk, see CONTRACT.md §4) and shows a categorized menu. Capture the user's choice as `SECRET_KEY` (or `SECRET_KEY` + `PAIR_KEY` if the item covers a pair like `STORAGE_ACCESS_KEY`/`STORAGE_SECRET_KEY` or the VAPID keys).
 
-If the script reports it could not reach Secret Manager (no credentials), guide the user through `/start` first.
+If the script reports it could not reach Secret Manager (no credentials), tell the user to check the four `SCW_*` variables in the cloud environment dialog, then start a new conversation.
 
 ## Step 2 - Ask which environment (per-app secrets only)
 

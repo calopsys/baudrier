@@ -62,7 +62,7 @@ export function requireCredentials() {
   if (missing.length) {
     throw new ScwError(
       `Scaleway credentials missing (${missing.join(", ")}). ` +
-        `Run /start to configure them, or set the SCW_* environment variables.`,
+        `Set the SCW_* environment variables in the "Baudrier" cloud environment, then start a new conversation.`,
       { type: "missing_credentials" },
     );
   }
@@ -77,15 +77,6 @@ export function deriveAppName() {
   const r = spawnSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" });
   const top = !r.error && r.status === 0 ? r.stdout.trim() : "";
   return path.basename(top || process.cwd());
-}
-
-/**
- * The operator's provisioning mode for this run (CONTRACT.md §1). Read from
- * BAUDRIER_SCW_MODE; any value other than "poc" defaults to "full".
- * @returns {"full"|"poc"}
- */
-export function readScwMode() {
-  return process.env.BAUDRIER_SCW_MODE === "poc" ? "poc" : "full";
 }
 
 /**
@@ -345,6 +336,19 @@ function projectIdFromEnvMap(appName) {
     if (name && id && name === appName) return id;
   }
   return undefined;
+}
+
+/**
+ * The configured Project id for `appName`, from the environment only: the
+ * BAUDRIER_SCW_PROJECTS_IDS entry that matches `appName`, else
+ * SCW_DEFAULT_PROJECT_ID. Makes no API call and does not read the session
+ * cache - a caller uses this to decide whether a Project already exists,
+ * before deciding whether to create one.
+ * @param {string} appName
+ * @returns {string|undefined}
+ */
+export function projectIdFromEnv(appName) {
+  return projectIdFromEnvMap(appName) ?? process.env.SCW_DEFAULT_PROJECT_ID ?? undefined;
 }
 
 /**

@@ -70,9 +70,17 @@ You MUST follow these rules **without exception**:
 
 ---
 
+## Step 0 - Preflight
+
+Read and execute the `_preflight` skill (`skills/_preflight/SKILL.md`) from this plugin, before Step 1. If `_preflight` stops, stop the whole bootstrap.
+
+Step 0 is a gate, not one of the 8 tracked steps. Do not add it to the checklist, and do not renumber Steps 1-8. Never name `_preflight` to the user.
+
+---
+
 ## Step 1 - Project identity
 
-The app's name is no longer something you invent here: `/bootstrap` scaffolds **in place**, into the repo checkout it is run from (CONTRACT.md §7 - that repo already exists, created from the `baudrier-template` on GitHub, or connected on web). CONTRACT.md §2's rule is that a Scaleway Project's name is always the app name, which is always the repo name - so read it, silently:
+The app's name is no longer something you invent here: `/bootstrap` scaffolds **in place**, into the repo checkout it is run from (CONTRACT.md §7 - that repo already exists, and is the checkout the session opened on). CONTRACT.md §2's rule is that a Scaleway Project's name is always the app name, which is always the repo name - so read it, silently:
 
 ```bash
 git remote get-url origin
@@ -153,9 +161,7 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/bootstrap-init.mjs" \
   --scw-project-id "<Project ID from the admin>" > "$LOG_FILE" 2>&1
 ```
 
-**If the operator is in PoC mode** (`BAUDRIER_SCW_MODE=poc`, set as an environment variable - CONTRACT.md §1, §2): the `scwProject` sub-step never tries to create a Project. If `--scw-project-id` was not passed, it fails with a JSON line carrying `"type":"poc_needs_project_id"`. Ask the user, in French and in plain language, for the identifier of an existing Scaleway Project to use for this app: their administrator may have prepared one specifically for it, or they can use their own key's default Project for a first test. Then re-run the same command from step 2, adding `--scw-project-id "<Project ID>"` as shown above.
-
-**Either mode, if a Project already holds another Baudrier app's secret**: the sub-step fails with `"type":"project_already_used"` and `details.secretName`. Relay the script's French message as-is - reusing a Project would collide two apps' secrets, breaking the rule that a secret's name is the env var name (CONTRACT.md §2). Ask the user for a different Project id, then re-run with the new `--scw-project-id`.
+**If a Project already holds another Baudrier app's secret**: the sub-step fails with `"type":"project_already_used"` and `details.secretName`. Relay the script's French message as-is - reusing a Project would collide two apps' secrets, breaking the rule that a secret's name is the env var name (CONTRACT.md §2). Ask the user for a different Project id, then re-run with the new `--scw-project-id`.
 
 The rest of the flow (Monitor, notifications, handoff banner) is unchanged.
 
@@ -163,7 +169,7 @@ The rest of the flow (Monitor, notifications, handoff banner) is unchanged.
 
 `Read` the `output-file` returned by the Bash. There you will find a single line `LOG_FILE=<absolute path>`. Remember this value - it is what the Monitor will tail.
 
-The script scaffolds **directly into the current directory** - never a new subfolder. `/bootstrap` now **requires** being run at the root of the app's own pre-existing git checkout (cloned from the `baudrier-template`, or connected on web): it refuses and exits non-zero if `git rev-parse --show-toplevel` does not match the current directory, or if a scaffold already looks present (`package.json`/`src/`). This is the opposite of the old sibling-directory model - there is no parent folder to `cd` into any more.
+The script scaffolds **directly into the current directory** - never a new subfolder. `/bootstrap` now **requires** being run at the root of the app's own pre-existing git checkout (the checkout the session opened on): it refuses and exits non-zero if `git rev-parse --show-toplevel` does not match the current directory, or if a scaffold already looks present (`package.json`/`src/`). It also refuses if the repository already tracks files other than a README, a licence, `.gitignore`, `.gitattributes`, `CHANGELOG.md`, or anything under `.github/`: `/bootstrap` scaffolds in place, so an existing codebase would get merged into rather than replaced. This is the opposite of the old sibling-directory model - there is no parent folder to `cd` into any more.
 
 **4. Announce to the user + arm the Monitor**
 
@@ -288,7 +294,7 @@ Mark Step 2 ✅, move on to Step 3 to handle the warnings.
 - **SEO metadata** + sitemap + robots + JSON-LD via `setup-seo.mjs`.
 - **404 page polish**: `src/app/not-found.tsx` with a clean design (gradient on the 404, `LinkButton` back to home, fade-in animation).
 - **Deploy artifacts**: `Dockerfile` (multi-stage, `node:24-alpine`), `next.config.*` patched (not overwritten - security headers survive) for `output: 'standalone'` + `images.remotePatterns` on `**.scw.cloud`, `copy-assets.js` (restores `.next/static/` + `public/` into the standalone output - the #1 way this setup would silently ship an unstyled site), `src/proxy.ts` (the IP-allowlist gate).
-- **CLAUDE.md core**: project name + description + stack + structure + commands + T3-specific conventions (Geist, LinkButton, shadcn, tRPC patterns, IP-restriction, etc.). The cross-project conventions (TypeScript no-any, responsive mobile-first, etc.) are in the global `~/.claude/CLAUDE.md` maintained by `/start`.
+- **CLAUDE.md core**: project name + description + stack + structure + commands + T3-specific conventions (Geist, LinkButton, shadcn, tRPC patterns, IP-restriction, etc.), plus the cross-project conventions (TypeScript no-any, responsive mobile-first, etc.). This file is the only carrier: the web sandbox has no persistent home, so nothing survives in `~/.claude/`.
 - **Placeholder env vars**: only `DATABASE_URL` (`postgresql://placeholder...`) to pass Drizzle's Zod validation. `APP_URL` is set to the container's real Scaleway domain right after creation, and `ACCESS_RESTRICTED` to `"true"`. All three go through the container's **secret** channel, even though the last two are not secret: `environment_variables` replaces the whole map on update while `secret_environment_variables` merges per key, so the plain channel would silently drop values written by a later step. The proxy also fails **closed** - anything other than the literal `"false"` means restricted - so a lost variable cannot accidentally publish an app.
 - **No linkage file of any kind is written** (CONTRACT.md §2, §7): `deploy`, `add-domain` and `_push-env-vars` all find this app's Scaleway Project, namespace, and container again by resolving them **by name** - the app name, which is always the repo name - never from a file this script wrote earlier.
 - **Direct build + push, then the container**: once the registry namespace exists, this machine itself runs `docker build --platform linux/amd64` and pushes the image straight to it, tagged with the commit SHA - no GitHub Actions anywhere in the pipeline (CONTRACT.md §5). The container is created only after that push succeeds (Scaleway validates the image against the registry at container-creation time, so a tag that does not exist yet would be rejected outright) and is then waited on until ready.

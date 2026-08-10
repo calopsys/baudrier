@@ -1,17 +1,20 @@
 #!/usr/bin/env node
 // check-scw-permissions.mjs - read-only probe for the two IAM permission
-// sets /start's continuous per-app provisioning depends on: ProjectManager
+// sets the preflight's continuous per-app provisioning depends on: ProjectManager
 // and IAMManager (CONTRACT.md §1). Re-runnable after an admin grants access.
+// Advisory only: on a detected gap it recommends BAUDRIER_SCW_PROJECTS_IDS
+// (several apps in one cloud environment) or SCW_DEFAULT_PROJECT_ID (one app)
+// as the workaround, it does not set either itself.
 //
 // A 403 on a probe is a hard "missing" signal. A 200 is NOT proof of create
 // rights - read-only permission sets exist (e.g. ProjectReadOnly), so a
 // successful list call only rules out the read side of the gap. Hence
 // "certainty":"denial-only" below: this script can prove absence, never
-// presence, of the rights /start actually needs.
+// presence, of the rights the preflight actually needs.
 //
 // Output: exactly one JSON line on stdout. Exit 1 only when credentials are
 // entirely missing; a detected permission gap is non-blocking (blocking:false)
-// so /start can surface it as a warning and keep going.
+// so the preflight can surface it as a warning and keep going.
 //
 //   node check-scw-permissions.mjs [--organization-id <ID>] [--json]
 
@@ -54,7 +57,7 @@ async function main() {
   } catch (e) {
     const reason =
       e?.type === "missing_credentials"
-        ? "Identifiants Scaleway introuvables sur cette machine. Lancez /start pour les configurer."
+        ? "Identifiants Scaleway introuvables sur cette machine. Renseignez les variables SCW_* dans l’environnement cloud « Baudrier », puis démarrez une nouvelle conversation."
         : String(e?.message || e).slice(0, 300);
     out({ ok: false, type: e?.type || "missing_credentials", reason });
     process.exitCode = 1;

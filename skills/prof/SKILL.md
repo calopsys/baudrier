@@ -131,7 +131,6 @@ Wait for the user's reply, then explain the requested topic using the content be
 > Ce sont les commandes que vous utilisez **sur un projet déjà existant** - pour auditer, corriger, déployer, ou simplement comprendre.
 >
 > **Pour démarrer et apprendre**
-> - **/start** - La toute première commande à lancer après avoir installé le plugin. Elle vérifie que tout est prêt et vous présente les commandes disponibles.
 > - **/prof** - C'est moi ! Pour comprendre comment le plugin fonctionne, la stack, ou n'importe quel concept qui vous semble obscur.
 > - **/spec** - Pour construire un cahier des charges guidé, question par question. Utile avant `/bootstrap`, ou à tout moment pour clarifier un nouveau projet.
 > - **/bootstrap** - Pour créer un nouveau projet à partir d'une description.

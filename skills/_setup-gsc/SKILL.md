@@ -28,7 +28,7 @@ This is a **one-time setup per project**: once done, all future `/gsc` runs on t
 node "${CLAUDE_SKILL_DIR}/../../scripts/check-deps.mjs" scaleway
 ```
 - `ok: true` → continue to Step 2.
-- `ok: false` → the operator's Scaleway credentials (`SCW_ACCESS_KEY` / `SCW_SECRET_KEY`) are missing or invalid: point to `/start`, which configures them, then retry.
+- `ok: false` → the operator's Scaleway credentials (`SCW_ACCESS_KEY` / `SCW_SECRET_KEY`) are missing or invalid: tell the user to check the four `SCW_*` variables in the cloud environment dialog, then start a new conversation, then retry.
 
 ---
 

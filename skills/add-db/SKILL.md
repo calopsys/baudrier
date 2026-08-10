@@ -73,7 +73,7 @@ Invoke the `_detect-project-root` internal skill to get `PROJECT_NAME`, `WEB_DIR
 
 ### Scaleway access
 
-Everything goes through the Scaleway API with the operator's `SCW_ACCESS_KEY`/`SCW_SECRET_KEY` (never asked here - `/start` configures them once, and `scripts/scaleway/_scw-auth.mjs` resolves them automatically). If they are missing, `setup-db.mjs` fails immediately at its preflight step with a message pointing to `/start` - no separate check is needed in this skill.
+Everything goes through the Scaleway API with the operator's `SCW_ACCESS_KEY`/`SCW_SECRET_KEY` (never asked here - `scripts/scaleway/_scw-auth.mjs` resolves them from the environment automatically). If they are missing, `setup-db.mjs` fails immediately at its preflight step with a message about the missing variable - no separate check is needed in this skill.
 
 ---
 
@@ -172,7 +172,7 @@ Mark the step ✅, capture `databaseId` and `endpoint` from the final JSON, and 
 1. **Read the detailed error**: just above the handoff banner.
 2. **Identify the failed step** in the banner (`❌ Failed at: <step>`). The name maps 1:1 onto a function in the script - open `setup-db.mjs` and read the function to understand.
 3. **Diagnose**:
-   - `preflight` failed then usually missing Scaleway credentials (route to `/start`) or no Next.js / no Drizzle in the project (go back to Step 1).
+   - `preflight` failed then usually missing Scaleway credentials (tell the user to check the four `SCW_*` variables in the cloud environment dialog, then start a new conversation) or no Next.js / no Drizzle in the project (go back to Step 1).
    - `ensureDatabase` failed then a Scaleway API error provisioning the Serverless SQL Database (quota, transient API issue - the error message is shown as-is).
    - `ensureIamAccess` failed then an IAM error creating the Application/policy/key - check the operator's Scaleway credentials have IAM rights.
    - `storeSecret` failed then the database AND the IAM key exist, but the Secret Manager write failed (region mismatch, API error). The connection string was never persisted anywhere - retry the step by hand using `printf '%s' "<uri>" | node scripts/scaleway/secrets.mjs put DATABASE_URL --stdin` with a freshly rebuilt connection string (you'll need to mint a new IAM key, since the old one's secret was only ever held in memory - see `scripts/scaleway/iam.mjs create-key --reveal`).

@@ -42,7 +42,7 @@ Le bootstrap se déroule en **8 étapes**, avec deux phases d'autonomie totale e
 
 ## Prérequis
 
-- `/start` doit avoir été lancé une fois sur votre machine (outils installés + identifiants Scaleway configurés)
+- Les quatre variables `SCW_*` doivent être renseignées dans votre environnement cloud « Baudrier »
 
 ## Astuces
 
