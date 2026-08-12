@@ -35,7 +35,7 @@
 //       {"success":true,"roles":[...],"defaultRole":"member","adminPage":true}
 
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { render } from "./_render.mjs";
@@ -46,8 +46,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const STEPS = [
   "preflight",
   "patchSchema",
-  "pushSchema",
-  "backfillRoles",
+  "generateMigration",
   "writeRolesTs",
   "patchAuthTs",
   "patchSignupRouter",
@@ -60,6 +59,7 @@ const STEPS = [
 const completed = [];
 const warnings = [];
 let current = null;
+const state = { migrationFiles: [] };
 
 // ─── args ─────────────────────────────────────────────────────────────
 const args = process.argv.slice(2);
@@ -230,7 +230,7 @@ async function preflight() {
   const schemaPath = join(WEB_DIR, "src/server/db/schema.ts");
   if (!existsSync(schemaPath)) fail("src/server/db/schema.ts not found.");
   const schema = readFileSync(schemaPath, "utf8");
-  if (!/export const users\s*=\s*createTable\("user"/.test(schema)) {
+  if (!/export const users\s*=\s*pgTable\("user"/.test(schema)) {
     fail("Could not find `users` table in schema.ts. /add-role requires the table created by /add-auth users.");
   }
 
@@ -260,7 +260,7 @@ async function patchSchema() {
   if (!/export const userRoleEnum\s*=\s*pgEnum\(/.test(schema)) {
     const enumDecl = `\nexport const userRoleEnum = pgEnum("user_role", [${ROLES.map((r) => `"${r}"`).join(", ")}] as const);\n`;
     // Insert just before the users table declaration
-    const usersDecl = schema.match(/export const users\s*=\s*createTable\("user"/);
+    const usersDecl = schema.match(/export const users\s*=\s*pgTable\("user"/);
     if (usersDecl) {
       schema = schema.slice(0, usersDecl.index) + enumDecl + schema.slice(usersDecl.index);
     } else {
@@ -271,16 +271,16 @@ async function patchSchema() {
   }
 
   // 2. Inject `roles` column into the users table (idempotent).
-  // We can't use a single regex because the createTable body contains nested
+  // We can't use a single regex because the pgTable body contains nested
   // object literals (e.g. `timestamp("x", { mode: "date" })`, `references(() => x, { onDelete })`).
   // Walk the braces manually to find the outer matching `}`.
   if (/roles:\s*userRoleEnum\(/.test(schema)) {
     warn("`roles` column already on users table : leaving as-is.");
   } else {
-    const headerRe = /export const users\s*=\s*createTable\("user",\s*\{/;
+    const headerRe = /export const users\s*=\s*pgTable\("user",\s*\{/;
     const headerMatch = schema.match(headerRe);
     if (!headerMatch) {
-      fail("Could not locate `export const users = createTable(\"user\", {` in schema.ts.");
+      fail("Could not locate `export const users = pgTable(\"user\", {` in schema.ts.");
     }
     const openBraceIdx = headerMatch.index + headerMatch[0].length - 1; // points at the `{`
     let depth = 1;
@@ -292,7 +292,7 @@ async function patchSchema() {
       i++;
     }
     if (depth !== 0) {
-      fail("Could not find the matching `}` of the users createTable body (unbalanced braces?).");
+      fail("Could not find the matching `}` of the users pgTable body (unbalanced braces?).");
     }
     const closeBraceIdx = i - 1;
     const before = schema.slice(0, closeBraceIdx);
@@ -308,49 +308,61 @@ async function patchSchema() {
   ok("Schema patched (enum + roles[] column)");
 }
 
-// ─── Step 3: drizzle-kit push ─────────────────────────────────────────
-async function pushSchema() {
-  log("Pushing schema with drizzle-kit");
-  const probe = capture("npx drizzle-kit push --help", WEB_DIR);
-  const supportsForce = probe.stdout?.includes("--force");
-  const cmd = supportsForce ? "npx drizzle-kit push --force" : "npx drizzle-kit push";
-  run(cmd, WEB_DIR);
-  ok("Schema pushed to DB");
+// ─── Step 3: drizzle-kit generate ─────────────────────────────────────
+// Per CONTRACT.md §4: the operator's machine never connects to the database.
+// `drizzle-kit generate` only writes SQL files; the migration Job applies
+// them on the next /deploy. The `roles` column patchSchema adds carries
+// .notNull().default(sql`'{DEFAULT_ROLE}'::user_role[]`), so Postgres backfills
+// existing rows with the default at ADD COLUMN time - no separate DB round trip
+// is needed for that part. When the operator picked a backfillRole other than
+// the default, we append a plain UPDATE statement to the same migration file
+// below, so the whole change ships and applies as one unit at the next /deploy.
+function listMigrationFiles(webDir) {
+  let outDir = "drizzle";
+  const cfgPath = join(webDir, "drizzle.config.ts");
+  if (existsSync(cfgPath)) {
+    const m = readFileSync(cfgPath, "utf8").match(/out:\s*["']([^"']+)["']/);
+    if (m) outDir = m[1];
+  }
+  const dir = join(webDir, outDir);
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir).filter((f) => f.endsWith(".sql")).map((f) => join(outDir, f));
 }
 
-// ─── Step 4: backfill existing users ──────────────────────────────────
-async function backfillRoles() {
-  log(`Backfilling existing users with role "${BACKFILL_ROLE}"`);
-  // The schema default already handles new rows. For existing rows that may have
-  // an empty/null roles array, force them to the backfill role.
-  // We do it via a tiny inline Node script using the project's `db` export so we
-  // don't have to re-implement the DATABASE_URL resolution.
-  const script = `
-import { sql } from "drizzle-orm";
-import { db } from "~/server/db";
-const out = await db.execute(sql\`
-  UPDATE "user" SET roles = ARRAY['${BACKFILL_ROLE}']::user_role[]
-  WHERE roles IS NULL OR cardinality(roles) = 0
-\`);
-console.log(JSON.stringify({ rowsAffected: out.rowsAffected ?? out.rowCount ?? null }));
-`.trim();
-  const tmpFile = join(WEB_DIR, ".baudrier-backfill-roles.mts");
-  writeFileSync(tmpFile, script);
-  try {
-    const res = capture(`npx tsx "${tmpFile}"`, WEB_DIR);
-    if (res.status !== 0) {
-      warn(
-        "Backfill UPDATE failed via tsx. New signups will use the default, " +
-          "but pre-existing users may have an empty roles array. " +
-          "You can rerun the UPDATE manually:\n" +
-          `   UPDATE "user" SET roles = ARRAY['${BACKFILL_ROLE}']::user_role[] WHERE roles IS NULL OR cardinality(roles) = 0;`,
-      );
-    } else {
-      ok(`Backfill done (${(res.stdout || "").trim()})`);
-    }
-  } finally {
-    try { rmSync(tmpFile, { force: true }); } catch {}
+async function generateMigration() {
+  log("Running drizzle-kit generate (writes SQL, no DB connection)");
+  const before = listMigrationFiles(WEB_DIR);
+  const res = spawnSync("npx drizzle-kit generate", { cwd: WEB_DIR, stdio: "inherit", shell: true });
+  if (res.status !== 0) {
+    fail(
+      `drizzle-kit generate failed (exit ${res.status}). Schema patched on disk but no migration ` +
+        "was written. Retry manually: `cd " + WEB_DIR + " && npx drizzle-kit generate`",
+    );
   }
+  const after = listMigrationFiles(WEB_DIR);
+  const created = after.filter((f) => !before.includes(f));
+  state.migrationFiles.push(...created);
+  ok(`Migration written (${created.join(", ") || "no new file - schema already up to date"}). Applied by the next /deploy.`);
+
+  if (BACKFILL_ROLE === DEFAULT_ROLE) return;
+
+  if (created.length !== 1) {
+    warn(
+      `backfillRole ("${BACKFILL_ROLE}") differs from defaultRole ("${DEFAULT_ROLE}"), but ` +
+        `${created.length === 0 ? "no new migration file was written" : "more than one new migration file was written"}. ` +
+        "Add the backfill UPDATE manually to the right migration file:\n" +
+        `   UPDATE "user" SET "roles" = '{${BACKFILL_ROLE}}'::user_role[];`,
+    );
+    return;
+  }
+
+  // The Job runs this UPDATE inside the same /deploy, before the new code
+  // serves traffic, so an unconditional UPDATE (not a WHERE-guarded one) is
+  // correct: every existing row still predates the roles column at this point.
+  const migrationPath = join(WEB_DIR, created[0]);
+  const append = `--> statement-breakpoint\nUPDATE "user" SET "roles" = '{${BACKFILL_ROLE}}'::user_role[];\n`;
+  writeFileSync(migrationPath, readFileSync(migrationPath, "utf8").trimEnd() + "\n" + append);
+  ok(`Backfill UPDATE appended to ${created[0]} (applies existing users to "${BACKFILL_ROLE}" at the next /deploy)`);
 }
 
 // ─── Step 5: write src/lib/roles.ts ───────────────────────────────────
@@ -578,8 +590,7 @@ async function tscCheck() {
 // ─── MAIN ─────────────────────────────────────────────────────────────
 await step("preflight", preflight);
 await step("patchSchema", patchSchema);
-await step("pushSchema", pushSchema);
-await step("backfillRoles", backfillRoles);
+await step("generateMigration", generateMigration);
 await step("writeRolesTs", writeRolesTs);
 await step("patchAuthTs", patchAuthTs);
 await step("patchSignupRouter", patchSignupRouter);
@@ -596,10 +607,11 @@ console.log(`
 
    Roles available:   ${ROLES.join(", ")}
    Default at signup: ${DEFAULT_ROLE}
-   Backfilled to:     ${BACKFILL_ROLE} (only rows with empty/NULL roles)
+   Existing users:    will be set to "${BACKFILL_ROLE}" at the next /deploy (via the generated migration)
    Helpers:           src/lib/roles.ts (ROLES, ROLE_LABELS, hasRole, getRoles)
    Admin page:        ${CREATE_ADMIN_PAGE ? "/admin/users (protected by isAdmin)" : "skipped"}
    Marker:            // baudrier:roles ${ROLES.join(", ")} (in src/lib/roles.ts)
+   Migration:         ${state.migrationFiles.join(", ") || "none written"} (applied by the next /deploy)
 
 Next: Claude takes over for the CLAUDE.md update (via _update-claude-md), the user-facing
 summary, and (optionally) integrating the "Utilisateurs" link in the admin sidebar if
@@ -613,5 +625,6 @@ console.log(
     defaultRole: DEFAULT_ROLE,
     backfillRole: BACKFILL_ROLE,
     adminPage: CREATE_ADMIN_PAGE,
+    migrationFiles: state.migrationFiles,
   }),
 );

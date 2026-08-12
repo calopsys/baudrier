@@ -32,7 +32,7 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/setup-auth-users.mjs" \
   --web-dir "<WEB_DIR>"
 ```
 
-The script runs 15 sub-steps: preflight (refuses if `auth.ts` exists), email detection (via `_check-deps email`), install `next-auth@beta` + `@auth/drizzle-adapter`, AUTH_SECRET generation, schema patch (imports `text/integer/primaryKey/index` + `AdapterAccount` type, append 4 NextAuth tables + optional `password_reset_tokens` if email), drizzle-kit push, write `password.ts`, write `auth.ts` (marker `// baudrier:auth-modes users`, `Session.user.id` non-nullable via module augmentation), creation of `rate-limit.ts` + `rateLimitedProcedure` if missing (standalone case), adding `protectedProcedure` to `trpc.ts` if missing, write tRPC router (variant chosen based on `emailOk`: `auth-router.ts` or `auth-router-with-reset.ts`, the latter sending via Scaleway Transactional Email), register `authRouter` in `root.ts`, write API route with rate limiting, write pages (signin/signup/dashboard/account + forgot-password/reset-password if email), push AUTH_SECRET.
+The script runs 15 sub-steps: preflight (refuses if `auth.ts` exists), email detection (via `_check-deps email`), install `next-auth@beta` + `@auth/drizzle-adapter`, AUTH_SECRET generation, schema patch (imports `pgTable/text/integer/primaryKey/index` + `AdapterAccount` type, append 4 NextAuth tables + optional `password_reset_tokens` if email), `drizzle-kit generate` (writes the SQL migration, no DB connection - applied by the next `/deploy`), write `password.ts`, write `auth.ts` (marker `// baudrier:auth-modes users`, `Session.user.id` non-nullable via module augmentation), creation of `rate-limit.ts` + `rateLimitedProcedure` if missing (standalone case), adding `protectedProcedure` to `trpc.ts` if missing, write tRPC router (variant chosen based on `emailOk`: `auth-router.ts` or `auth-router-with-reset.ts`, the latter sending via Scaleway Transactional Email), register `authRouter` in `root.ts`, write API route with rate limiting, write pages (signin/signup/dashboard/account + forgot-password/reset-password if email), push AUTH_SECRET.
 
 ### During execution
 
@@ -55,8 +55,8 @@ Capture `emailReset` and `emailProvider` from the JSON for the summary. Move on 
 3. Diagnose:
    - `preflight` failed → `auth.ts` exists (re-config) → go back to the Step 0 menu of `add-auth`. Or a collision on a UI file / `password.ts` (delete manually if you want).
    - `installDeps` failed → pnpm/network error → manual retry: `cd <WEB_DIR> && pnpm add next-auth@beta @auth/drizzle-adapter`.
-   - `patchSchema` failed → T3 reorganized the schema or `createTable` not found → fix manually and rerun.
-   - `pushSchema` failed → `DATABASE_URL` placeholder or the Scaleway Serverless SQL Database unreachable → fix `.env` then `cd <WEB_DIR> && npx drizzle-kit push --force` by hand.
+   - `patchSchema` failed → T3 reorganized the schema, or `schema.ts` still uses `pgTableCreator` instead of the plain `pgTable` convention (CONTRACT.md §4) → fix manually and rerun.
+   - `generateMigration` failed → `schema.ts` doesn't compile for drizzle-kit (the step opens no DB connection, so `DATABASE_URL` is never the cause) → fix the schema then `cd <WEB_DIR> && npx drizzle-kit generate` by hand.
    - `writeAuthRouter` / `writeAuthTs` / other `write*` failed → filesystem permission (rare).
    - `pushEnvVars` failed → all the code is in place, only AUTH_SECRET didn't land → rerun manually with the value visible in the logs.
 4. Continue manually.
@@ -97,7 +97,7 @@ Invoke `_update-claude-md` with:
 
     tRPC `auth` router: `signup`, `deleteAccount`{{IF_EMAIL_OK}}, `requestPasswordReset`, `resetPassword`{{/IF_EMAIL_OK}}. All rate-limited by IP.
 
-    To add a user directly (troubleshooting): `printf '%s' "<password>" | node "<plugin>/scripts/hash-password.mjs"` (output = `salt:hash`), then `INSERT INTO <prefix>_user (id, email, password_hash, name) VALUES (gen_random_uuid()::text, '<email>', '<salt:hash>', '<name>')`.
+    To add a user directly (troubleshooting): `printf '%s' "<password>" | node "<plugin>/scripts/hash-password.mjs"` (output = `salt:hash`), then `INSERT INTO "user" (id, email, password_hash, name) VALUES (gen_random_uuid()::text, '<email>', '<salt:hash>', '<name>')`.
     ```
 - `env-vars`:
   - `- \`AUTH_SECRET\` - NextAuth session secret`

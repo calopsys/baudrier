@@ -32,17 +32,17 @@ Sets up **optional per-user** 2FA on a Baudrier accounts-based auth. No determin
 
 ## Step 2 - Schema: per-user 2FA tables
 
-Add to `src/server/db/schema.ts` (making sure `text, boolean, timestamp, serial` are imported from `drizzle-orm/pg-core`):
+Add to `src/server/db/schema.ts` (making sure `pgTable, text, boolean, timestamp, serial` are imported from `drizzle-orm/pg-core`):
 
 ```ts
 /** Per-user 2FA (TOTP). */
-export const userTwoFactor = createTable("user_two_factor", {
+export const userTwoFactor = pgTable("user_two_factor", {
   userId: text("user_id").primaryKey(),
   secret: text("secret").notNull(),
   enabled: boolean("enabled").default(false).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
-export const userBackupCode = createTable("user_backup_code", {
+export const userBackupCode = pgTable("user_backup_code", {
   id: serial("id").primaryKey(),
   userId: text("user_id").notNull(),
   codeHash: text("code_hash").notNull(),
@@ -50,7 +50,7 @@ export const userBackupCode = createTable("user_backup_code", {
 });
 ```
 
-Then `cd <WEB_DIR> && pnpm db:push`.
+Then `cd <WEB_DIR> && pnpm db:generate` (writes the SQL migration, no DB connection). The next `/deploy` applies it.
 
 ---
 

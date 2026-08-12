@@ -37,7 +37,7 @@ L'architecture cible : **votre domaine (acheté n'importe où) → DNS Scaleway 
 
 - Un enregistrement DNS sur votre domaine, pointant vers le container de votre app
 - Le domaine **rattaché à votre container Scaleway** avec un certificat HTTPS automatique et auto-renouvelé
-- La variable `APP_URL` mise à jour partout (`.env`, Scaleway Secret Manager, code source)
+- La variable `APP_URL` mise à jour partout (`.env`, Scaleway Secret Manager, code source), avec `AUTH_URL` qui suit automatiquement à la prochaine synchronisation des secrets du container
 
 ## Prérequis
 

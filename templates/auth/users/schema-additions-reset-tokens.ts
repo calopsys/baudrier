@@ -13,7 +13,7 @@
 // other outstanding token for that user (a successful reset should retire
 // every other in-flight link, not just the one used).
 
-export const passwordResetTokens = createTable(
+export const passwordResetTokens = pgTable(
   "password_reset_token",
   {
     id: text("id")

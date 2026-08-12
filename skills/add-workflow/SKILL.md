@@ -189,10 +189,10 @@ export async function runWorkflow<T>(
 
 ### 3.b The run-log table (only if the DB exists)
 
-Add to `src/server/db/schema.ts`, using the project's `createTable` helper and existing style:
+Add to `src/server/db/schema.ts`, using `pgTable` (drizzle-orm/pg-core) and the file's existing style:
 
 ```ts
-export const workflowRuns = createTable("workflow_run", (d) => ({
+export const workflowRuns = pgTable("workflow_run", (d) => ({
   id: d.integer().primaryKey().generatedByDefaultAsIdentity(),
   workflow: d.varchar({ length: 100 }).notNull(),
   status: d.varchar({ length: 20 }).notNull(), // running | done | failed
@@ -204,7 +204,7 @@ export const workflowRuns = createTable("workflow_run", (d) => ({
 }));
 ```
 
-Then `pnpm db:push`. (Adapt the column-builder syntax to what the project's schema actually uses; older T3 scaffolds differ. Read the file first, imitate it.)
+Then `pnpm db:generate` (writes the SQL migration, no DB connection; the next `/deploy` applies it). Adapt the column-builder syntax to what the project's schema actually uses; older scaffolds differ. Read the file first, imitate it.
 
 ### 3.c The workflow module
 

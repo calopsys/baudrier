@@ -3463,6 +3463,163 @@ define("62", "Shapes: every IAM-minting skill carries a Cas B branch", () => {
   return fails;
 });
 
+define("63", "Auth self-hosted: trustHost pinned", () => {
+  const fails = [];
+
+  // Auth.js rejects the request host by default. Behind the Scaleway
+  // Container proxy the app never sees its own public URL directly, so every
+  // NextAuth() call must pin trustHost: true or sign-in fails closed.
+  const TRUST_HOST_RE = /trustHost:\s*true/;
+  for (const f of ["templates/auth/users/auth.ts", "templates/auth/admin/auth.ts", "templates/2fa/auth.ts"]) {
+    if (!exists(f)) {
+      fails.push({ file: f, detail: "missing" });
+      continue;
+    }
+    if (!TRUST_HOST_RE.test(read(f))) {
+      fails.push({ file: f, detail: "NextAuth() does not set trustHost: true - Auth.js rejects the request host behind the Scaleway Container proxy" });
+    }
+  }
+  return fails;
+});
+
+define("64", "AUTH_URL shadows APP_URL at the chokepoint", () => {
+  const fails = [];
+
+  // (a) buildContainerSecretMap() is the one path that assembles the full
+  // secret map every container sync writes; a var missing here never reaches
+  // a running container no matter what the rest of the harness declares.
+  const containerFile = "scripts/scaleway/container.mjs";
+  if (!exists(containerFile)) {
+    fails.push({ file: containerFile, detail: "missing" });
+  } else {
+    const src = read(containerFile);
+    const at = src.indexOf("export async function buildContainerSecretMap");
+    const end = at >= 0 ? src.indexOf("\nexport ", at + 1) : -1;
+    if (at < 0) {
+      fails.push({ file: containerFile, detail: "buildContainerSecretMap is not exported" });
+    } else {
+      const body = stripComments(src.slice(at, end > 0 ? end : undefined));
+      if (!body.includes("AUTH_URL")) {
+        fails.push({ file: containerFile, detail: "buildContainerSecretMap() never sets AUTH_URL - Auth.js reads a stale host once APP_URL and AUTH_URL diverge" });
+      }
+    }
+  }
+
+  // (b) CONTRACT.md's env-var table is the canonical name list (see "Read
+  // this first"); a missing row leaves the next reader with no way to learn
+  // AUTH_URL exists.
+  if (!/\|\s*`AUTH_URL`\s*\|/.test(read("CONTRACT.md"))) {
+    fails.push({ file: "CONTRACT.md", detail: "env-var table has no `AUTH_URL` row" });
+  }
+
+  // (c) /delete-project reports any var absent from this list as "added by
+  // the user"; a missing entry misreports AUTH_URL on every project deleted.
+  const knownVars = "templates/delete-project/known-env-vars.json";
+  if (!exists(knownVars)) {
+    fails.push({ file: knownVars, detail: "missing" });
+  } else {
+    let parsed;
+    try {
+      parsed = JSON.parse(read(knownVars));
+    } catch (e) {
+      fails.push({ file: knownVars, detail: `invalid JSON: ${e.message}` });
+    }
+    if (parsed && !parsed.vars?.includes("AUTH_URL")) {
+      fails.push({ file: knownVars, detail: "vars array does not include AUTH_URL" });
+    }
+  }
+
+  return fails;
+});
+
+define("65", "Schema convention: plain pgTable, no creator helper", () => {
+  const fails = [];
+  const CREATOR_RE = /pgTableCreator|\bcreateTable\s*\(/;
+
+  // (a) templates/ ships straight into a user's project, comments included,
+  // so no trace of the retired creator-helper convention may survive there -
+  // not even as an explanatory comment.
+  for (const f of FILES.filter((x) => x.startsWith("templates/"))) {
+    if (CREATOR_RE.test(read(f))) {
+      fails.push({ file: f, detail: "references pgTableCreator/createTable() - the schema convention is plain pgTable, no creator helper" });
+    }
+  }
+
+  // (b) the three setup scripts must patch onto plain pgTable, not the T3
+  // pgTableCreator baseline. "pgTable" is a positive anchor: deleting the old
+  // reference without wiring the new one still fails this check.
+  for (const f of ["scripts/setup-auth-users.mjs", "scripts/setup-role.mjs", "scripts/setup-2fa.mjs"]) {
+    if (!exists(f)) {
+      fails.push({ file: f, detail: "missing" });
+      continue;
+    }
+    const code = stripComments(read(f));
+    if (CREATOR_RE.test(code)) {
+      fails.push({ file: f, detail: "references pgTableCreator/createTable() - the schema convention is plain pgTable, no creator helper" });
+    }
+    if (!code.includes("pgTable")) {
+      fails.push({ file: f, detail: "never mentions pgTable - deleting the creator-helper reference is not enough, the script must patch onto plain pgTable" });
+    }
+  }
+
+  // (c) skill prose must not teach the retired convention either. Anchored on
+  // the bare word, not just a call site: a skill that tells the reader to
+  // "keep the createTable import" is still teaching the wrong convention.
+  for (const f of SKILL_MDS) {
+    if (/\bcreateTable\b/.test(read(f))) {
+      fails.push({ file: f, detail: "mentions createTable - the schema convention is plain pgTable, no creator helper" });
+    }
+  }
+
+  return fails;
+});
+
+define("66", "Operator never opens a DB connection from a setup flow", () => {
+  const fails = [];
+
+  // (a) a setup script may explain, in a comment, why it does not shell out
+  // to a live-DB command (scripts/setup-db.mjs does exactly this); only real
+  // code doing so is a defect. Comments are stripped first, same convention
+  // as check 11(c) and check 21.
+  const DB_CONN_RE = /drizzle-kit\s+(push|studio)\b/;
+  for (const f of MJS.filter((x) => x.startsWith("scripts/"))) {
+    const code = stripComments(read(f));
+    if (DB_CONN_RE.test(code)) {
+      fails.push({ file: f, detail: "runs drizzle-kit push/studio - a setup script must never open a live DB connection from the operator's machine" });
+    }
+    if (code.includes("~/server/db")) {
+      fails.push({ file: f, detail: 'imports "~/server/db" - a setup script must never open a live DB connection from the operator\'s machine' });
+    }
+  }
+
+  // (b) skill prose must never instruct the reader to run these commands by
+  // hand. A negation word right before the match is how this repo marks the
+  // legitimate "never do this" explanation (same convention as check 24's
+  // "gh auth login" gate and check 33c's drizzle-kit migrate window). The
+  // window is checked before the match only: a negation belongs to the
+  // sentence it introduces, not to an unrelated sentence that merely lands
+  // nearby - a "never" 140 characters after the match, from a different
+  // sentence, must not excuse the match.
+  const PUSH_RE = /(npx\s+drizzle-kit\s+push|pnpm\s+db:push)/g;
+  const NEG_RE = /\bnever\b|\bjamais\b|\bnot\b|ne\s+\S+\s+pas|don['’]t/i;
+  const WINDOW = 60;
+  const docs = FILES.filter((f) => f.startsWith("skills/") && /(^|\/)(SKILL\.md|DOC.*\.md)$/.test(f));
+  for (const f of docs) {
+    const src = read(f);
+    for (const m of src.matchAll(PUSH_RE)) {
+      const before = src.slice(Math.max(0, m.index - WINDOW), m.index);
+      if (!NEG_RE.test(before)) {
+        fails.push({
+          file: f,
+          detail: `"${m[0]}" at offset ${m.index} has no negation word in the ${WINDOW} characters before it - it reads as an instruction to run it, not a warning against it`,
+        });
+      }
+    }
+  }
+
+  return fails;
+});
+
 /* ------------------------------------------------------------------- runner */
 
 const results = [];

@@ -90,10 +90,10 @@ These are **project-specific** secrets (like `AUTH_SECRET`): Secret Manager + `.
 
 ## Step 4: Subscriptions table
 
-1. Insert the contents of `templates/push/schema-snippet.ts` into the Drizzle schema (`<WEB_DIR>/src/server/db/schema.ts`, or `packages/db/src/schema.ts` in a monorepo), after the `users` table. Check that the imports used (`index`, `text`, `timestamp`, `sql`, `createTable`, `users`) are present (add them otherwise). Adapt `createTable` to the project conventions if the helper has a different name.
-2. Push the schema:
+1. Insert the contents of `templates/push/schema-snippet.ts` into the Drizzle schema (`<WEB_DIR>/src/server/db/schema.ts`, or `packages/db/src/schema.ts` in a monorepo), after the `users` table. Check that the imports used (`index`, `pgTable`, `text`, `timestamp`, `sql`, `users`) are present (add them otherwise).
+2. Generate the migration (writes SQL only, no DB connection; the next `/deploy` applies it):
    ```bash
-   cd "<WEB_DIR>" && pnpm db:push
+   cd "<WEB_DIR>" && pnpm db:generate
    ```
 
 ---

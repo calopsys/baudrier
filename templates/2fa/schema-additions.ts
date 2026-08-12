@@ -14,7 +14,7 @@
 //     ADMIN_2FA_BACKUP_HASHES (no DB needed to regenerate them); this table
 //     is only "has this specific hash already been spent".
 
-export const trustedDevices = createTable(
+export const trustedDevices = pgTable(
   "trusted_device",
   {
     id: text("id").primaryKey(),
@@ -30,7 +30,7 @@ export const trustedDevices = createTable(
   }),
 );
 
-export const loginProofs = createTable(
+export const loginProofs = pgTable(
   "login_proof",
   {
     id: text("id").primaryKey(),
@@ -46,7 +46,7 @@ export const loginProofs = createTable(
   }),
 );
 
-export const consumedBackupCodes = createTable("consumed_backup_code", {
+export const consumedBackupCodes = pgTable("consumed_backup_code", {
   codeHash: text("code_hash").primaryKey(),
   consumedAt: timestamp("consumed_at", { mode: "date", withTimezone: true })
     .notNull()

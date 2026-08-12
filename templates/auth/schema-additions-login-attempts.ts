@@ -6,7 +6,7 @@
 // in-memory Map in rate-limit.ts is a read-through cache in front of this
 // table, not a second source of truth - see that file's comment.
 
-export const loginAttempts = createTable(
+export const loginAttempts = pgTable(
   "login_attempt",
   {
     identifier: text("identifier").notNull(),

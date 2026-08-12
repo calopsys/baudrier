@@ -165,6 +165,8 @@ import('${CLAUDE_SKILL_DIR}/../../scripts/scaleway/secrets.mjs').then(({ putSecr
 
 Also update the local `.env`: replace/add `APP_URL=https://<name>.<domain>`.
 
+`AUTH_URL` follows `APP_URL` automatically at the next container secret sync - no separate write is needed.
+
 ### 2. Eliminate the old `*.functions.fnc.fr-par.scw.cloud` URLs from the code
 
 **This step is critical for SEO.** If the container's default Scaleway URL remains in the code (sitemaps, metadata, JSON-LD, Open Graph), search engines index the wrong URL and ranking is diluted.

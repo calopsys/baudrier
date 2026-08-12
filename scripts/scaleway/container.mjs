@@ -531,6 +531,8 @@ function isContainerExcludedSecret(name) {
  * is for container-only values deliberately NOT persisted to Secret Manager
  * (e.g. a preview container's APP_URL or its ACCESS_RESTRICTED); an
  * override value of `null`/`undefined` removes that key from the result.
+ * When the map has no `AUTH_URL`, this function derives one from the map's
+ * own `APP_URL` (see the derivation below).
  *
  * @param {object} [opts]
  * @param {Record<string,string|null|undefined>} [opts.overrides]
@@ -553,6 +555,15 @@ export async function buildContainerSecretMap({ overrides = {}, databaseUrlFrom 
     if (value === undefined || value === null) delete map[key];
     else map[key] = String(value);
   }
+
+  // Auth.js derives its origin from the incoming request, but the container
+  // sees 0.0.0.0:8080, never the public host. Derive AUTH_URL here from the
+  // container's effective APP_URL - the Secret Manager value for production,
+  // or the caller's override for a preview. An explicit AUTH_URL (Secret
+  // Manager entry or override) wins; this only fills the gap. See
+  // CONTRACT.md §2.
+  if (!("AUTH_URL" in map) && map.APP_URL) map.AUTH_URL = map.APP_URL;
+
   return map;
 }
 

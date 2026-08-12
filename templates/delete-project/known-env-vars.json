@@ -3,6 +3,7 @@
   "vars": [
     "DATABASE_URL",
     "APP_URL",
+    "AUTH_URL",
     "AUTH_SECRET",
     "ACCESS_RESTRICTED",
     "ACCESS_ALLOWED_IPS",

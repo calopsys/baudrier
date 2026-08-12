@@ -20,7 +20,7 @@
 //       {"success":true,"authMode":"users","emailReset":bool,"emailProvider":"tem|none","envVars":["AUTH_SECRET"]}
 
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
@@ -54,7 +54,7 @@ const STEPS = [
   "installDeps",
   "generateAuthSecret",
   "patchSchema",
-  "pushSchema",
+  "generateMigration",
   "writePasswordTs",
   "writeAuthTs",
   "ensureRateLimitInfra",
@@ -72,6 +72,7 @@ const state = {
   authSecret: null,
   emailOk: false,
   emailProvider: "none", // "tem" | "none" - Scaleway Transactional Email is the only provider
+  migrationFiles: [],
 };
 
 async function step(stepName, fn) {
@@ -185,17 +186,12 @@ async function preflight() {
     }
   }
 
-  // Schema must exist with createTable already defined (T3 baseline).
+  // Schema must exist. Bootstrap always resets it to the plain pgTable
+  // convention (CONTRACT.md §4: one database per app, no table-name-prefix
+  // helper), so no further shape check is needed here.
   const schemaPath = join(WEB_DIR, "src/server/db/schema.ts");
   if (!existsSync(schemaPath)) {
     fail(`${schemaPath} not found - T3 db scaffold missing. Run /add-db first.`);
-  }
-  const schemaContent = readFileSync(schemaPath, "utf8");
-  if (!/createTable\s*=\s*pgTableCreator/.test(schemaContent)) {
-    fail(
-      `createTable (pgTableCreator) not found in ${schemaPath}. T3 may have changed ` +
-        "its db scaffold. The schema-additions template assumes createTable is in scope.",
-    );
   }
 
   // rate-limit.ts is created by setup-security in bootstrap.
@@ -266,9 +262,11 @@ async function patchSchema() {
   let schema = readFileSync(schemaPath, "utf8");
 
   // 1. Ensure imports are present.
-  // T3 baseline (latest 7.x) imports: index, integer, pgTableCreator, primaryKey, text.
-  // Our schema-additions also uses `timestamp` (drizzle-orm/pg-core) and `sql` (drizzle-orm).
+  // Bootstrap resets schema.ts to the plain `pgTable` convention (CONTRACT.md §4).
+  // Our schema-additions needs pgTable, text, integer, primaryKey, index, and
+  // timestamp from drizzle-orm/pg-core, plus `sql` from drizzle-orm.
   schema = ensureImport(schema, "drizzle-orm/pg-core", [
+    "pgTable",
     "text",
     "integer",
     "primaryKey",
@@ -284,7 +282,7 @@ async function patchSchema() {
   );
 
   // 2. Idempotency: skip if `users` table already declared
-  if (/export const users\s*=\s*createTable\("user"/.test(schema)) {
+  if (/export const users\s*=\s*pgTable\("user"/.test(schema)) {
     warn("`users` table already declared in schema.ts - skipping NextAuth table patch.");
   } else {
     // 3. Append NextAuth tables (template body, no imports)
@@ -302,7 +300,7 @@ async function patchSchema() {
   // DB-backed src/lib/rate-limit.ts). Checked independently of the `users`
   // idempotency above - a re-run that already has `users` may still be
   // missing this table (e.g. it was added by a harness version predating M2).
-  if (/export const loginAttempts\s*=\s*createTable\("login_attempt"/.test(schema)) {
+  if (/export const loginAttempts\s*=\s*pgTable\("login_attempt"/.test(schema)) {
     warn("`loginAttempts` already declared in schema.ts - skipping rate-limit table patch.");
   } else {
     const rateLimitTable = render("auth/schema-additions-login-attempts.ts", {});
@@ -347,24 +345,38 @@ function ensureImport(content, module, names, typeOnly = false) {
 
 function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 
-// ─── Step 6: drizzle-kit push ─────────────────────────────────────────
-async function pushSchema() {
-  log("Pushing schema with drizzle-kit");
-  const env = { ...process.env };
-  // drizzle-kit reads DATABASE_URL from the project's .env via the validator.
-  const probe = spawnSync("npx drizzle-kit push --help", {
-    cwd: WEB_DIR, stdio: "pipe", shell: true, encoding: "utf8", env,
-  });
-  const supportsForce = probe.stdout?.includes("--force");
-  const cmd = supportsForce ? "npx drizzle-kit push --force" : "npx drizzle-kit push";
-  const res = spawnSync(cmd, { cwd: WEB_DIR, stdio: "inherit", shell: true, env });
+// ─── Step 6: drizzle-kit generate ─────────────────────────────────────
+// Per CONTRACT.md §4: the operator's machine never connects to the database.
+// `drizzle-kit generate` only writes SQL files; the migration Job applies
+// them on the next /deploy. The schema patch above is a pure addition (new
+// tables only), so drizzle-kit never hits its interactive rename prompt
+// (bootstrap-init.mjs ~908-912 documents the same reasoning).
+function listMigrationFiles(webDir) {
+  let outDir = "drizzle";
+  const cfgPath = join(webDir, "drizzle.config.ts");
+  if (existsSync(cfgPath)) {
+    const m = readFileSync(cfgPath, "utf8").match(/out:\s*["']([^"']+)["']/);
+    if (m) outDir = m[1];
+  }
+  const dir = join(webDir, outDir);
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir).filter((f) => f.endsWith(".sql")).map((f) => join(outDir, f));
+}
+
+async function generateMigration() {
+  log("Running drizzle-kit generate (writes SQL, no DB connection)");
+  const before = listMigrationFiles(WEB_DIR);
+  const res = spawnSync("npx drizzle-kit generate", { cwd: WEB_DIR, stdio: "inherit", shell: true });
   if (res.status !== 0) {
     fail(
-      `drizzle-kit push failed (exit ${res.status}). Schema patched on disk but not applied to DB. ` +
-        "Retry manually: `cd " + WEB_DIR + " && npx drizzle-kit push`",
+      `drizzle-kit generate failed (exit ${res.status}). Schema patched on disk but no migration ` +
+        "was written. Retry manually: `cd " + WEB_DIR + " && npx drizzle-kit generate`",
     );
   }
-  ok("Schema pushed to DB");
+  const after = listMigrationFiles(WEB_DIR);
+  const created = after.filter((f) => !before.includes(f));
+  state.migrationFiles.push(...created);
+  ok(`Migration written (${created.join(", ") || "no new file - schema already up to date"}). Applied by the next /deploy.`);
 }
 
 // ─── Step 7: write src/lib/password.ts ────────────────────────────────
@@ -660,7 +672,7 @@ await step("detectEmail", detectEmail);
 await step("installDeps", installDeps);
 await step("generateAuthSecret", generateAuthSecret);
 await step("patchSchema", patchSchema);
-await step("pushSchema", pushSchema);
+await step("generateMigration", generateMigration);
 await step("writePasswordTs", writePasswordTs);
 await step("writeAuthTs", writeAuthTs);
 await step("ensureRateLimitInfra", ensureRateLimitInfra);
@@ -688,7 +700,11 @@ console.log(`
    API route:      src/app/api/auth/[...nextauth]/route.ts (with rate limiting)
    Pages:          ${pageList}
    DB tables:      users, accounts, sessions, verificationTokens${state.emailOk ? ", password_reset_tokens" : ""}
+   Migration:      ${state.migrationFiles.join(", ") || "none written"} (applied by the next /deploy)
    Env vars:       AUTH_SECRET
+
+The DB tables above do not exist until the next /deploy runs the migration Job -
+tell the user signin will not work until then.
 
 Next: Claude takes over for the CLAUDE.md update (via _update-claude-md), the user-menu
 integration in layout.tsx (must be done contextually since the user's layout structure
@@ -702,5 +718,6 @@ console.log(
     emailReset: state.emailOk,
     emailProvider: state.emailProvider,
     envVars: ["AUTH_SECRET"],
+    migrationFiles: state.migrationFiles,
   }),
 );

@@ -58,6 +58,16 @@ only from the original author's VPN (verified on a live run).
   must pass `--platform linux/amd64` unconditionally.
 - The container must listen on `0.0.0.0:8080`. Binding `127.0.0.1` breaks
   Scaleway's health probes.
+- **Auth.js on a Serverless Container fails `UntrustedHost` by default.** None
+  of `@auth/core`'s trustHost heuristics (`AUTH_URL`, `AUTH_TRUST_HOST`, the
+  removed-provider env vars, `NODE_ENV !== "production"`) holds here, and the
+  request origin the app sees is `0.0.0.0:8080`, not the public host. Both
+  measures are required: every generated `auth.ts` sets `trustHost: true`,
+  and `buildContainerSecretMap` derives `AUTH_URL` from the container's
+  effective `APP_URL` (§2). Without the first, every production auth request
+  fails `UntrustedHost`; without the second, redirect-carrying auth flows
+  point at `https://0.0.0.0:8080`. `tools/verify.mjs` pins both (checks 63
+  and 64).
 - **Health checks do not wake a scaled-to-zero container.** Only real traffic
   does. Keep-warm must be a Serverless Job issuing a real HTTP request.
 - Serverless Containers **cannot reference Secret Manager**. The harness reads
@@ -447,6 +457,7 @@ preview deploy (§1: fails closed).
 |---|---|
 | `DATABASE_URL` | Serverless SQL connection string (see §4); `bootstrap-init.mjs` seeds a placeholder in Secret Manager before a database exists, `/add-db`/`/deploy` overwrite it with the real value |
 | `APP_URL` | public URL of the app (replaces the old Vercel URL var); Secret-Manager-canonical for production, a container-only override for preview |
+| `AUTH_URL` | Auth.js canonical origin (§1: `UntrustedHost`). Never stored: `container.mjs#buildContainerSecretMap` derives it from the container's effective `APP_URL` (the Secret Manager value for production, the preview override otherwise) on every sync. An explicit `AUTH_URL` secret or override wins over the derivation |
 | `AUTH_SECRET` | NextAuth/Auth.js secret |
 | `ACCESS_RESTRICTED` | `"true"` \| `"false"` — the VPN IP gate; Secret-Manager-canonical for production, a container-only override for preview |
 | `ACCESS_ALLOWED_IPS` | comma-separated CIDRs; no default - unset means nobody passes the gate while `ACCESS_RESTRICTED` is on; `bootstrap-init.mjs` seeds it in Secret Manager with the operator's detected egress address |
@@ -922,7 +933,9 @@ Do **not** ship `ssl: { rejectUnauthorized: false }` in generated code, even
 though Scaleway's own tutorial does. Use proper CA verification.
 
 Drizzle wiring: `pg` + `drizzle-orm/node-postgres`. No `pgTableCreator` prefix
-hack — each app has its own database.
+hack — each app has its own database. Addon schema templates declare tables
+with plain `pgTable`, and `bootstrap-init.mjs` resets the scaffolded
+`schema.ts` to that convention (`tools/verify.mjs` check 65).
 
 **The operator never connects to a database.** `drizzle-kit generate` (writes
 SQL files, no connection) runs locally; the migration Serverless Job applies
@@ -934,7 +947,11 @@ carries a syntactically valid placeholder
 satisfies Zod validation and `drizzle.config.ts`'s import chain without
 opening a connection. The placeholder is required, not a leftover: deleting
 it breaks `drizzle-kit generate`. The real value lives only in Secret
-Manager and the containers it is synced into.
+Manager and the containers it is synced into. `/add-auth`, `/add-role` and
+`/add-2fa` follow the same rule: their setup scripts run `drizzle-kit
+generate` only, and the role backfill ships as an `UPDATE` appended to the
+generated migration file, never as a live statement from this machine
+(`tools/verify.mjs` check 66).
 
 **Stored data is an optimisation, not a dependency.** Because there is no
 REAL `DATABASE_URL` on the operator's machine (only the harmless

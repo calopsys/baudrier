@@ -37,7 +37,7 @@ The target architecture: **your domain (bought anywhere) → Scaleway DNS (deleg
 
 - A DNS record on your domain, pointing at your app's container
 - The domain **attached to your Scaleway container** with an automatic, auto-renewing HTTPS certificate
-- The `APP_URL` variable updated everywhere (`.env`, Scaleway Secret Manager, source code)
+- The `APP_URL` variable updated everywhere (`.env`, Scaleway Secret Manager, source code), with `AUTH_URL` following it automatically at the next container secret sync
 
 ## Prerequisites
 

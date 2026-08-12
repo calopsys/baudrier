@@ -44,8 +44,8 @@ Templates/scripts path: `${CLAUDE_SKILL_DIR}/../../templates/notif-center/`.
 
 ## Step 2: Notifications table
 
-1. Insert `templates/notif-center/schema-snippet.ts` into the Drizzle schema (`<WEB_DIR>/src/server/db/schema.ts`, or `packages/db/src/schema.ts` in a monorepo), after the `users` table. Check the imports (`boolean`, `index`, `text`, `timestamp`, `sql`, `createTable`, `users`).
-2. `cd "<WEB_DIR>" && pnpm db:push`.
+1. Insert `templates/notif-center/schema-snippet.ts` into the Drizzle schema (`<WEB_DIR>/src/server/db/schema.ts`, or `packages/db/src/schema.ts` in a monorepo), after the `users` table. Check the imports (`boolean`, `index`, `pgTable`, `text`, `timestamp`, `sql`, `users`).
+2. `cd "<WEB_DIR>" && pnpm db:generate` (writes the SQL migration, no DB connection). The next `/deploy` applies it.
 
 ---
 

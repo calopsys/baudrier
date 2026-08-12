@@ -196,7 +196,7 @@ The `id` must be a stable slug (kebab-case, unique). The `description` is option
 
 ```ts
 // src/server/db/schema.ts
-export const locations = createTable("location", {
+export const locations = pgTable("location", {
   id: serial("id").primaryKey(),
   slug: varchar("slug", { length: 100 }).notNull().unique(),
   label: text("label").notNull(),
@@ -208,7 +208,7 @@ export const locations = createTable("location", {
 });
 ```
 
-3. Push schema: `cd <WEB_DIR> && npx drizzle-kit push --force`
+3. Generate the migration: `cd <WEB_DIR> && npx drizzle-kit generate` (writes SQL only, no DB connection). The next `/deploy` applies it.
 4. Create a tRPC procedure `locations.listActive` (public if the map is on a public page).
 5. (Optional) admin UI: page `/admin/locations` with basic CRUD. **Out of scope for v1** - offer the user to build it later in a follow-up "add me an admin to manage the locations".
 

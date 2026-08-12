@@ -32,6 +32,12 @@ declare module "next-auth" {
 // them wired costs nothing and avoids a schema migration if OAuth is ever added
 // by hand later.
 export const { auth, handlers, signIn, signOut } = NextAuth({
+  // None of Auth.js's trustHost heuristics (AUTH_URL, AUTH_TRUST_HOST, the
+  // removed-provider env vars, NODE_ENV) holds on a Scaleway Serverless
+  // Container, so without this flag every production auth request fails with
+  // UntrustedHost. The trust is safe:
+  // Scaleway's ingress and the proxy.ts IP gate sit in front of the app.
+  trustHost: true,
   adapter: DrizzleAdapter(db, {
     usersTable: users,
     accountsTable: accounts,

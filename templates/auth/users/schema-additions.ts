@@ -6,13 +6,14 @@
 //   - sessions:           DB sessions (unused in jwt strategy, kept for OAuth future)
 //   - verificationTokens: email verification flow
 //
-// `createTable` is the pgTableCreator that T3 scaffolded at the top of this file -
-// it prefixes every name with the project (e.g. `myapp_user`). Imports for
-// `text`, `integer`, `primaryKey`, and `AdapterAccount` are added separately by
-// the setup-auth-users.mjs script (which patches the imports surgically to
-// avoid duplicates with what T3 already imports).
+// `pgTable` comes from drizzle-orm/pg-core. The setup-auth-users.mjs script
+// adds this import. Table names carry no prefix: this app has its own
+// dedicated database (CONTRACT.md §4), so no shared-instance prefix helper
+// applies here. The script also adds imports for `text`, `integer`,
+// `primaryKey`, and `AdapterAccount` separately (it patches the imports
+// surgically to avoid duplicates with what T3 already imports).
 
-export const users = createTable("user", {
+export const users = pgTable("user", {
   id: text("id")
     .primaryKey()
     .$defaultFn(() => crypto.randomUUID()),
@@ -33,7 +34,7 @@ export const users = createTable("user", {
   sessionVersion: integer("session_version").notNull().default(0),
 });
 
-export const accounts = createTable(
+export const accounts = pgTable(
   "account",
   {
     userId: text("user_id")
@@ -63,7 +64,7 @@ export const accounts = createTable(
 // Adding `withTimezone: true` makes the adapter reject the table at compile time
 // (DefaultPostgresSessionsTable type mismatch). Keep tz-naive here; use timestamptz
 // only on columns we own (emailVerified, password_reset_tokens.expiresAt).
-export const sessions = createTable(
+export const sessions = pgTable(
   "session",
   {
     sessionToken: text("session_token").primaryKey(),
@@ -77,7 +78,7 @@ export const sessions = createTable(
   }),
 );
 
-export const verificationTokens = createTable(
+export const verificationTokens = pgTable(
   "verification_token",
   {
     identifier: text("identifier").notNull(),

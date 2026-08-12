@@ -25,7 +25,7 @@ The CLAUDE.md file follows a conventional structure created by `/bootstrap`. Rec
 | Section | Purpose | Example line |
 |---|---|---|
 | `stack` | Technologies used | `- **Database**: Scaleway Serverless SQL (PostgreSQL 16)` |
-| `commands` | CLI commands | `- \`pnpm db:push\` - Push schema to the database` |
+| `commands` | CLI commands | `- \`pnpm db:generate\` - Generate a migration, applied by the next /deploy` |
 | `conventions` | Coding rules / patterns | `- DB: import from \`@<project-name>/db\`, never a cross-app relative path.` |
 | `env-vars` | Environment variables list | `- \`DATABASE_URL\` - Scaleway Serverless SQL connection string` |
 | `custom` | A free-form section with its own heading | `## Change the admin password in production` |
@@ -38,7 +38,7 @@ The caller passes something like:
 
 > Add to CLAUDE.md:
 > - section: `stack`, line: `- **Database**: Scaleway Serverless SQL (PostgreSQL 16)`
-> - section: `commands`, lines: [`\`pnpm db:push\` - Push schema`, `\`pnpm db:studio\` - Open Drizzle Studio`]
+> - section: `commands`, lines: [`\`pnpm db:generate\` - Generate a migration`, `\`pnpm db:studio\` - Open Drizzle Studio`]
 > - section: `conventions`, line: `- DB: import from \`@project/db\`, never a cross-app relative path.`
 
 Or for a custom section:

@@ -108,23 +108,17 @@ If customizing, ask for the list. Normalize :
 
 Default suggestion : the first role in the list (the most restricted). Present via `askUserQuestion` or free conversation.
 
-### Q3 : Migration of existing users (skip if DB empty)
+### Q3 : Migration of existing users
 
-Run a small check : `psql` via Drizzle or a throwaway tsx script to count the rows in `user` :
+The operator's machine never connects to the database (CONTRACT.md §4), so this
+harness cannot count existing users here. Ask the user directly instead :
 
-```bash
-cd <WEB_DIR>
-npx tsx -e "import { db } from '~/server/db'; import { users } from '~/server/db/schema'; const c = await db.select().from(users); console.log(c.length);"
-```
-
-If 0 → skip Q3, `backfillRole = defaultRole`.
-
-Otherwise, ask :
-
-> I detected N users already signed up. Which role do you want to assign to them ?
+> Do people already have an account on your app ? If yes, which role should they get ?
 > - The default role (`<defaultRole>`)
 > - Another role from the list
 > - Decide case by case (rare, manual via the admin page after install)
+
+If the user says nobody has signed up yet, `backfillRole = defaultRole`.
 
 ---
 
@@ -160,8 +154,7 @@ Tell the user :
 The script prints its own `▸ <step>` as it goes ; relay it in natural language without quoting the internal names. Examples :
 
 - `▸ Patching src/server/db/schema.ts` → `↳ I'm adding the new "role" type to the database.`
-- `▸ Pushing schema with drizzle-kit` → `↳ I'm applying the change to your database.`
-- `▸ Backfilling existing users with role "membre"` → `↳ I'm assigning the "membre" role to your existing users.`
+- `▸ Running drizzle-kit generate (writes SQL, no DB connection)` → `↳ I'm preparing the database change ; it will be applied at the next deployment.`
 - `▸ Writing src/lib/roles.ts` → `↳ I'm placing the role-checking helpers in the project.`
 - `▸ Patching src/server/auth.ts (expose roles in JWT + session)` → `↳ I'm wiring the roles into the login system, so they are available everywhere in your app.`
 - `▸ Writing src/app/admin/(protected)/users/page.tsx` → `↳ I'm creating the user management page in your admin.`
@@ -183,7 +176,7 @@ At the end, the script prints a JSON (last line of stdout). Parse it to confirm 
 **Common cases** :
 - `preflight` failed → often `src/lib/roles.ts` already exists (re-config) or a missing prerequisite clearly reported in the message.
 - `patchSchema` failed → the schema has an unexpected shape. Inspect and patch by hand.
-- `pushSchema` failed → DB unreachable or `drizzle-kit` crashes. Check `DATABASE_URL`, re-run.
+- `generateMigration` failed → `schema.ts` doesn't compile for drizzle-kit (the step opens no DB connection, so `DATABASE_URL` is never the cause). Fix the schema, re-run.
 - `patchAuthTs` failed → the project's auth.ts was manually modified and no longer matches the pattern. Patch the callbacks by hand, taking inspiration from the script's `replace()` calls.
 
 ---
@@ -215,7 +208,7 @@ Show a clear, jargon-free recap :
 
 > 🎉 **Roles system set up.**
 >
-> **Available roles** : `<list>`. New sign-ups get the `<default>` role by default. Your existing users were set to `<backfillRole>`.
+> **Available roles** : `<list>`. New sign-ups get the `<default>` role by default. Your existing users will be set to `<backfillRole>` at the next deployment.
 >
 > **To manage roles** : log in as admin and go to **`/admin/users`**. There you'll find the list of all your accounts with a dropdown to change their role. Tick "Multi-role mode" if a user needs to have several.
 >
@@ -283,7 +276,7 @@ No script : the risk of corrupting `roles.ts` + `schema.ts` + the references in 
 1. Ask for the new default (from the current list).
 2. **Patch `src/lib/roles.ts`** : `DEFAULT_ROLE`.
 3. **Patch `src/server/api/routers/auth.ts`** : the signup procedure uses `roles: ["<old>"]`. Replace it with `roles: ["<new>"]`.
-4. **Patch `src/server/db/schema.ts`** : if the `roles` column has a `.default(sql\`'{<old>}'::user_role[]\`)`, change it. Optional : `pnpm db:push` so the Postgres default is up to date too.
+4. **Patch `src/server/db/schema.ts`** : if the `roles` column has a `.default(sql\`'{<old>}'::user_role[]\`)`, change it. Optional : `pnpm db:generate` so the change ships in a migration on the next `/deploy`.
 5. CLAUDE.md + tsc check + recap.
 
 ---

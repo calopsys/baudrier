@@ -14,6 +14,12 @@ declare module "next-auth" {
 
 // baudrier:auth-modes admin
 export const { auth, handlers, signIn, signOut } = NextAuth({
+  // None of Auth.js's trustHost heuristics (AUTH_URL, AUTH_TRUST_HOST, the
+  // removed-provider env vars, NODE_ENV) holds on a Scaleway Serverless
+  // Container, so without this flag every production auth request fails with
+  // UntrustedHost. The trust is safe:
+  // Scaleway's ingress and the proxy.ts IP gate sit in front of the app.
+  trustHost: true,
   // Session courte (filet de sécurité). La déconnexion après inactivité est
   // gérée côté client (composant IdleTimeout).
   session: { strategy: "jwt", maxAge: 60 * 60 * 8 },

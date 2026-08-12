@@ -21,9 +21,6 @@
 // `drizzle-kit generate` (no connection) runs locally, and `drizzle-kit
 // migrate` runs inside the deploy pipeline's migration Serverless Job.
 //
-// Naming follows the project's `createTable` prefix convention. The `{prefix}_`
-// prefix is added automatically by Drizzle's pgTableCreator.
-//
 // IMPORTANT: after appending, run `drizzle-kit generate` (writes the SQL
 // migration file, no DB connection) - `/deploy` applies it via the migration
 // Job on the next deploy.
@@ -40,9 +37,6 @@ import {
   primaryKey,
   index,
 } from "drizzle-orm/pg-core";
-
-// Reuse the project's createTable if it exists. Replace `pgTable` with your
-// project's `createTable` to inherit the table-name prefix.
 
 // ─── invocations ──────────────────────────────────────────────────────
 export const agentInvocations = pgTable(

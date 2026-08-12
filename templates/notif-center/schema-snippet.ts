@@ -1,12 +1,12 @@
 // Snippet à insérer dans src/server/db/schema.ts (ou packages/db/src/schema.ts en
 // monorepo), après la table `users`. Posé par /add-notification-center.
 //
-// Prérequis d’imports (typiques d’un schéma T3) :
-//   import { boolean, index, text, timestamp } from "drizzle-orm/pg-core";
+// Prérequis d’imports (typiques d’un schéma de ce harnais) :
+//   import { boolean, index, pgTable, text, timestamp } from "drizzle-orm/pg-core";
 //   import { sql } from "drizzle-orm";
-//   import { createTable } from "..." ; et la table `users`.
+//   et la table `users`.
 
-export const notifications = createTable(
+export const notifications = pgTable(
   "notification",
   {
     id: text("id")

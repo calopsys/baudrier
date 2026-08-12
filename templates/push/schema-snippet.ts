@@ -1,13 +1,13 @@
 // Snippet à insérer dans src/server/db/schema.ts (ou packages/db/src/schema.ts
 // en monorepo), après la table `users`. Posé par /add-push-notification.
 //
-// Prérequis d’imports (déjà présents dans un schéma T3 typique) :
-//   import { index, text, timestamp } from "drizzle-orm/pg-core";
+// Prérequis d’imports (déjà présents dans un schéma typique de ce harnais) :
+//   import { index, pgTable, text, timestamp } from "drizzle-orm/pg-core";
 //   import { sql } from "drizzle-orm";
-//   import { createTable } from "..." ; et la table `users`.
-// Adapter `createTable` / `users` aux conventions du projet si différentes.
+//   et la table `users`.
+// Adapter `users` aux conventions du projet si différentes.
 
-export const pushSubscriptions = createTable(
+export const pushSubscriptions = pgTable(
   "push_subscription",
   {
     id: text("id")

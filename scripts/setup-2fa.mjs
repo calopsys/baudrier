@@ -22,7 +22,7 @@
 //   node setup-2fa.mjs --name <project-name> [--issuer <Label>] [--web-dir .]
 
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync, readdirSync } from "node:fs";
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
@@ -62,7 +62,7 @@ const STEPS = [
   "generateSecret",
   "generateBackupCodes",
   "patchSchema",
-  "pushSchema",
+  "generateMigration",
   "writeCode",
   "patchSignOut",
   "storeSecrets",
@@ -71,7 +71,7 @@ const STEPS = [
 const completed = [];
 const warnings = [];
 let current = null;
-const state = { base32: null, otpauthUrl: null, backupCodes: [], backupHashes: [], qrPath: null, storedIn: null };
+const state = { base32: null, otpauthUrl: null, backupCodes: [], backupHashes: [], qrPath: null, storedIn: null, migrationFiles: [] };
 
 // Recognized src/lib/rate-limit.ts variants (see templates/2fa/rate-limit.ts
 // for the DB-backed one and scripts/setup-security.mjs for the memory-only
@@ -171,12 +171,12 @@ async function preflight() {
   if (!deps["drizzle-orm"]) {
     fail(`${WEB_DIR} doesn't depend on drizzle-orm. Run /add-db before /add-2fa - 2FA needs a database (trusted devices, one-time login proofs, spent backup codes).`);
   }
+  // Bootstrap always resets schema.ts to the plain pgTable convention
+  // (CONTRACT.md §4: one database per app, no table-name-prefix helper),
+  // so no further shape check is needed here.
   const schemaPath = join(WEB_DIR, "src/server/db/schema.ts");
   if (!existsSync(schemaPath)) {
     fail(`${schemaPath} not found - T3 db scaffold missing. Run /add-db first.`);
-  }
-  if (!/createTable\s*=\s*pgTableCreator/.test(readFileSync(schemaPath, "utf8"))) {
-    fail(`createTable (pgTableCreator) not found in ${schemaPath}. The 2FA schema snippet assumes createTable is in scope.`);
   }
 
   // loginAction imports checkRateLimit from ~/lib/rate-limit. Bootstrap creates
@@ -193,17 +193,17 @@ async function patchSchema() {
   const schemaPath = join(WEB_DIR, "src/server/db/schema.ts");
   let schema = readFileSync(schemaPath, "utf8");
 
-  schema = ensureImport(schema, "drizzle-orm/pg-core", ["text", "integer", "primaryKey", "index", "timestamp"]);
+  schema = ensureImport(schema, "drizzle-orm/pg-core", ["pgTable", "text", "integer", "primaryKey", "index", "timestamp"]);
   schema = ensureImport(schema, "drizzle-orm", ["sql"]);
 
-  if (/export const trustedDevices\s*=\s*createTable\("trusted_device"/.test(schema)) {
+  if (/export const trustedDevices\s*=\s*pgTable\("trusted_device"/.test(schema)) {
     warn("`trustedDevices` already declared in schema.ts - skipping 2FA schema patch.");
   } else {
     const twoFaTables = render("2fa/schema-additions.ts", {});
     schema = schema.trimEnd() + "\n\n" + twoFaTables;
   }
 
-  if (/export const loginAttempts\s*=\s*createTable\("login_attempt"/.test(schema)) {
+  if (/export const loginAttempts\s*=\s*pgTable\("login_attempt"/.test(schema)) {
     warn("`loginAttempts` already declared in schema.ts - skipping rate-limit schema patch.");
   } else {
     const rateLimitTable = render("auth/schema-additions-login-attempts.ts", {});
@@ -239,23 +239,37 @@ function ensureImport(content, module, names) {
 
 function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 
-// ─── Step: drizzle-kit push ─────────────────────────────────────────
-async function pushSchema() {
-  log("Pushing schema with drizzle-kit");
-  const env = { ...process.env };
-  const probe = spawnSync("npx drizzle-kit push --help", {
-    cwd: WEB_DIR, stdio: "pipe", shell: true, encoding: "utf8", env,
-  });
-  const supportsForce = probe.stdout?.includes("--force");
-  const cmd = supportsForce ? "npx drizzle-kit push --force" : "npx drizzle-kit push";
-  const res = spawnSync(cmd, { cwd: WEB_DIR, stdio: "inherit", shell: true, env });
+// ─── Step: drizzle-kit generate ───────────────────────────────────────
+// Per CONTRACT.md §4: the operator's machine never connects to the database.
+// `drizzle-kit generate` only writes SQL files; the migration Job applies
+// them on the next /deploy. The schema patch above is a pure addition (new
+// tables only), so drizzle-kit never hits its interactive rename prompt.
+function listMigrationFiles(webDir) {
+  let outDir = "drizzle";
+  const cfgPath = join(webDir, "drizzle.config.ts");
+  if (existsSync(cfgPath)) {
+    const m = readFileSync(cfgPath, "utf8").match(/out:\s*["']([^"']+)["']/);
+    if (m) outDir = m[1];
+  }
+  const dir = join(webDir, outDir);
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir).filter((f) => f.endsWith(".sql")).map((f) => join(outDir, f));
+}
+
+async function generateMigration() {
+  log("Running drizzle-kit generate (writes SQL, no DB connection)");
+  const before = listMigrationFiles(WEB_DIR);
+  const res = spawnSync("npx drizzle-kit generate", { cwd: WEB_DIR, stdio: "inherit", shell: true });
   if (res.status !== 0) {
     fail(
-      `drizzle-kit push failed (exit ${res.status}). Schema patched on disk but not applied to DB. ` +
-        "Retry manually: `cd " + WEB_DIR + " && npx drizzle-kit push`",
+      `drizzle-kit generate failed (exit ${res.status}). Schema patched on disk but no migration ` +
+        "was written. Retry manually: `cd " + WEB_DIR + " && npx drizzle-kit generate`",
     );
   }
-  ok("Schema pushed to DB");
+  const after = listMigrationFiles(WEB_DIR);
+  const created = after.filter((f) => !before.includes(f));
+  state.migrationFiles.push(...created);
+  ok(`Migration written (${created.join(", ") || "no new file - schema already up to date"}). Applied by the next /deploy.`);
 }
 
 async function installDeps() {
@@ -421,7 +435,7 @@ await step("installDeps", installDeps);
 await step("generateSecret", generateSecret);
 await step("generateBackupCodes", generateBackupCodes);
 await step("patchSchema", patchSchema);
-await step("pushSchema", pushSchema);
+await step("generateMigration", generateMigration);
 await step("writeCode", writeCode);
 await step("patchSignOut", patchSignOut);
 await step("storeSecrets", storeSecrets);
@@ -435,6 +449,11 @@ console.log(`
    Trusted device: 24h cookie (__Host-${COOKIE_NAME}), revocable in DB (trusted_device)
    Secrets stored: ${state.storedIn === "secretmanager" ? `Scaleway Secret Manager, secret ${SECRET_NAME}` : `file ${state.qrPath ? dirname(state.qrPath) : ".2fa-setup"}/secrets.txt`}
    QR (scan aid):  ${state.qrPath}
+   Migration:      ${state.migrationFiles.join(", ") || "none written"} (applied by the next /deploy)
+
+The trusted_device, login_proof and consumed_backup_code tables do not exist
+until the next /deploy runs the migration Job - tell the user 2FA will not work
+until then.
 
 Next: Claude mounts <IdleTimeout/> in the admin protected layout, updates
 CLAUDE.md, then tells the user where to find the secret + codes (Secret Manager
@@ -448,6 +467,7 @@ console.log(
     storedIn: state.storedIn,
     secretName: state.storedIn === "secretmanager" ? SECRET_NAME : null,
     qrPath: state.qrPath,
+    migrationFiles: state.migrationFiles,
     envVars: ["ADMIN_TOTP_SECRET", "ADMIN_2FA_BACKUP_HASHES"],
   }),
 );

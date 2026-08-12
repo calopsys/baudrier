@@ -126,8 +126,8 @@ Steps (all driven by Claude):
 1. `_check-deps db` (DB required) ; `_check-deps email` (optional for reset).
 2. **Build the hybrid `auth.ts`**: marker → `// baudrier:auth-modes admin, users`. Import `DrizzleAdapter`, schema tables, `eq`, `db`. Module augmentation `Session.user.id`. `authorize()`: admin path FIRST (check `email === ADMIN_USERNAME`, `getAdminPasswordHash`), users path as FALLBACK (`db.query.users.findFirst` → `verifyPassword`). Keep `isAdmin()`. Add jwt/session callbacks.
 3. **Extend `password.ts`**: add `hashPassword()` (from the users template). Keep `getAdminPasswordHash` + `verifyPassword`.
-4. **Patch schema.ts** - like `setup-auth-users.mjs` does in the `patchSchema` step: add the missing imports (`text, integer, primaryKey, index, timestamp` pg-core, `sql` drizzle-orm, `AdapterAccount` type next-auth/adapters), append the 4 NextAuth tables (+ `password_reset_tokens` if email_ok).
-5. **`pnpm db:push`** (or `--force`).
+4. **Patch schema.ts** - like `setup-auth-users.mjs` does in the `patchSchema` step: add the missing imports (`pgTable, text, integer, primaryKey, index, timestamp` pg-core, `sql` drizzle-orm, `AdapterAccount` type next-auth/adapters), append the 4 NextAuth tables (+ `password_reset_tokens` if email_ok).
+5. **`pnpm db:generate`** (writes the SQL migration, no DB connection; the next `/deploy` applies it).
 6. **Patch trpc.ts** - add `protectedProcedure` (and `rateLimitedProcedure` if missing). Take inspiration from the `setup-auth-users.mjs` `addProtectedProcedure` step.
 7. **Create `src/server/api/routers/auth.ts`** from the right template (`auth-router.ts` or `auth-router-with-reset.ts`).
 8. **Register in `root.ts`**: import + `auth: authRouter,`.
@@ -136,7 +136,7 @@ Steps (all driven by Claude):
 11. **Patch `layout.tsx`** for the user-menu (best-effort, like `_setup-auth-users` Step 2).
 12. **Update CLAUDE.md** - add the users sections in addition to the admin sections already present.
 13. **`pnpm tsc --noEmit`** - check that it compiles.
-14. **Summary**: "User signup has been added on top of the admin login. The admin login keeps working and has priority in the authorize callback."
+14. **Summary**: "User signup has been added on top of the admin login. The admin login keeps working and has priority in the authorize callback." Remind the user that a `/deploy` is needed before the new tables exist and signup works.
 
 ### Case B - Add `admin` on top of an existing `users`
 
@@ -161,9 +161,9 @@ Reference templates: `templates/auth/admin/{auth.ts, password.ts}` (for the snip
 ### Case C - Enable password reset on an existing `users` (email already OK)
 
 1. **Append `password_reset_tokens`** to schema.ts from `templates/auth/users/schema-additions-reset-tokens.ts`.
-2. **`pnpm db:push`**.
+2. **`pnpm db:generate`** (writes the SQL migration, no DB connection; the next `/deploy` applies it).
 3. **Replace `src/server/api/routers/auth.ts`** with the `auth-router-with-reset.ts` template (sends via Scaleway Transactional Email).
 4. **Create `/forgot-password/page.tsx` and `/reset-password/page.tsx`** from the templates.
 5. **Patch signin.tsx**: replace `<span></span>` (placeholder for `FORGOT_PASSWORD_LINK`) with the `<Link href="/forgot-password" ...>Forgot password?</Link>`.
 6. **Update CLAUDE.md** - add the reset mention.
-7. **`pnpm tsc --noEmit`** + summary.
+7. **`pnpm tsc --noEmit`** + summary. Remind the user that a `/deploy` is needed before the password-reset table exists and the flow works.

@@ -1,5 +1,43 @@
 # Changelog
 
+## v1.2.1 (2026-08-12)
+
+Fixes the four defects that broke every fresh project on its first
+auth-enabled deploy, found by a live run on 1.2.0.
+
+### Fixed
+
+- **`trustHost: true` in every generated `auth.ts`** (`templates/auth/users`,
+  `templates/auth/admin`, `templates/2fa`). None of Auth.js's trustHost
+  heuristics holds on a Scaleway Serverless Container, so every production
+  auth request failed with `UntrustedHost`.
+- **`AUTH_URL` now reaches the container.** `buildContainerSecretMap`
+  derives it from the container's effective `APP_URL` on every secret sync.
+  Without it, Auth.js built redirects from the request origin the container
+  sees: `https://0.0.0.0:8080`. An explicit `AUTH_URL` secret or override
+  wins over the derivation.
+- **The addon schemas converge on plain `pgTable`.** Bootstrap resets
+  `schema.ts` to the no-prefix convention, but the auth, role and 2FA
+  preflights and templates still required T3's `createTable`/`pgTableCreator`,
+  so `/add-auth users`, `/add-role` and `/add-2fa` aborted on every
+  bootstrapped project. Templates, preflights and patch regexes now use
+  `pgTable`.
+- **The setup scripts no longer open a database connection.** `/add-auth`,
+  `/add-role` and `/add-2fa` ran `drizzle-kit push --force` from the operator
+  machine, and `/add-role` ran a live `UPDATE` through a temporary tsx
+  script, against the contract in `skills/add-db`. All three now run
+  `drizzle-kit generate` only; the migration Job applies the SQL on the next
+  `/deploy`, and the role backfill ships as an `UPDATE` inside the generated
+  migration file.
+
+### Added
+
+- **Checks 63-66 in `tools/verify.mjs`** pin the four fixes: `trustHost`
+  present in the auth templates, `AUTH_URL` derived at the chokepoint, no
+  `createTable`/`pgTableCreator` in templates, scripts or skill docs, and no
+  `drizzle-kit push`/`db:push` instruction without a negation nearby. Each
+  check failed on the pre-fix tree before the fixes landed.
+
 ## v1.2.0 (2026-08-10)
 
 Splits the operator's Scaleway key into two explicit shapes instead of one
