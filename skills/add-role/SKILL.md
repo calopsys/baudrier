@@ -163,8 +163,13 @@ The script prints its own `▸ <step>` as it goes ; relay it in natural language
 At the end, the script prints a JSON (last line of stdout). Parse it to confirm success :
 
 ```json
-{"success":true,"roles":["membre","editeur","moderateur"],"defaultRole":"membre","backfillRole":"membre","adminPage":true}
+{"success":true,"roles":["membre","editeur","moderateur"],"defaultRole":"membre","backfillRole":"membre","adminPage":true,"tscOk":true,"warnings":[]}
 ```
+
+`tscOk` reports the `pnpm tsc --noEmit` result. `success:true` with `tscOk:false` means the work
+is NOT done : read the tsc output printed above the JSON, then fix the errors, or, if they are
+pre-existing and unrelated to `/add-role`, say so plainly to the user. Do not summarise success
+before this check. Relay any relevant entries from `warnings` to the user in plain language.
 
 ### If the script fails
 

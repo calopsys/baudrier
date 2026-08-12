@@ -141,8 +141,13 @@ function base32Encode(buf) {
 }
 // Same scrypt cost + format as templates/auth/admin/password.ts's
 // hashPassword (verifyPassword there is what checks these hashes, via
-// templates/2fa/auth-backup-codes.ts) - keep both in lockstep.
-const BACKUP_CODE_SCRYPT_PARAMS = { N: 131072, r: 8, p: 1, maxmem: 256 * 1024 * 1024 };
+// templates/2fa/auth-backup-codes.ts) - keep all four mint sites in
+// lockstep. N=32768 is two times Node's default; the working set is
+// `128 * N * r` bytes = 32 MiB per hash. The container is the ceiling:
+// preset S gives 512 MB for 8 concurrent requests, and any credentials
+// request can force one hash. CONTRACT.md records the coupling; verify
+// check 71 enforces it.
+const BACKUP_CODE_SCRYPT_PARAMS = { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
 function hashCode(code) {
   const salt = randomBytes(16).toString("hex");
   const hash = scryptSync(code, salt, 64, BACKUP_CODE_SCRYPT_PARAMS).toString("hex");
@@ -196,14 +201,14 @@ async function patchSchema() {
   schema = ensureImport(schema, "drizzle-orm/pg-core", ["pgTable", "text", "integer", "primaryKey", "index", "timestamp"]);
   schema = ensureImport(schema, "drizzle-orm", ["sql"]);
 
-  if (/export const trustedDevices\s*=\s*pgTable\("trusted_device"/.test(schema)) {
+  if (/^export const trustedDevices\s*=\s*pgTable\("trusted_device"/m.test(schema)) {
     warn("`trustedDevices` already declared in schema.ts - skipping 2FA schema patch.");
   } else {
     const twoFaTables = render("2fa/schema-additions.ts", {});
     schema = schema.trimEnd() + "\n\n" + twoFaTables;
   }
 
-  if (/export const loginAttempts\s*=\s*pgTable\("login_attempt"/.test(schema)) {
+  if (/^export const loginAttempts\s*=\s*pgTable\("login_attempt"/m.test(schema)) {
     warn("`loginAttempts` already declared in schema.ts - skipping rate-limit schema patch.");
   } else {
     const rateLimitTable = render("auth/schema-additions-login-attempts.ts", {});
@@ -221,7 +226,10 @@ async function patchSchema() {
  * setup-auth-users.mjs's helper of the same name.)
  */
 function ensureImport(content, module, names) {
-  const reExisting = new RegExp(`import\\s+\\{([^}]*)\\}\\s+from\\s+["']${escapeRe(module)}["'];?`);
+  // Anchored to a line start (^, flag "m"): the bootstrapped schema.ts quotes
+  // this same import shape inside a // comment, and an unanchored match
+  // would merge names into that commented-out example instead of a real import.
+  const reExisting = new RegExp(`^import\\s+\\{([^}]*)\\}\\s+from\\s+["']${escapeRe(module)}["'];?`, "m");
   const match = content.match(reExisting);
   if (match) {
     const existing = match[1].split(",").map((s) => s.trim()).filter(Boolean);

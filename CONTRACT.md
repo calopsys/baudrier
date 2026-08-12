@@ -1137,6 +1137,22 @@ per-branch environment built on top of this harness, may write this secret.
 Changing who can reach production is a `/publish`-level decision, never a
 side effect of deploying something else. Check 30 enforces the write scope.
 
+**scrypt cost is bounded by the container, not by the crypto.** scrypt's
+working set is `128 * N * r` bytes per in-flight hash, and an
+unauthenticated request can force one (signup, signin, and the deliberate
+timing-equalization hashes on the reset router's failure paths). Preset S
+(512 MB, `maxConcurrency` 8) therefore bounds N:
+`maxConcurrency × 128·N·r` must leave room for Next.js inside
+`memoryLimit`. A breach OOM-kills the container with **no application
+log** - a SIGKILLed process writes nothing, so the symptom is an empty
+server log and a browser-side network error. The four mint sites
+(`templates/auth/users/password.ts`, `templates/auth/admin/password.ts`,
+`scripts/hash-password.mjs`, `scripts/setup-2fa.mjs`) stay in lockstep at
+N=32768; check 71 enforces the lockstep and the budget. Cost params travel
+inside the hash string, so lowering N never breaks a stored hash - and for
+the same reason `verifyPassword`'s `maxmem` stays at 256 MB: hashes minted
+under the old N=131072 still need 128 MiB to verify.
+
 ---
 
 ## 7. Skill authoring conventions

@@ -32,7 +32,7 @@
 //   - Live logs: ▸ <step>, ✅ <result>, ⚠️ <warning>
 //   - Handoff banner at the end
 //   - Last line on success: JSON Claude can parse:
-//       {"success":true,"roles":[...],"defaultRole":"member","adminPage":true}
+//       {"success":true,"roles":[...],"defaultRole":"member","adminPage":true,"tscOk":true,"warnings":[]}
 
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
@@ -59,7 +59,7 @@ const STEPS = [
 const completed = [];
 const warnings = [];
 let current = null;
-const state = { migrationFiles: [] };
+const state = { migrationFiles: [], tscOk: null };
 
 // ─── args ─────────────────────────────────────────────────────────────
 const args = process.argv.slice(2);
@@ -164,8 +164,12 @@ function capture(cmd, cwd) { return run(cmd, cwd, { capture: true, allowFail: tr
 function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 
 function ensureImport(content, module, names, typeOnly = false) {
+  // The bootstrapped schema.ts quotes an example import inside a // comment;
+  // without the line anchor this merges names into that comment instead of
+  // adding a real import.
   const reExisting = new RegExp(
-    `import\\s+${typeOnly ? "type\\s+" : ""}\\{([^}]*)\\}\\s+from\\s+["']${escapeRe(module)}["'];?`,
+    `^import\\s+${typeOnly ? "type\\s+" : ""}\\{([^}]*)\\}\\s+from\\s+["']${escapeRe(module)}["'];?`,
+    "m",
   );
   const match = content.match(reExisting);
   if (match) {
@@ -226,11 +230,21 @@ async function preflight() {
     );
   }
 
+  // The admin-users router statically imports isAdmin, which only the admin auth
+  // mode writes. The skill orchestrates this, but the script must defend itself too.
+  if (CREATE_ADMIN_PAGE && !modes.includes("admin")) {
+    fail(
+      `createAdminPage is enabled but auth.ts is in mode "${modes.join(",")}" without "admin". ` +
+        "The admin page needs the admin login from /add-auth (admin mode). " +
+        'Run /add-auth (admin mode) first, or pass "createAdminPage": false.',
+    );
+  }
+
   // Schema must exist with users table
   const schemaPath = join(WEB_DIR, "src/server/db/schema.ts");
   if (!existsSync(schemaPath)) fail("src/server/db/schema.ts not found.");
   const schema = readFileSync(schemaPath, "utf8");
-  if (!/export const users\s*=\s*pgTable\("user"/.test(schema)) {
+  if (!/^export const users\s*=\s*pgTable\("user"/m.test(schema)) {
     fail("Could not find `users` table in schema.ts. /add-role requires the table created by /add-auth users.");
   }
 
@@ -257,10 +271,10 @@ async function patchSchema() {
   schema = ensureImport(schema, "drizzle-orm", ["sql"]);
 
   // 1. Inject pgEnum declaration (idempotent)
-  if (!/export const userRoleEnum\s*=\s*pgEnum\(/.test(schema)) {
+  if (!/^export const userRoleEnum\s*=\s*pgEnum\(/m.test(schema)) {
     const enumDecl = `\nexport const userRoleEnum = pgEnum("user_role", [${ROLES.map((r) => `"${r}"`).join(", ")}] as const);\n`;
     // Insert just before the users table declaration
-    const usersDecl = schema.match(/export const users\s*=\s*pgTable\("user"/);
+    const usersDecl = schema.match(/^export const users\s*=\s*pgTable\("user"/m);
     if (usersDecl) {
       schema = schema.slice(0, usersDecl.index) + enumDecl + schema.slice(usersDecl.index);
     } else {
@@ -274,10 +288,10 @@ async function patchSchema() {
   // We can't use a single regex because the pgTable body contains nested
   // object literals (e.g. `timestamp("x", { mode: "date" })`, `references(() => x, { onDelete })`).
   // Walk the braces manually to find the outer matching `}`.
-  if (/roles:\s*userRoleEnum\(/.test(schema)) {
+  if (/^[ \t]*roles:\s*userRoleEnum\(/m.test(schema)) {
     warn("`roles` column already on users table : leaving as-is.");
   } else {
-    const headerRe = /export const users\s*=\s*pgTable\("user",\s*\{/;
+    const headerRe = /^export const users\s*=\s*pgTable\("user",\s*\{/m;
     const headerMatch = schema.match(headerRe);
     if (!headerMatch) {
       fail("Could not locate `export const users = pgTable(\"user\", {` in schema.ts.");
@@ -387,6 +401,21 @@ async function writeRolesTs() {
 
 function capitalize(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 
+// Walks forward from an opening `{` at openIdx and returns the index of its
+// balancing `}`, or -1 if the braces never balance. Same technique as the
+// users pgTable body walk in patchSchema.
+function matchingBrace(src, openIdx) {
+  let depth = 1;
+  let i = openIdx + 1;
+  while (i < src.length && depth > 0) {
+    const c = src[i];
+    if (c === "{") depth++;
+    else if (c === "}") depth--;
+    i++;
+  }
+  return depth === 0 ? i - 1 : -1;
+}
+
 // ─── Step 6: patch auth.ts (expose roles in JWT + session) ────────────
 async function patchAuthTs() {
   log("Patching src/server/auth.ts (expose roles in JWT + session)");
@@ -397,6 +426,7 @@ async function patchAuthTs() {
   if (/roles:\s*string\[\]/.test(auth)) {
     warn("auth.ts already exposes roles in the Session type : skipping module augmentation patch.");
   } else {
+    const before = auth;
     auth = auth.replace(
       /interface Session extends DefaultSession\s*\{\s*user:\s*\{([^}]*)\}/,
       (match, userBody) => {
@@ -405,11 +435,18 @@ async function patchAuthTs() {
         return `interface Session extends DefaultSession {\n    user: {${trimmed}${sep}roles: string[];\n    }`;
       },
     );
+    if (auth === before) {
+      fail(
+        "Could not patch the Session module augmentation in auth.ts: its `user: { ... }` block " +
+          "does not match the shape /add-auth users generates. Patch by hand and re-run.",
+      );
+    }
   }
 
   // 2. Include roles in the authorize() return (find the users-mode path)
   // The users-mode authorize returns an object with id/email/name/image : we add roles.
   if (/return\s*\{\s*id:\s*user\.id,/.test(auth) && !/roles:\s*user\.roles/.test(auth)) {
+    const before = auth;
     auth = auth.replace(
       /return\s*\{\s*id:\s*user\.id,([\s\S]*?)\};/,
       (match, body) => {
@@ -418,28 +455,67 @@ async function patchAuthTs() {
         return `return {\n          id: user.id,${trimmedBody}\n          roles: user.roles ?? [],\n        };`;
       },
     );
+    if (auth === before) {
+      warn(
+        "Could not patch the authorize() return in auth.ts to include roles. The jwt callback's " +
+          "`(user as { roles?: string[] }).roles ?? []` fallback keeps things working, but user.roles is never populated.",
+      );
+    }
   }
 
-  // 3. jwt callback: persist roles
+  // 3. jwt callback: persist roles.
+  // auth.ts is generated by this harness from templates/auth/users/auth.ts, whose
+  // jwt callback carries an if (user) { ... return token; } early-return block; a
+  // lazy [\s\S]*? body ending at "return token;" used to bite that early return
+  // and mis-nest the insertion.
   if (!/token\.roles\s*=/.test(auth)) {
-    auth = auth.replace(
-      /jwt\(\{\s*token,\s*user\s*\}\)\s*\{([\s\S]*?)return token;\s*\}/,
-      (match, body) => {
-        if (/token\.roles\s*=/.test(body)) return match;
-        return `jwt({ token, user }) {${body.trimEnd()}\n      if (user) token.roles = (user as { roles?: string[] }).roles ?? [];\n      return token;\n    }`;
-      },
-    );
+    const jwtHeaderRe = /(?:async\s+)?jwt\(\{\s*token,\s*user\s*\}\)\s*\{/;
+    const jwtHeaderMatch = auth.match(jwtHeaderRe);
+    if (!jwtHeaderMatch) {
+      fail(
+        "Could not find the jwt({ token, user }) callback in auth.ts. auth.ts does not match the " +
+          "shape /add-auth users generates. Patch by hand (see templates/auth/users/auth.ts) and re-run.",
+      );
+    }
+    const bodyOpen = jwtHeaderMatch.index + jwtHeaderMatch[0].length - 1;
+    const bodyClose = matchingBrace(auth, bodyOpen);
+    if (bodyClose === -1) {
+      fail("Unbalanced braces in the jwt callback in auth.ts. Patch by hand and re-run.");
+    }
+    const body = auth.slice(bodyOpen, bodyClose);
+    const ifUserMatch = body.match(/if\s*\(user\)\s*\{[ \t]*\r?\n([ \t]*)/);
+    if (!ifUserMatch) {
+      fail(
+        "Could not find an `if (user) {` block inside the jwt callback in auth.ts. Patch by hand " +
+          "(see templates/auth/users/auth.ts) and re-run.",
+      );
+    }
+    const indent = ifUserMatch[1];
+    // Splice right before the captured indent, not after the whole match, so the
+    // sibling line below keeps its own indent instead of getting a second copy of it.
+    const insertAt = bodyOpen + ifUserMatch.index + ifUserMatch[0].length - indent.length;
+    auth =
+      auth.slice(0, insertAt) +
+      `${indent}token.roles = (user as { roles?: string[] }).roles ?? [];\n` +
+      auth.slice(insertAt);
   }
 
   // 4. session callback: expose roles to session.user
   if (!/session\.user\.roles\s*=/.test(auth)) {
-    auth = auth.replace(
-      /session\(\{\s*session,\s*token\s*\}\)\s*\{([\s\S]*?)return session;\s*\}/,
-      (match, body) => {
-        if (/session\.user\.roles\s*=/.test(body)) return match;
-        return `session({ session, token }) {${body.trimEnd()}\n      if (session.user) session.user.roles = (token.roles as string[]) ?? [];\n      return session;\n    }`;
-      },
-    );
+    const sessionRe = /(?:async\s+)?session\(\{\s*session,\s*token\s*\}\)\s*\{[ \t]*\r?\n([ \t]*)/;
+    const sessionMatch = auth.match(sessionRe);
+    if (!sessionMatch) {
+      fail(
+        "Could not find the session({ session, token }) callback in auth.ts. auth.ts does not match " +
+          "the shape /add-auth users generates. Patch by hand (see templates/auth/users/auth.ts) and re-run.",
+      );
+    }
+    const indent = sessionMatch[1];
+    const insertAt = sessionMatch.index + sessionMatch[0].length - indent.length;
+    auth =
+      auth.slice(0, insertAt) +
+      `${indent}if (session.user) session.user.roles = (token.roles as string[]) ?? [];\n` +
+      auth.slice(insertAt);
   }
 
   writeFileSync(authPath, auth);
@@ -574,7 +650,8 @@ async function patchAdminSidebar() {
 async function tscCheck() {
   log("Running pnpm tsc --noEmit (sanity check)");
   const res = capture("pnpm tsc --noEmit", WEB_DIR);
-  if (res.status !== 0) {
+  state.tscOk = res.status === 0;
+  if (!state.tscOk) {
     if (res.stdout) console.log(res.stdout);
     if (res.stderr) console.log(res.stderr);
     warn(
@@ -626,5 +703,7 @@ console.log(
     backfillRole: BACKFILL_ROLE,
     adminPage: CREATE_ADMIN_PAGE,
     migrationFiles: state.migrationFiles,
+    tscOk: state.tscOk,
+    warnings,
   }),
 );

@@ -15,13 +15,15 @@ function scryptAsync(password: string, salt: string, keylen: number, options: Sc
   });
 }
 
-// Deliberately stronger than Node's scrypt defaults (N=16384): scrypt's cost
-// factor is what makes an offline crack of a leaked hash expensive, and the
-// default is tuned for a much older threat model. maxmem must rise with N -
-// scrypt needs roughly `128 * N * r` bytes of working memory, and Node's
-// default maxmem (32 MB) is too small for N=131072, so scrypt() would throw
-// "memory limit exceeded" without the override.
-const SCRYPT_PARAMS = { N: 131072, r: 8, p: 1, maxmem: 256 * 1024 * 1024 };
+// N=32768 is two times Node's default (16384): still stronger than
+// default, but now bounded by the container, not by the crypto. The
+// working set is `128 * N * r` bytes per in-flight hash - 32 MiB here.
+// Preset S gives 512 MB and allows 8 concurrent requests, and any
+// credentials request can force one hash - so maxConcurrency * workingSet
+// must leave room for Next.js beside it. CONTRACT.md records the coupling;
+// verify check 71 enforces the lockstep across the four mint sites and
+// the budget.
+const SCRYPT_PARAMS = { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
 const KEY_LEN = 64;
 
 function paramsTag(): string {
@@ -71,6 +73,9 @@ export async function verifyPassword(password: string, storedHash: string): Prom
     if (!parsed) return false;
     salt = parts[2];
     hash = parts[3];
+    // 256 MB, not the current file's 64 MB: a hash minted before this file's
+    // last SCRYPT_PARAMS change may carry an older, larger N in its tag (up
+    // to N=131072, which needs 128 MiB) - lowering this value would brick it.
     params = { ...parsed, maxmem: 256 * 1024 * 1024 };
   } else if (parts.length === 2) {
     [salt, hash] = parts;

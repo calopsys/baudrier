@@ -24,6 +24,7 @@
 
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
@@ -3615,6 +3616,257 @@ define("66", "Operator never opens a DB connection from a setup flow", () => {
         });
       }
     }
+  }
+
+  return fails;
+});
+
+define("67", "setup-security: the NextConfig JSDoc stays glued to its const", () => {
+  const fails = [];
+  const file = "scripts/setup-security.mjs";
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "baudrier-verify-67-"));
+  try {
+    // A real T3 next.config.js: a top-of-file JSDoc, an env import, then the
+    // `@type` JSDoc glued to `const config = {}`. This is the exact shape
+    // setup-security.mjs patches on every fresh bootstrap.
+    const fixture = [
+      "/**",
+      " * Run `build` or `dev` with `SKIP_ENV_VALIDATION` to skip env validation.",
+      " */",
+      'import "./src/env.js";',
+      "",
+      '/** @type {import("next").NextConfig} */',
+      "const config = {};",
+      "",
+      "export default config;",
+      "",
+    ].join("\n");
+    const configPath = path.join(tmp, "next.config.js");
+    fs.writeFileSync(configPath, fixture);
+
+    execFileSync(process.execPath, [path.join(ROOT, file)], { cwd: tmp, stdio: "pipe" });
+
+    const patched = fs.readFileSync(configPath, "utf8");
+    if (!/\/\*\*\s*@type\s*\{import\("next"\)\.NextConfig\}\s*\*\/\r?\n\s*const\s+\w+\s*=\s*\{/.test(patched)) {
+      fails.push({
+        file,
+        detail: "patched next.config.js separates the @type JSDoc from its const - the JSDoc then types the injected CSP string and pnpm build fails with TS2559 inside the Docker build",
+      });
+    }
+    if (patched.includes("},};")) {
+      fails.push({
+        file,
+        detail: 'patched next.config.js is missing a newline before the original closer - "},};" lands on one line',
+      });
+    }
+  } catch (e) {
+    fails.push({ file, detail: e.message });
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  return fails;
+});
+
+define("68", "Setup scripts: schema-matching regexes are line-anchored", () => {
+  const fails = [];
+  const files = ["scripts/setup-auth-users.mjs", "scripts/setup-role.mjs", "scripts/setup-2fa.mjs"];
+
+  // (a) a regex literal whose body targets a schema.ts shape must anchor with
+  // ^ and carry the "m" flag - otherwise it also matches the same shape
+  // quoted inside a // comment (setup-db.mjs's schema.ts starter is one big
+  // comment for exactly this reason).
+  const REGEX_LITERAL_RE = /\/((?:\\.|\[(?:\\.|[^\]\n])*\]|[^/\\\n])+)\/([a-z]*)/g;
+  const SCHEMA_SHAPE_RE = /export const|pgTable\\?\(|pgEnum\\?\(|userRoleEnum\\?\(/;
+
+  // (b) a `new RegExp(...)` built from a template that looks for an existing
+  // import must anchor the same way - otherwise ensureImport merges names
+  // into a commented-out import instead of adding a real one.
+  const NEW_REGEXP_RE = /new\s+RegExp\(\s*`([^`]*)`\s*(?:,\s*([^)]*))?\)/g;
+  const IMPORT_MARKER = "import\\\\s+"; // two literal backslashes: the raw source text of `\\s+` inside a template literal
+
+  for (const f of files) {
+    const code = stripComments(read(f));
+
+    for (const m of code.matchAll(REGEX_LITERAL_RE)) {
+      const [, body, flags] = m;
+      if (!SCHEMA_SHAPE_RE.test(body)) continue;
+      if (!(body.startsWith("^") && flags.includes("m"))) {
+        fails.push({
+          file: f,
+          detail: `regex literal /${body}/${flags} matches a schema.ts shape but is not anchored with ^ and the "m" flag - it also matches the same shape quoted inside a comment`,
+        });
+      }
+    }
+
+    for (const m of code.matchAll(NEW_REGEXP_RE)) {
+      const template = m[1];
+      if (!template.includes(IMPORT_MARKER)) continue;
+      const flagsArg = (m[2] ?? "").trim();
+      if (!(template.startsWith("^") && flagsArg.includes("m"))) {
+        fails.push({
+          file: f,
+          detail: "ensureImport's existing-import RegExp is not anchored with ^ and no \"m\" flags argument is passed - it merges names into a commented-out import instead of adding a real one",
+        });
+      }
+    }
+  }
+
+  return fails;
+});
+
+define("69", "setup-role: auth.ts patches anchor on the sign-in block", () => {
+  const fails = [];
+  const file = "scripts/setup-role.mjs";
+  const code = stripComments(read(file));
+
+  // A lazy [\s\S]*? body ending at "return token;" bites the early return
+  // inside the generated jwt callback's own if (user) block, mis-nesting the
+  // insertion. Same class of defect for the session callback.
+  if (code.includes("return token;\\s*\\}")) {
+    fails.push({
+      file,
+      detail: 'the jwt-callback patch regex ends at "return token;\\s*\\}" - a lazy body also matches the early return inside the generated callback\'s if (user) block and mis-nests the insertion',
+    });
+  }
+  if (code.includes("return session;\\s*\\}")) {
+    fails.push({
+      file,
+      detail: 'the session-callback patch regex ends at "return session;\\s*\\}" - the same lazy-match defect as the jwt-callback patch',
+    });
+  }
+  if (!code.includes("token.roles")) {
+    fails.push({
+      file,
+      detail: "no reference to token.roles survives - deleting the patch is not a fix for the mis-nesting defect",
+    });
+  }
+  if (!code.includes("if\\s*\\(user\\)")) {
+    fails.push({
+      file,
+      detail: "no if (user) anchor (as regex-source text) guards the jwt-callback patch - the match must land after the early return, not swallow it with a lazy body",
+    });
+  }
+
+  return fails;
+});
+
+define("70", "setup-role: admin page requires admin mode; JSON carries the tsc result", () => {
+  const fails = [];
+  const file = "scripts/setup-role.mjs";
+  const code = stripComments(read(file));
+
+  // templates/role/admin-router.ts statically imports isAdmin from
+  // ~/server/auth, which only the admin auth mode writes - CREATE_ADMIN_PAGE
+  // must never fire without checking the detected auth modes include "admin".
+  const COUPLING_WINDOW = 200;
+  let coupled = false;
+  for (const m of code.matchAll(/CREATE_ADMIN_PAGE/g)) {
+    const start = Math.max(0, m.index - COUPLING_WINDOW);
+    const end = Math.min(code.length, m.index + COUPLING_WINDOW);
+    if (/modes\.includes\(\s*["']admin["']\s*\)/.test(code.slice(start, end))) {
+      coupled = true;
+      break;
+    }
+  }
+  if (!coupled) {
+    fails.push({
+      file,
+      detail: 'CREATE_ADMIN_PAGE is never coupled with modes.includes("admin") - templates/role/admin-router.ts statically imports isAdmin from ~/server/auth, which only the admin auth mode writes',
+    });
+  }
+
+  const jsonBlock = code.match(/JSON\.stringify\(\{[\s\S]*?\}\)/);
+  if (!jsonBlock || !jsonBlock[0].includes("tscOk")) {
+    fails.push({
+      file,
+      detail: "the final JSON.stringify({...}) result carries no tscOk field - success:true with a failed type check is a lie the calling skill cannot detect",
+    });
+  }
+
+  const skillFile = "skills/add-role/SKILL.md";
+  if (!read(skillFile).includes("tscOk")) {
+    fails.push({
+      file: skillFile,
+      detail: "no mention of tscOk - the skill has no instruction to treat tscOk:false as work-not-done",
+    });
+  }
+
+  return fails;
+});
+
+define("71", "scrypt: one cost everywhere, and it fits preset S", () => {
+  const fails = [];
+
+  // Raw read, not stripComments - the params are code, not prose.
+  const SITES = [
+    "templates/auth/users/password.ts",
+    "templates/auth/admin/password.ts",
+    "scripts/hash-password.mjs",
+    "scripts/setup-2fa.mjs",
+  ];
+  const PARAMS_RE = /(?:SCRYPT_PARAMS|BACKUP_CODE_SCRYPT_PARAMS)\s*=\s*\{\s*N:\s*(\d+),\s*r:\s*(\d+),\s*p:\s*(\d+),\s*maxmem:\s*(\d+)\s*\*\s*1024\s*\*\s*1024/;
+
+  const parsed = [];
+  for (const f of SITES) {
+    const m = read(f).match(PARAMS_RE);
+    if (!m) {
+      fails.push({ file: f, detail: "could not find a SCRYPT_PARAMS / BACKUP_CODE_SCRYPT_PARAMS literal with N/r/p/maxmem in the expected shape" });
+      continue;
+    }
+    parsed.push({ file: f, N: +m[1], r: +m[2], p: +m[3], maxmemMiB: +m[4] });
+  }
+
+  if (parsed.length) {
+    const [first, ...rest] = parsed;
+    for (const p of rest) {
+      if (p.N !== first.N || p.r !== first.r || p.p !== first.p) {
+        fails.push({
+          file: p.file,
+          detail: `scrypt cost {N:${p.N},r:${p.r},p:${p.p}} does not match ${first.file}'s {N:${first.N},r:${first.r},p:${first.p}} - a mismatched cost means a hash minted at one site cannot be verified against the params assumed at another`,
+        });
+      }
+    }
+  }
+
+  for (const p of parsed) {
+    const workingSetBytes = 128 * p.N * p.r;
+    const maxmemBytes = p.maxmemMiB * 1024 * 1024;
+    if (workingSetBytes > maxmemBytes) {
+      fails.push({
+        file: p.file,
+        detail: `128*N*r = ${Math.round(workingSetBytes / 1024 / 1024)} MiB exceeds maxmem (${p.maxmemMiB} MiB) - scrypt throws "memory limit exceeded"`,
+      });
+    }
+  }
+
+  const containerFile = "scripts/scaleway/container.mjs";
+  const presetMatch = read(containerFile).match(
+    /S:\s*Object\.freeze\(\{\s*cpuLimit:\s*\d+,\s*memoryLimit:\s*(\d+),\s*maxConcurrency:\s*(\d+)\s*\}\)/,
+  );
+  if (!presetMatch) {
+    fails.push({ file: containerFile, detail: "could not find SCALE_PRESETS.S in the expected { cpuLimit, memoryLimit, maxConcurrency } shape" });
+  } else {
+    const memoryLimitMiB = +presetMatch[1];
+    const maxConcurrency = +presetMatch[2];
+    for (const p of parsed) {
+      const workingSetBytes = 128 * p.N * p.r;
+      const budgetBytes = maxConcurrency * workingSetBytes;
+      const limitBytes = memoryLimitMiB * 1024 * 1024;
+      if (budgetBytes > limitBytes) {
+        fails.push({
+          file: p.file,
+          detail: `preset S allows ${maxConcurrency} concurrent requests × 128*N*r (${Math.round(workingSetBytes / 1024 / 1024)} MiB) = ${Math.round(budgetBytes / 1024 / 1024)} MiB, over the ${memoryLimitMiB} MiB container limit - an unauthenticated attacker can force this allocation by sending concurrent signin/backup-code attempts`,
+        });
+      }
+    }
+  }
+
+  const contractFile = "CONTRACT.md";
+  if (!/128\s*\*\s*N\s*\*\s*r/.test(read(contractFile))) {
+    fails.push({
+      file: contractFile,
+      detail: "no mention of the 128*N*r scrypt working-set formula - the scrypt/preset-S coupling is documented nowhere",
+    });
   }
 
   return fails;

@@ -30,7 +30,7 @@
 // Security:
 //   - Never persists the plain password or the hash to disk.
 //   - Never echoes the password - the caller pipes it in via stdin.
-//   - scrypt parameters: 16-byte salt, keylen=64 bytes, N=131072/r=8/p=1
+//   - scrypt parameters: 16-byte salt, keylen=64 bytes, N=32768/r=8/p=1
 //     (stronger than Node's defaults - see SCRYPT_PARAMS below). Output
 //     format MUST stay byte-for-byte compatible with
 //     templates/auth/users/password.ts and templates/auth/admin/password.ts -
@@ -38,10 +38,16 @@
 
 import { scryptSync, randomBytes } from "node:crypto";
 
-// maxmem must rise with N: scrypt needs roughly `128 * N * r` bytes of
-// working memory, and Node's default maxmem (32 MB) is too small for
-// N=131072 - scryptSync() throws "memory limit exceeded" without this.
-const SCRYPT_PARAMS = { N: 131072, r: 8, p: 1, maxmem: 256 * 1024 * 1024 };
+// N=32768 is two times Node's default (16384): still stronger than
+// default, but bounded by the container, not by the crypto. The working
+// set is `128 * N * r` bytes per in-flight hash - 32 MiB here. Preset S
+// gives 512 MB for 8 concurrent requests, and any credentials request can
+// force one hash, so maxConcurrency * workingSet must leave room for
+// Next.js beside it. This script mints ADMIN_PASSWORD_HASH_* hashes that
+// the container verifies, so it MUST stay in lockstep with
+// templates/auth/users/password.ts and templates/auth/admin/password.ts
+// (CONTRACT.md records the coupling; verify check 71 enforces it).
+const SCRYPT_PARAMS = { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
 
 const args = process.argv.slice(2);
 let generate = false;

@@ -282,7 +282,7 @@ async function patchSchema() {
   );
 
   // 2. Idempotency: skip if `users` table already declared
-  if (/export const users\s*=\s*pgTable\("user"/.test(schema)) {
+  if (/^export const users\s*=\s*pgTable\("user"/m.test(schema)) {
     warn("`users` table already declared in schema.ts - skipping NextAuth table patch.");
   } else {
     // 3. Append NextAuth tables (template body, no imports)
@@ -300,7 +300,7 @@ async function patchSchema() {
   // DB-backed src/lib/rate-limit.ts). Checked independently of the `users`
   // idempotency above - a re-run that already has `users` may still be
   // missing this table (e.g. it was added by a harness version predating M2).
-  if (/export const loginAttempts\s*=\s*pgTable\("login_attempt"/.test(schema)) {
+  if (/^export const loginAttempts\s*=\s*pgTable\("login_attempt"/m.test(schema)) {
     warn("`loginAttempts` already declared in schema.ts - skipping rate-limit table patch.");
   } else {
     const rateLimitTable = render("auth/schema-additions-login-attempts.ts", {});
@@ -321,8 +321,12 @@ async function patchSchema() {
  * a new import statement after the last existing import.
  */
 function ensureImport(content, module, names, typeOnly = false) {
+  // The bootstrapped schema.ts quotes an example import inside a // comment;
+  // without the line anchor this merges names into that comment instead of
+  // adding a real import.
   const reExisting = new RegExp(
-    `import\\s+${typeOnly ? "type\\s+" : ""}\\{([^}]*)\\}\\s+from\\s+["']${escapeRe(module)}["'];?`,
+    `^import\\s+${typeOnly ? "type\\s+" : ""}\\{([^}]*)\\}\\s+from\\s+["']${escapeRe(module)}["'];?`,
+    "m",
   );
   const match = content.match(reExisting);
   if (match) {

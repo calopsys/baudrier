@@ -1,5 +1,47 @@
 # Changelog
 
+## v1.2.2 (2026-08-12)
+
+Fixes five correctness bugs in generated code, found by the same live run
+that produced the v1.2.1 fixes.
+
+### Fixed
+
+- **`setup-security.mjs` inserts the CSP block above the NextConfig JSDoc,
+  not between the JSDoc and its const.** The old insertion made the JSDoc
+  type the CSP string, and `pnpm build` failed with TS2559 inside the Docker
+  build during `/deploy`. The empty T3 config also no longer produces `},};`.
+- **`ensureImport` and the schema-shape regexes are line-anchored.** The
+  bootstrapped `schema.ts` quotes an example import and an example table
+  inside a `//` comment; the unanchored regexes merged import names into the
+  comment instead of adding a real import, so every generated table symbol
+  was undefined (TS2304). All three setup scripts are fixed.
+- **`setup-role.mjs` patches `auth.ts` with explicit anchors.** The old lazy
+  regex ended at the first `return token;`, which sits inside the jwt
+  callback's `if (user)` early-return block, and mis-nested the insertion.
+  The patch now walks to the callback, anchors on `if (user) {`, and fails
+  loudly when the shape does not match. The Session-augmentation patch also
+  fails loudly instead of silently doing nothing.
+- **`/add-role` defends its own prerequisites and reports honestly.** The
+  preflight fails when the admin page is requested without admin-mode auth
+  (the generated router imports `isAdmin`, which only admin mode exports).
+  The final JSON now carries `tscOk` and `warnings`; the skill treats
+  `tscOk: false` as work-not-done instead of a green result.
+- **scrypt cost fits the container.** N drops from 131072 to 32768 (still
+  two times Node's default) at all four mint sites, in lockstep. The old
+  working set was 128 MiB per hash; preset S allows 8 concurrent requests in
+  512 MB, so an unauthenticated attacker could OOM-kill the container with
+  no application log. Old hashes keep verifying: the cost travels inside the
+  hash string, and `verifyPassword`'s `maxmem` stays at 256 MB.
+
+### Added
+
+- **Checks 67-71 in `tools/verify.mjs`** pin the five fixes, including a
+  behavioral check that runs `setup-security.mjs` against a T3 fixture in a
+  temporary directory, and a parsed budget check
+  (`maxConcurrency x 128*N*r <= memoryLimit`). Each check failed on the
+  pre-fix tree.
+
 ## v1.2.1 (2026-08-12)
 
 Fixes the four defects that broke every fresh project on its first

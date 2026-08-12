@@ -16,7 +16,7 @@ compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; 
 
 Installs NextAuth in **users mode**: real accounts in the DB, signup/signin/account with delete, shadcn UI pages. If email is configured, it also adds forgot-password and reset-password.
 
-The deterministic code (install deps, patch schema + Drizzle push, generation of `auth.ts` / `password.ts` / tRPC router / API route / UI pages, patches to `trpc.ts` to add `rateLimitedProcedure` + `protectedProcedure` if missing) lives in `scripts/setup-auth-users.mjs`. This SKILL only handles launching the script, the optional integration of the UserMenu into the layout (contextual, non-scriptable patch), CLAUDE.md, and the final summary.
+The deterministic code (install deps, patch schema + migration generation, generation of `auth.ts` / `password.ts` / tRPC router / API route / UI pages, patches to `trpc.ts` to add `rateLimitedProcedure` + `protectedProcedure` if missing) lives in `scripts/setup-auth-users.mjs`. This SKILL only handles launching the script, the optional integration of the UserMenu into the layout (contextual, non-scriptable patch), CLAUDE.md, and the final summary.
 
 **Input variables** (passed by `add-auth`): `WEB_DIR`, `IS_MONOREPO`, `PROJECT_NAME`.
 
@@ -86,6 +86,7 @@ Invoke `_update-claude-md` with:
 - `stack`: `- **Auth**: NextAuth v5 (users mode - email+pwd accounts hashed with scrypt in DB, credentials-only)`
 - `conventions`:
   - `- Auth users: \`await auth()\` from \`~/server/auth\` for the session. \`protectedProcedure\` in tRPC for routes that require a logged-in user. \`session.user.id\` is guaranteed non-null thanks to the module augmentation in \`auth.ts\`.`
+  - `- Passwords: scrypt with N=32768 (the cost is embedded in each hash, so old hashes keep verifying). Do not raise N without raising the container memory via /scale: each in-flight hash needs 128*N*r bytes, and the default container has 512 MB for 8 concurrent requests.`
 - `custom`:
   - heading: `## User authentication`
   - body:

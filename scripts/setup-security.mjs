@@ -98,7 +98,13 @@ function patchNextConfig() {
     return;
   }
 
-  const objRe = /(const\s+\w+\s*(?::\s*[\w.]+)?\s*=\s*\{)/;
+  // A JSDoc directly above the const belongs to it (T3 ships the @type line
+  // right above `const config`) - insert above the pair, never between them,
+  // or the JSDoc types the injected CSP string and the build fails with
+  // TS2559. The optional group cannot cross a JSDoc close, so the file-header
+  // JSDoc (followed by an import, not a const) can never be swallowed here.
+  const objRe =
+    /((?:\/\*\*(?:[^*]|\*(?!\/))*\*\/[ \t]*\r?\n)?const\s+\w+\s*(?::\s*[\w.]+)?\s*=\s*\{)/;
   const m = content.match(objRe);
   if (!m) {
     actions.push(
@@ -115,7 +121,14 @@ function patchNextConfig() {
     return [{ source: "/(.*)", headers: securityHeaders }];
   },`);
 
-  content = content.replace(objRe, `${SECURITY_HEADERS_BLOCK}\n$1\n${keys.join("\n")}`);
+  const afterBrace = m.index + m[0].length;
+  const glue = content[afterBrace] === "\n" ? "" : "\n";
+  content =
+    content.slice(0, m.index) +
+    SECURITY_HEADERS_BLOCK + "\n" +
+    m[0] + "\n" +
+    keys.join("\n") + glue +
+    content.slice(afterBrace);
   writeFileSync(file, content);
   actions.push(`✓ ${file}: injected securityHeaders + headers() into the existing config`);
 }
