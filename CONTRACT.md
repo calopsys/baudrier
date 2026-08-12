@@ -423,6 +423,19 @@ gives in the chat - an id is an identifier, not a secret, so the chat is an
 acceptable channel for it. Containers and registry namespaces are likewise
 found by name, never by a stored id.
 
+One exception on the registry axis: Container Registry namespace NAMES are
+globally unique across ALL of Scaleway — every organization, not just this
+Project (live-verified 2026-08: an unrelated organization owned an app's
+plain slug). The harness therefore creates namespaces as `<slug>-<8 hex>`
+by default, and both `/bootstrap` and `/deploy` resolve them with
+`findRegistryNamespace()` — a name-prefix match
+(`/^<slug>(-[0-9a-f]{8})?$/`) within the app's own Project. This is still
+discovery by name: no ids, no linkage file. A suffixed name is also
+recorded as a name-only `Registry namespace:` line in the generated
+CLAUDE.md, for humans. Only `/bootstrap` creates namespaces;
+`--registry-namespace` overrides the name and fails loudly on `/deploy`
+when the named namespace does not exist (check 75).
+
 **Runtime credentials are always scoped to the app's own Project, never to
 the whole organization - but how they get there differs by shape (§1).** In
 Cas A each capability gets its own IAM-scoped key, minted by `/bootstrap`:
@@ -622,22 +635,29 @@ install script never runs here.
 A generated project cannot use that mechanism: `/bootstrap` and every `add-*`
 skill run `pnpm add <pkg>@latest`, and `bootstrap-init.mjs` passes
 `--config.dangerously-allow-all-builds=true` on pnpm ≥ 11, so build scripts do
-run there. The age floor is the guard instead. `shadcn()` writes
-`minimumReleaseAge: 4320` (3 days, in minutes) and
-`minimumReleaseAgeStrict: false` into the project's `pnpm-workspace.yaml`, which
-is the single writer of that file — anything added to the earlier
-normalisation block in `scaffoldT3()` is overwritten later and does nothing.
-Two limits are deliberate and must stay understood, not silently "fixed":
+run there. The age floor is the guard instead.
+`writeSupplyChainWorkspaceYaml()` (called by `scaffoldT3()` **before the
+first `pnpm install`**) writes `minimumReleaseAge: 4320` (3 days, in
+minutes) and `minimumReleaseAgeStrict: false` into the project's
+`pnpm-workspace.yaml`, so every dependency resolution in the project's life
+runs under the floor. Two facts are deliberate and must stay understood,
+not silently "fixed":
 
 - **`minimumReleaseAgeStrict` stays `false`.** pnpm flips it to `true` by itself
   as soon as `minimumReleaseAge` is set explicitly. Strict turns "the only
   version matching the range is too new" into a failed install in front of a
   non-technical user; false makes pnpm pick an older qualifying version instead.
-- **The first `pnpm install` in `scaffoldT3()` predates the file** and gets only
-  pnpm 11's own 1440-minute default (0 on pnpm ≤ 10). Every later `pnpm add`
-  is covered.
+- **`strict:false` rescues ranges, never exact pins** (live-verified 2026-08:
+  esbuild pins its `@esbuild/<platform>` packages to an exact version, so a
+  <3-day-old pin has no older *matching* version and pnpm fails with
+  `ERR_PNPM_NO_MATURE_MATCHING_VERSION`). The recovery is
+  `recoverFromImmatureLockfile()`: delete `pnpm-lock.yaml`, re-resolve once
+  under the floor (a fresh resolve picks mature parents whose exact platform
+  pins are mature too). Safe pre-commit only; every call site precedes the
+  git commit step.
 
-Check 52 guards both values. `skills/security/SKILL.md` §1g carries the
+Check 52 guards the values and the write-before-first-install placement;
+check 72 guards the recovery. `skills/security/SKILL.md` §1g carries the
 lockfile sweep for a named-advisory check.
 
 ### Getting an API instance
@@ -661,14 +681,16 @@ Prefer the SDK's **built-in waiters** (`waitForContainer`, `waitForNamespace`,
 `waitForDomain`) over hand-rolled polling — they also remove the need to
 hard-code status enums, which is where a previous revision guessed wrong.
 
-### The three documented exceptions
+### The documented non-SDK exceptions
 
-`scwFetch`/`scwPaginate` survive in `_scw-auth.mjs` as an escape hatch, and are
-legitimate **only** for:
-1. **Cockpit log queries** — a Loki-compatible endpoint on a different host, with
-   no SDK method.
-2. **Object Storage** — S3-protocol only, so it uses `@aws-sdk/client-s3`
-   (see `object-storage.mjs`), not the Scaleway SDK and not raw fetch.
+Raw HTTP (plain `fetch`, or `scwFetch`/`scwPaginate` surviving in
+`_scw-auth.mjs` as an escape hatch) is legitimate **only** for:
+1. **Cockpit log queries** — a Loki-compatible endpoint on a different host,
+   with no SDK method; `cockpit.mjs` uses plain `fetch` with the `X-Token`
+   header (see its section below).
+2. **Object Storage** — not raw fetch at all: S3-protocol only, so it uses
+   `@aws-sdk/client-s3` (see `object-storage.mjs`), not the Scaleway SDK.
+   Listed here as the other non-SDK path.
 3. Any API Scaleway ships before the SDK catches up.
 
 Anything else must go through the SDK.
@@ -893,6 +915,13 @@ export async function getConsumption();
 export async function ensureToken(opts?);            // -> {token, logsUrl}
 export async function queryLogs({query, since, limit, opts});  // LogQL via Loki API
 ```
+
+Loki gateway auth (live-verified 2026-08): `/loki/api/v1/query_range`
+accepts **only** the `X-Token: <cockpit token>` header. `X-Auth-Token` plus
+the OAuth-style bearer header got 403; a bare `X-Token` got 200.
+`queryLogs` therefore uses a plain `fetch` (raw-fetch exception #1), never
+`scwFetch`, whose default `X-Auth-Token` cannot be suppressed. Check 77
+pins the header.
 
 ### Operator credential scripts (top-level `scripts/`, not `scripts/scaleway/`)
 
@@ -1259,6 +1288,9 @@ file - is gone, along with the scripts that wrote it
 (`_persist-scw-credentials.mjs`, `collect-scw-credentials.mjs`,
 `persist-scw-mode.mjs`). A generated app repo carries no Scaleway metadata
 of any kind: no `.scaleway/container.json`, no repo-local credentials file.
+(The name-only `Registry namespace:` line in the generated CLAUDE.md is the
+one documented exception — a note for humans and the agent, never an id;
+§2.)
 The active Project resolves at call time, by name, as described in §2 -
 never from a file the harness wrote earlier.
 

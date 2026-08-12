@@ -125,7 +125,7 @@ Before touching anything, check that the chosen name does not clash with an exis
 node "${CLAUDE_SKILL_DIR}/../../scripts/check-name-collision.mjs" --name "<project-name>" --parent-dir "$(dirname "$(pwd)")"
 ```
 
-The script reads the project's `status` in the returned JSON (it scans your existing projects: local sibling folders next to this checkout, the shared background clock, and your Scaleway Projects). React based on `status`:
+The script reads the project's `status` in the returned JSON (it scans your existing projects: local sibling folders next to this checkout, the shared background clock, and your Scaleway Projects - the checkout itself is excluded from the scan automatically). React based on `status`:
 
 - **`ok`** → no clash, go straight to step 2 with this name.
 - **`exact`** → a project with this exact name already exists. It cannot be reused. Present the `suggestions` (they are safe, non-colliding names) via `AskUserQuestion` and let the user pick one or type their own. **Re-run this guard** on the chosen name until it returns `ok`.
@@ -278,6 +278,7 @@ Mark Step 2 ✅, move on to Step 3 to handle the warnings.
    - **T3 / shadcn drift** (regex sanity check warn) → patch the project manually drawing on the script + flag it to the user so they can patch the script afterward.
    - **CLI changed** (invalid flag for shadcn / T3 / docker) → fix manually then likewise flag it.
    - **External problem** (Scaleway credentials/network/quota, a `docker build`/`push` failure) → fix and re-run the script. If the failure is at `dockerBuildPush`, the actual Docker error is right there in the log (unprefixed, above the handoff banner) - no external run URL to fetch, unlike the old GitHub Actions model.
+   - **`registry_name_taken`** → registry namespace names are unique across ALL of Scaleway (CONTRACT.md §2), and even the suffixed candidates the script tried were taken. Pick a free name with the user, then re-run with `--registry-namespace <name>`.
 4. **Continue the remaining steps manually** (`⏸ Not attempted`) drawing on the script functions. Do not skip any of the banner steps - the smoke test in particular must confirm the site is live and styled before moving on. `scwProject` now runs right after `preflight`, before any local file exists - a failure there leaves nothing on disk to clean up, and a re-run with `--scw-project-id` starts clean. A failure at any later step may leave local files on disk AND partial Scaleway resources behind (a Project, a registry namespace, a container namespace, a container) - the Scaleway side is safe to re-run, every `scripts/scaleway/*` helper used is find-or-create / idempotent-PATCH. Unlike the old sibling-directory model, there is no "fresh folder" to retry into either way - the repo checkout is the one and only project directory (in-place bootstrap, CONTRACT.md §7).
 
 ### Notes on the script's choices (which you do not have to redo if successful)

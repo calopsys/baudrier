@@ -22,7 +22,7 @@
  *   node tools/verify.mjs --quiet      # summary lines only
  */
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -2779,7 +2779,7 @@ define("51", "Version: the three manifests and CHANGELOG agree", () => {
   return fails;
 });
 
-define("52", "Supply chain: generated projects keep an age floor", () => {
+define("52", "Supply chain: the age floor precedes the first install", () => {
   const fails = [];
   const bootstrap = "scripts/bootstrap-init.mjs";
   if (!exists(bootstrap)) return [{ file: bootstrap, detail: "missing" }];
@@ -2813,15 +2813,52 @@ define("52", "Supply chain: generated projects keep an age floor", () => {
       detail: "minimumReleaseAgeStrict is not pinned to false - pnpm defaults it to true and a too-new-only range then fails the install",
     });
   }
-  // The age floor lives in the block shadcn() writes. scaffoldT3()'s
-  // normalisation runs earlier and is overwritten by it, so a floor placed
-  // there would silently never reach the finished project.
-  const shadcnBody = src.slice(src.indexOf("function shadcn()"));
-  if (src.includes("function shadcn()") && !shadcnBody.includes("minimumReleaseAge")) {
-    fails.push({
-      file: bootstrap,
-      detail: "minimumReleaseAge is written outside shadcn() - shadcn() overwrites pnpm-workspace.yaml wholesale, so the floor is lost",
-    });
+
+  // A prior version of this check asserted the floor lived INSIDE shadcn() -
+  // that placement was itself the bug it should have caught. scaffoldT3()
+  // runs the project's first `pnpm install` with no floor in effect yet, so
+  // the lockfile it produces can pin an exact version published minutes
+  // earlier. shadcn() then writes the floor for the first time, after three
+  // dependency resolutions (create-t3-app, the version overrides, and that
+  // first install) already ran unguarded - and if the lockfile's exact pin is
+  // younger than the floor, shadcn's own re-resolve has nothing that
+  // satisfies both, so it deadlocks. The floor must exist before
+  // scaffoldT3()'s first `pnpm install`, written by a dedicated function.
+  const scaffoldAt = src.indexOf("function scaffoldT3");
+  if (scaffoldAt < 0) {
+    fails.push({ file: bootstrap, detail: "scaffoldT3() not found" });
+  } else {
+    const nextFnAt = src.indexOf("\nfunction ", scaffoldAt + 1);
+    const body = src.slice(scaffoldAt, nextFnAt > 0 ? nextFnAt : undefined);
+    const writerAt = body.indexOf("writeSupplyChainWorkspaceYaml(");
+    const installAt = body.indexOf("pnpm install");
+    if (writerAt < 0) {
+      fails.push({
+        file: bootstrap,
+        detail: "scaffoldT3() never calls writeSupplyChainWorkspaceYaml() - nothing guarantees the age floor exists before the first pnpm install",
+      });
+    }
+    if (installAt < 0) {
+      fails.push({ file: bootstrap, detail: 'scaffoldT3() no longer runs "pnpm install"' });
+    }
+    if (writerAt >= 0 && installAt >= 0 && writerAt > installAt) {
+      fails.push({
+        file: bootstrap,
+        detail: "writeSupplyChainWorkspaceYaml() runs AFTER pnpm install inside scaffoldT3() - the first install still resolves with no age floor in effect",
+      });
+    }
+  }
+
+  const shadcnAt = src.indexOf("function shadcn()");
+  if (shadcnAt >= 0) {
+    const nextFnAt = src.indexOf("\nfunction ", shadcnAt + 1);
+    const shadcnBody = src.slice(shadcnAt, nextFnAt > 0 ? nextFnAt : undefined);
+    if (shadcnBody.includes("minimumReleaseAge")) {
+      fails.push({
+        file: bootstrap,
+        detail: "minimumReleaseAge is still written inside shadcn() - the floor belongs to writeSupplyChainWorkspaceYaml(), set once before the first install, not re-asserted here",
+      });
+    }
   }
 
   const skill = "skills/security/SKILL.md";
@@ -3867,6 +3904,309 @@ define("71", "scrypt: one cost everywhere, and it fits preset S", () => {
       file: contractFile,
       detail: "no mention of the 128*N*r scrypt working-set formula - the scrypt/preset-S coupling is documented nowhere",
     });
+  }
+
+  return fails;
+});
+
+define("72", "MATURE error is recovered, not fatal", () => {
+  const fails = [];
+  const bootstrap = "scripts/bootstrap-init.mjs";
+  if (!exists(bootstrap)) return [{ file: bootstrap, detail: "missing" }];
+  const src = stripComments(read(bootstrap));
+
+  // pnpm 11's age floor (check 52) can reject the only version some
+  // transitive dep resolves to - shadcn's internal `pnpm add` then fails with
+  // ERR_PNPM_NO_MATURE_MATCHING_VERSION instead of installing. Nothing that
+  // catches this code recovers from it today.
+  if (!src.includes("ERR_PNPM_NO_MATURE_MATCHING_VERSION")) {
+    fails.push({
+      file: bootstrap,
+      detail: "no reference to ERR_PNPM_NO_MATURE_MATCHING_VERSION - the age floor can make shadcn's own install unrecoverably fail",
+    });
+  }
+
+  const recoverMatch = src.match(/(?:async\s+)?function\s+recoverFromImmatureLockfile\s*\(/);
+  if (!recoverMatch) {
+    fails.push({ file: bootstrap, detail: "recoverFromImmatureLockfile() not found" });
+  } else {
+    const fnAt = recoverMatch.index;
+    const nextFnAt = src.indexOf("\nfunction ", fnAt + 1);
+    const body = src.slice(fnAt, nextFnAt > 0 ? nextFnAt : undefined);
+    if (!/\brmSync\b/.test(body)) {
+      fails.push({
+        file: bootstrap,
+        detail: "recoverFromImmatureLockfile() never calls rmSync - it cannot delete the stale lockfile its name promises to remove",
+      });
+    }
+    if (!body.includes("pnpm-lock.yaml")) {
+      fails.push({ file: bootstrap, detail: "recoverFromImmatureLockfile() never mentions pnpm-lock.yaml - unclear what lockfile it recovers from" });
+    }
+  }
+
+  const runShadcnMatch = src.match(/function runShadcn\s*\(/);
+  if (!runShadcnMatch) {
+    fails.push({ file: bootstrap, detail: "runShadcn() not found" });
+  } else {
+    const fnAt = runShadcnMatch.index;
+    const nextFnAt = src.indexOf("\nfunction ", fnAt + 1);
+    const body = src.slice(fnAt, nextFnAt > 0 ? nextFnAt : undefined);
+    if (!body.includes("recoverFromImmatureLockfile")) {
+      fails.push({
+        file: bootstrap,
+        detail: "runShadcn() never calls recoverFromImmatureLockfile() - an ERR_PNPM_NO_MATURE_MATCHING_VERSION failure inside shadcn's pnpm add still aborts bootstrap",
+      });
+    }
+  }
+
+  return fails;
+});
+
+define("73", "shadcn hygiene: no leftover prompt-bait, parents exist", () => {
+  const fails = [];
+  const bootstrap = "scripts/bootstrap-init.mjs";
+  if (!exists(bootstrap)) return [{ file: bootstrap, detail: "missing" }];
+  const src = stripComments(read(bootstrap));
+
+  // shadcn v4's `init --defaults --yes` still prompts to overwrite an
+  // existing components.json, and --yes does not answer that specific
+  // prompt - a stale file from a prior attempt silently skips writing
+  // src/lib/utils.ts. Clearing it before the FIRST init call removes the
+  // prompt; clearing it again inside runShadcn() covers the retry path too.
+  const initAt = src.indexOf("shadcn@latest init");
+  const firstRm = src.match(/rmSync\([^;]*components\.json/);
+  if (!firstRm || initAt < 0 || firstRm.index > initAt) {
+    fails.push({
+      file: bootstrap,
+      detail: 'no rmSync(...components.json...) runs before "npx shadcn@latest init" - a stale components.json blocks the overwrite prompt that --yes does not answer',
+    });
+  }
+
+  const runShadcnMatch = src.match(/function runShadcn\s*\(/);
+  if (!runShadcnMatch) {
+    fails.push({ file: bootstrap, detail: "runShadcn() not found" });
+  } else {
+    const fnAt = runShadcnMatch.index;
+    const nextFnAt = src.indexOf("\nfunction ", fnAt + 1);
+    const body = src.slice(fnAt, nextFnAt > 0 ? nextFnAt : undefined);
+    if (!/rmSync\([^;]*components\.json/.test(body)) {
+      fails.push({
+        file: bootstrap,
+        detail: "runShadcn() never removes components.json before a retry - a retried command hits the same unanswered overwrite prompt",
+      });
+    }
+  }
+
+  // src/lib/utils.ts and src/components/ui/link-button.tsx are written by
+  // writeFileSync into directories create-t3-app + shadcn may not have
+  // created yet; writeFileSync does not make parent directories itself.
+  if (!/mkdirSync\([^;]*"src\/lib"/.test(src)) {
+    fails.push({
+      file: bootstrap,
+      detail: 'no mkdirSync(...\"src/lib\"...) - writing src/lib/utils.ts fails with ENOENT when the scaffold never created src/lib',
+    });
+  }
+  if (!/mkdirSync\([^;]*"src\/components\/ui"/.test(src)) {
+    fails.push({
+      file: bootstrap,
+      detail: 'no mkdirSync(...\"src/components/ui\"...) - writing src/components/ui/link-button.tsx fails with ENOENT when the scaffold never created src/components/ui',
+    });
+  }
+
+  return fails;
+});
+
+define("74", "pnpm resilience: executed fallback + headless purge", () => {
+  const fails = [];
+  const bootstrap = "scripts/bootstrap-init.mjs";
+  if (!exists(bootstrap)) return [{ file: bootstrap, detail: "missing" }];
+  const src = stripComments(read(bootstrap));
+
+  // Anchored on `run(` so the existing warn() string that only tells the
+  // user to run this by hand cannot satisfy the check - the fallback must
+  // execute, not just get suggested to a non-technical operator.
+  if (!/run\(\s*["']npm i -g pnpm@latest/.test(src)) {
+    fails.push({
+      file: bootstrap,
+      detail: 'no run("npm i -g pnpm@latest...") - the too-old-pnpm path only warns the user to update it by hand and never runs the fallback itself',
+    });
+  }
+
+  if (!src.includes("confirm-modules-purge=false")) {
+    fails.push({
+      file: bootstrap,
+      detail: "the generated .npmrc never sets confirm-modules-purge=false - pnpm prompts to confirm a node_modules purge, which hangs forever with no TTY to answer it",
+    });
+  }
+
+  return fails;
+});
+
+define("75", "Registry namespace: suffixed create, prefix discovery, conflict handled", () => {
+  const fails = [];
+
+  const registryFile = "scripts/scaleway/registry.mjs";
+  if (!exists(registryFile)) {
+    fails.push({ file: registryFile, detail: "missing" });
+  } else {
+    const src = stripComments(read(registryFile));
+    if (!src.includes("findRegistryNamespace")) {
+      fails.push({
+        file: registryFile,
+        detail: "no findRegistryNamespace() - nothing discovers an existing <slug>-<8 hex> namespace by prefix",
+      });
+    }
+    if (!src.includes("registry_name_taken")) {
+      fails.push({
+        file: registryFile,
+        detail: 'no "registry_name_taken" ScwError type - a create-time name conflict is not distinguished from any other failure',
+      });
+    }
+    const ensureMatch = src.match(/export\s+async\s+function\s+ensureRegistryNamespace\s*\(/);
+    if (!ensureMatch) {
+      fails.push({ file: registryFile, detail: "ensureRegistryNamespace() not found" });
+    } else {
+      const fnAt = ensureMatch.index;
+      const nextFnAt = src.indexOf("\nexport ", fnAt + 1);
+      const body = src.slice(fnAt, nextFnAt > 0 ? nextFnAt : undefined);
+      if (!/\bcatch\b/.test(body)) {
+        fails.push({
+          file: registryFile,
+          detail: "ensureRegistryNamespace() has no catch - a createNamespace name conflict propagates as a raw SDK error instead of being rethrown as registry_name_taken",
+        });
+      }
+    }
+  }
+
+  const deployFile = "scripts/deploy.mjs";
+  if (!exists(deployFile)) {
+    fails.push({ file: deployFile, detail: "missing" });
+  } else if (!stripComments(read(deployFile)).includes("findRegistryNamespace")) {
+    fails.push({
+      file: deployFile,
+      detail: "deploy.mjs never calls findRegistryNamespace() - a redeploy only knows the exact name it was given, not a namespace created under a random suffix",
+    });
+  }
+
+  const skillFile = "skills/deploy/SKILL.md";
+  if (!exists(skillFile)) {
+    fails.push({ file: skillFile, detail: "missing" });
+  } else if (!read(skillFile).includes("Registry namespace:")) {
+    fails.push({
+      file: skillFile,
+      detail: 'no "Registry namespace:" section - the skill does not tell the operator how the suffixed namespace is found again',
+    });
+  }
+
+  const bootstrapFile = "scripts/bootstrap-init.mjs";
+  if (!exists(bootstrapFile)) {
+    fails.push({ file: bootstrapFile, detail: "missing" });
+  } else if (!stripComments(read(bootstrapFile)).includes("registry-namespace")) {
+    fails.push({
+      file: bootstrapFile,
+      detail: 'no "registry-namespace" flag - bootstrap never records the suffixed namespace name it created',
+    });
+  }
+
+  return fails;
+});
+
+define("76", "Collision guard: the checkout is not its own collision", () => {
+  const fails = [];
+  const script = "scripts/check-name-collision.mjs";
+  if (!exists(script)) return [{ file: script, detail: "missing" }];
+
+  // check-name-collision.mjs requires kebab-case, 2-50 chars (same
+  // constraint bootstrap-init.mjs enforces). If this checkout's own folder
+  // name does not fit that shape there is nothing to pin here - skip rather
+  // than false-fail on an unrelated naming mismatch.
+  const name = path.basename(ROOT);
+  if (!/^[a-z0-9][a-z0-9-]{0,48}[a-z0-9]$/.test(name)) {
+    return fails;
+  }
+
+  // Blank the Scaleway credentials: fromScaleway() inside the script
+  // catches any failure and soft-fails (sources.scaleway:false), so this
+  // exercises only the filesystem-only sibling search, deterministically -
+  // no live account state can change what this check sees.
+  const result = spawnSync(
+    process.execPath,
+    [path.join(ROOT, script), "--name", name, "--parent-dir", path.dirname(ROOT)],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        SCW_ACCESS_KEY: "",
+        SCW_SECRET_KEY: "",
+        SCW_DEFAULT_ORGANIZATION_ID: "",
+        SCW_DEFAULT_PROJECT_ID: "",
+      },
+    },
+  );
+
+  if (result.status !== 0) {
+    fails.push({
+      file: script,
+      detail: `exited ${result.status} instead of 0: ${(result.stderr || "").trim().slice(0, 300)}`,
+    });
+    return fails;
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(result.stdout);
+  } catch {
+    fails.push({ file: script, detail: `stdout was not valid JSON: ${result.stdout.trim().slice(0, 300)}` });
+    return fails;
+  }
+
+  // PARENT_DIR is this checkout's own parent directory, so the sibling
+  // search (readdirSync(PARENT_DIR)) lists the checkout's own folder along
+  // with any real siblings. Running the guard against its own name and
+  // location must not report a collision with itself.
+  if (parsed.status === "exact") {
+    fails.push({
+      file: script,
+      detail: `--name ${name} --parent-dir ${path.dirname(ROOT)} reports status "exact" - the sibling search lists this checkout's own folder and the guard collides with itself`,
+    });
+  }
+
+  return fails;
+});
+
+define("77", "cockpit query_range authenticates with X-Token only", () => {
+  const fails = [];
+  const file = "scripts/scaleway/cockpit.mjs";
+  if (!exists(file)) return [{ file, detail: "missing" }];
+  const src = stripComments(read(file));
+
+  if (!src.includes("X-Token")) {
+    fails.push({
+      file,
+      detail: 'no "X-Token" header - queryLogs does not authenticate the Loki request with the header Cockpit\'s gateway expects',
+    });
+  }
+
+  if (/Authorization[^\n]*Bearer/.test(src)) {
+    fails.push({
+      file,
+      detail: 'still sends an "Authorization: Bearer" header - Cockpit\'s Loki gateway does not accept it, and sending an extra unused header on every query is dead weight',
+    });
+  }
+
+  const queryLogsMatch = src.match(/export\s+async\s+function\s+queryLogs\s*\(/);
+  if (!queryLogsMatch) {
+    fails.push({ file, detail: "queryLogs() not found" });
+  } else {
+    const fnAt = queryLogsMatch.index;
+    const nextFnAt = src.indexOf("\nexport ", fnAt + 1);
+    const body = src.slice(fnAt, nextFnAt > 0 ? nextFnAt : undefined);
+    if (body.includes("scwFetch(")) {
+      fails.push({
+        file,
+        detail: "queryLogs() still calls scwFetch() - CONTRACT.md's raw-fetch exception covers this hop only if it is a plain fetch with an explicit X-Token header, not the shared SDK wrapper",
+      });
+    }
   }
 
   return fails;

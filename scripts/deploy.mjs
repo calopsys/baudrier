@@ -53,7 +53,7 @@ import {
   syncContainerSecrets,
 } from "./scaleway/container.mjs";
 import { ensureJobDefinition, startJob, waitForJobRun, setSchedule } from "./scaleway/jobs.mjs";
-import { ensureRegistryNamespace, listImages, pruneTags } from "./scaleway/registry.mjs";
+import { ensureRegistryNamespace, findRegistryNamespace, listImages, pruneTags } from "./scaleway/registry.mjs";
 import { ensureDatabase, waitForDatabaseReady, buildConnectionString } from "./scaleway/sdb.mjs";
 import { ensureApplication, ensurePolicy, createApiKey, DELEGATED_DB_KEY_SECRET_NAME } from "./scaleway/iam.mjs";
 import { getSecret, putSecret, secretExists, listSecrets } from "./scaleway/secrets.mjs";
@@ -154,6 +154,7 @@ const TARGET = flag("target");
 const PROJECT_NAME = flag("project-name");
 const PROJECT_DIR = flag("project-dir", process.cwd());
 const REGISTRY_NAMESPACE = flag("registry-namespace", PROJECT_NAME ? slugify(PROJECT_NAME) : undefined);
+const REGISTRY_NAMESPACE_OVERRIDE = has("registry-namespace");
 const KEEP_TAGS = Number(flag("keep-tags", 10));
 const BUILD_TIMEOUT_MS = Number(flag("build-timeout-ms", 900_000));
 const JOB_TIMEOUT_MS = Number(flag("job-timeout-ms", 600_000));
@@ -309,6 +310,27 @@ async function commitPush() {
   SHA = shOrFail("git", ["rev-parse", "HEAD"], "git rev-parse");
 }
 
+let REGISTRY = null;
+
+/**
+ * Resolve the Container Registry namespace once, on first use, and reuse it
+ * for both buildPush and pruneTagsStep - /deploy only ever discovers a
+ * namespace, it never mints one out of thin air (CONTRACT.md §2: only
+ * /bootstrap creates, the exception being the legacy create-on-first-deploy
+ * fallback below for an app bootstrapped with --skip-deploy).
+ */
+async function resolveRegistry() {
+  if (REGISTRY) return REGISTRY;
+  if (REGISTRY_NAMESPACE_OVERRIDE) {
+    // A typo'd override must fail loudly, not silently mint a new namespace.
+    REGISTRY = await ensureRegistryNamespace(REGISTRY_NAMESPACE, { exact: true, createIfMissing: false });
+  } else {
+    const found = await findRegistryNamespace(PROJECT_NAME);
+    REGISTRY = found || (await ensureRegistryNamespace(slugify(PROJECT_NAME), { exact: true }));
+  }
+  return REGISTRY;
+}
+
 // Direct build + push (CONTRACT.md §5): this machine builds the image itself
 // and pushes it straight to the registry, tagged with the commit SHA -
 // skipping the rebuild when that exact tag already exists (a re-deploy of an
@@ -317,7 +339,7 @@ async function commitPush() {
 // this step (a local `docker build`/`push` has no external run to time out
 // on) but is kept as a CLI flag for compatibility with existing callers.
 async function buildPush() {
-  const registry = await ensureRegistryNamespace(REGISTRY_NAMESPACE);
+  const registry = await resolveRegistry();
   const imageName = slugify(PROJECT_NAME);
 
   log(`Building + pushing the Docker image (tag ${SHA.slice(0, 7)})...`);
@@ -484,7 +506,8 @@ async function updateContainerStep() {
   // No linkage file is written or read (CONTRACT.md §2, §7: app repos carry
   // no Scaleway metadata at all) - `ns` and `container` above were already
   // found/created by NAME, so nothing here needs to persist their ids for a
-  // later run to find them again.
+  // later run to find them again (the namespace is discovered by name-prefix
+  // within the Project - CONTRACT.md §2).
 
   // Secret Manager, not this deploy's own state, is the canonical source for
   // a container's secret env (container.mjs's header comment - a container
@@ -655,7 +678,7 @@ async function agentJobs() {
 
 async function pruneTagsStep() {
   log("Pruning old registry tags (Container Registry has no retention policy)...");
-  const reg = await ensureRegistryNamespace(REGISTRY_NAMESPACE);
+  const reg = await resolveRegistry();
   const images = await listImages(reg.id);
   const image = images.find((i) => i.name === slugify(PROJECT_NAME)) || images[0];
   if (!image) {

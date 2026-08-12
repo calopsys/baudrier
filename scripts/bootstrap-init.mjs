@@ -139,6 +139,7 @@ let locale = "fr_FR";
 // script catches up with the new model.
 let skipDeploy = false;
 let scwProjectIdArg = null;
+let registryNamespaceOverride = "";
 
 for (let i = 0; i < args.length; i++) {
   const a = args[i];
@@ -148,13 +149,15 @@ for (let i = 0; i < args.length; i++) {
   else if (a === "--private" || a === "--public") continue;
   else if (a === "--skip-deploy") skipDeploy = true;
   else if (a === "--scw-project-id" && args[i + 1]) scwProjectIdArg = args[++i];
+  else if (a === "--registry-namespace" && args[i + 1]) registryNamespaceOverride = args[++i];
   else usageError(`Unknown arg: ${a}`);
 }
 
 if (!description) {
   usageError(
     'Usage: node bootstrap-init.mjs --description "DESC" ' +
-      "[--name deploy-name-override] [--locale fr_FR] [--skip-deploy] [--scw-project-id <uuid>]",
+      "[--name deploy-name-override] [--locale fr_FR] [--skip-deploy] [--scw-project-id <uuid>] " +
+      "[--registry-namespace <name>]",
   );
 }
 
@@ -164,6 +167,13 @@ if (nameOverride && !KEBAB_RE.test(nameOverride)) {
 }
 if (scwProjectIdArg && !isUuid(scwProjectIdArg)) {
   usageError(`--scw-project-id must be a UUID. Got: ${scwProjectIdArg}`);
+}
+// --registry-namespace picks the EXACT namespace name (ensureRegistryNamespace's
+// exact:true mode) - no random suffix - so an operator recovering from a
+// registry_name_taken error can point at a namespace they already secured by
+// hand. Same kebab-case shape as every other Scaleway resource name here.
+if (registryNamespaceOverride && !KEBAB_RE.test(registryNamespaceOverride)) {
+  usageError(`--registry-namespace must be kebab-case (lowercase a-z, 0-9, -), 2-50 chars. Got: ${registryNamespaceOverride}`);
 }
 
 // App name: the repo name itself (deriveAppName - CONTRACT.md §2, a
@@ -348,6 +358,39 @@ function capture(cmd, cwd, opts = {}) {
   return run(cmd, cwd, { capture: true, allowFail: true, ...opts });
 }
 
+// pnpm 11's age floor (writeSupplyChainWorkspaceYaml, minimumReleaseAge) can
+// block an exact-versioned pin under 3 days old that a lockfile captured
+// before the floor applied - minimumReleaseAgeStrict:false rescues a RANGE,
+// never an exact pin (live-verified). Deleting the lockfile is safe: every
+// call site runs before the git commit step, and a fresh resolve picks
+// mature parents whose exact platform pins are mature too.
+function recoverFromImmatureLockfile(output, cwd) {
+  if (!/ERR_PNPM_NO_MATURE_MATCHING_VERSION/.test(output)) return false;
+  if (!existsSync(join(cwd, "pnpm-lock.yaml"))) return false;
+  rmSync(join(cwd, "pnpm-lock.yaml"));
+  log("Deleting the stale pnpm-lock.yaml and re-resolving under the age floor");
+  run(`pnpm install${PNPM_BUILD_FLAGS ? ` ${PNPM_BUILD_FLAGS}` : ""}`, cwd);
+  return true;
+}
+
+// Wraps a `pnpm ...` invocation with the recovery above. One retry is
+// enough: it either resolves clean under the floor, or the floor genuinely
+// has no mature candidate - in which case `guidance`, if given, is appended
+// to the fatal error.
+function runPnpm(cmd, guidance = "") {
+  const res = capture(cmd, PROJECT_DIR);
+  if (res.status === 0) return;
+  if (res.stdout) process.stderr.write(res.stdout);
+  if (res.stderr) process.stderr.write(res.stderr);
+  const output = `${res.stdout || ""}${res.stderr || ""}`;
+  if (recoverFromImmatureLockfile(output, PROJECT_DIR)) {
+    run(cmd, PROJECT_DIR);
+    return;
+  }
+  const hint = guidance && /ERR_PNPM_NO_MATURE_MATCHING_VERSION/.test(output) ? `\n${guidance}` : "";
+  fail(`Command failed (exit ${res.status}): ${cmd}${hint}`);
+}
+
 // Resolve {owner, repo} from the project's `origin` remote. Used by the git
 // identity fallback (web) and the final banner - never talks to any GitHub
 // API, only parses the remote URL git itself already knows (gh is no longer
@@ -461,11 +504,18 @@ function preflight() {
     if (pnpmMajor >= 11) {
       console.log(`  → pnpm updated to ${pnpmVersion}`);
     } else {
-      warn(
-        `pnpm is ${pnpmVersion || "unknown"} (<11) and the auto-update didn't land. ` +
-          "Update it manually (`pnpm self-update`, or `npm i -g pnpm@latest`) - " +
-          "the final dependency audit (`pnpm audit`) needs pnpm 11+ to work.",
-      );
+      console.log(`  → pnpm self-update didn't reach 11+ (still ${pnpmVersion || "unknown"}): trying npm i -g pnpm@latest…`);
+      run("npm i -g pnpm@latest", CWD, { allowFail: true });
+      pnpmVersion = capture("pnpm --version", CWD).stdout.trim();
+      pnpmMajor = parseInt(pnpmVersion.split(".")[0] ?? "0", 10);
+      if (pnpmMajor >= 11) {
+        console.log(`  → pnpm updated to ${pnpmVersion}`);
+      } else {
+        warn(
+          `pnpm is ${pnpmVersion || "unknown"} (<11) after both auto-update attempts. ` +
+            "Update it manually - the final dependency audit (`pnpm audit`) needs pnpm 11+ to work.",
+        );
+      }
     }
   }
   if (pnpmMajor >= 11) {
@@ -678,6 +728,47 @@ function moveScaffoldIntoPlace(scratchDir, targetDir) {
   rmSync(scratchDir, { recursive: true, force: true });
 }
 
+// Writes pnpm-workspace.yaml with known build-script packages pre-approved
+// and the supply-chain age floor below. Called once, before scaffoldT3()'s
+// first `pnpm install` - not only from inside shadcn() as before - so the
+// floor governs the FIRST dependency resolution too, and so shadcn's own
+// later `pnpm add` (which pulls in msw via @base-ui/react transitive deps)
+// never has to create a placeholder yaml + exit 1 on its first run at all.
+function writeSupplyChainWorkspaceYaml() {
+  const wsPath = join(PROJECT_DIR, "pnpm-workspace.yaml");
+  const existingWs = existsSync(wsPath) ? readFileSync(wsPath, "utf8") : "";
+  // unrs-resolver is a transitive native dep of eslint-config-next (via
+  // eslint-plugin-import-x → @rspack/binding-resolver). It MUST be approved or
+  // any future `pnpm install` (e.g. when the user adds a package) exits with
+  // ERR_PNPM_IGNORED_BUILDS even when `strict-dep-builds=false` is in .npmrc.
+  const knownBuildPkgs = ["msw", "sharp", "esbuild", "@tailwindcss/oxide", "@swc/core", "@parcel/watcher", "unrs-resolver"];
+  const newWs =
+    "allowBuilds:\n" +
+    knownBuildPkgs.map((p) => `  ${p.includes("/") ? `"${p}"` : p}: true`).join("\n") +
+    "\n" +
+    // Both advisories are reached only through next's OWN bundled copies of
+    // postcss and sharp, not the project's direct dependency on either -
+    // verified on a live run (`pnpm audit --prod` reports `.>next>postcss`
+    // and `.>next>sharp`). `pnpm update` cannot move a transitive dep by
+    // itself; pnpm 11 needs this override instead. Drop it once next bundles
+    // patched versions of both.
+    "overrides:\n" +
+    '  postcss: ">=8.5.18"\n' +
+    '  sharp: ">=0.35.0"\n' +
+    // A published-minutes-ago version is how an npm worm reaches a project
+    // (ChainDrop, 2026: 1557 poisoned versions, pulled within hours). pnpm 11
+    // already defaults to 1440; 4320 is the 3-day floor the advisories ask for.
+    // minimumReleaseAgeStrict must stay false: pnpm defaults it to TRUE as soon
+    // as minimumReleaseAge is set explicitly, which turns "the only match is too
+    // new" into a hard install failure in front of a non-technical user.
+    "minimumReleaseAge: 4320\n" +
+    "minimumReleaseAgeStrict: false\n";
+  if (existingWs !== newWs) {
+    writeFileSync(wsPath, newWs);
+    console.log("  → Pre-wrote pnpm-workspace.yaml with known build-script packages approved");
+  }
+}
+
 function scaffoldT3() {
   // We pass `--noInstall --noGit` to create-t3-app so it just writes the files:
   // no `npm install` (we'll do pnpm install ourselves), no `git init + git add`
@@ -775,15 +866,22 @@ function scaffoldT3() {
   //      (replaced by `allowBuilds:` in pnpm-workspace.yaml).
   //   b) `strictDepBuilds` defaults to `true`, so any unapproved postinstall
   //      script → ERR_PNPM_IGNORED_BUILDS → exit 1.
-  // The pnpm-workspace.yaml with allowBuilds entries is generated BY `pnpm install`
-  // itself (not by `create-t3-app --noInstall`), so we can't pre-patch it.
+  // writeSupplyChainWorkspaceYaml() pre-writes pnpm-workspace.yaml (allowBuilds
+  // entries and the supply-chain age floor) before this call, so the floor
+  // governs this FIRST dependency resolution too, not only shadcn's later one.
   // PNPM_BUILD_FLAGS is already set by preflight() based on pnpm major version.
   // pnpm ≥11: CLI flags needed (onlyBuiltDependencies ignored). pnpm ≤10: empty
   // (onlyBuiltDependencies in package.json is sufficient; the CLI flags would
   // conflict with it and cause ERR_PNPM_CONFIG_CONFLICT_BUILT_DEPENDENCIES).
+  writeSupplyChainWorkspaceYaml();
   const installLabel = PNPM_BUILD_FLAGS ? `with flags: ${PNPM_BUILD_FLAGS}` : "no extra flags (pnpm ≤10, onlyBuiltDependencies in package.json)";
   log(`Installing with pnpm (${installLabel})`);
-  run(`pnpm install${PNPM_BUILD_FLAGS ? ` ${PNPM_BUILD_FLAGS}` : ""}`, PROJECT_DIR);
+  runPnpm(
+    `pnpm install${PNPM_BUILD_FLAGS ? ` ${PNPM_BUILD_FLAGS}` : ""}`,
+    "If the error above is ERR_PNPM_NO_MATURE_MATCHING_VERSION on a fresh resolve, a required " +
+      "package has no version older than 3 days (minimumReleaseAge in pnpm-workspace.yaml) - " +
+      "wait, or consciously lower the floor.",
+  );
 
   // Write a project-local `.npmrc` so the USER's future `pnpm install` /
   // `pnpm add` commands (run without our CLI flags) don't fail. The
@@ -797,7 +895,13 @@ function scaffoldT3() {
     "# pnpm 11 defaulted strictDepBuilds to true, which fails install when any\n" +
       "# postinstall script is unapproved. Setting this to false downgrades it to\n" +
       "# a warning so `pnpm add foo` won't break in the middle of development.\n" +
-      "strict-dep-builds=false\n",
+      "strict-dep-builds=false\n" +
+      "\n" +
+      "# pnpm 11 in a no-TTY environment aborts a modules-directory purge\n" +
+      "# (ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY) unless pre-answered. Every\n" +
+      "# pnpm call in this project runs headless. Documented pnpm setting, not yet\n" +
+      "# live-verified here.\n" +
+      "confirm-modules-purge=false\n",
   );
 
   // Normalize any pnpm-workspace.yaml that pnpm install may have generated
@@ -842,8 +946,8 @@ function gitattributes() {
 // ─── Step 5: bump drizzle ─────────────────────────────────────────────
 function bumpDrizzle() {
   log("Bumping drizzle-orm + drizzle-kit (SQL injection patch)");
-  run(`pnpm add drizzle-orm@latest ${PNPM_BUILD_FLAGS}`, PROJECT_DIR);
-  run(`pnpm add -D drizzle-kit@latest ${PNPM_BUILD_FLAGS}`, PROJECT_DIR);
+  runPnpm(`pnpm add drizzle-orm@latest ${PNPM_BUILD_FLAGS}`);
+  runPnpm(`pnpm add -D drizzle-kit@latest ${PNPM_BUILD_FLAGS}`);
   ok("drizzle upgraded");
 }
 
@@ -1071,7 +1175,7 @@ function eslintCli() {
     const missing = Object.keys(FALLBACK_ESLINT_SPECS).filter((d) => !allDeps[d]);
     if (missing.length > 0) {
       const specs = missing.map((d) => FALLBACK_ESLINT_SPECS[d]);
-      run(`pnpm add -D ${specs.join(" ")} ${PNPM_BUILD_FLAGS}`, PROJECT_DIR);
+      runPnpm(`pnpm add -D ${specs.join(" ")} ${PNPM_BUILD_FLAGS}`);
     }
     warn("No flat ESLint config found - wrote eslint.config.mjs (next/core-web-vitals). Verify the scaffolder output.");
   } else {
@@ -1193,11 +1297,17 @@ export const healthcheckRouter = createTRPCRouter({
 
 // ─── Step 9: shadcn + LinkButton ──────────────────────────────────────
 // Run an `npx shadcn` command. shadcn invokes `pnpm add` internally to install
-// the packages it needs; on pnpm 11 this can hit ERR_PNPM_IGNORED_BUILDS if a
-// new transitive dep brings a postinstall script (e.g. msw via @base-ui/react).
-// The error creates a `pnpm-workspace.yaml` with placeholder values. We
-// normalize the file (placeholders → true) and retry once. The retry succeeds
-// because pnpm 11 reads the explicit `allowBuilds:` entries.
+// the packages it needs; on pnpm 11 this can fail two ways:
+//   - ERR_PNPM_IGNORED_BUILDS: a new transitive dep brings a postinstall
+//     script (e.g. msw via @base-ui/react) and creates a pnpm-workspace.yaml
+//     with placeholder values. Normalizing the placeholders (→ true) and
+//     retrying succeeds because pnpm 11 then reads the explicit
+//     `allowBuilds:` entries.
+//   - ERR_PNPM_NO_MATURE_MATCHING_VERSION: the supply-chain age floor
+//     rejects the exact pin already captured in pnpm-lock.yaml -
+//     recoverFromImmatureLockfile() deletes the lockfile and re-resolves.
+// Either recovery retries the same command once; an init retry also clears
+// components.json first, since the failed first attempt may have written it.
 function runShadcn(cmd) {
   const result = capture(cmd, PROJECT_DIR);
   // Surface output regardless of exit (matches `inherit` stdio semantics).
@@ -1205,62 +1315,39 @@ function runShadcn(cmd) {
   if (result.stderr) process.stderr.write(result.stderr);
   if (result.status === 0) return;
 
-  const wsPath = join(PROJECT_DIR, "pnpm-workspace.yaml");
-  if (!existsSync(wsPath)) fail(`Command failed (exit ${result.status}): ${cmd}`);
-  const ws = readFileSync(wsPath, "utf8");
-  const fixed = ws.replace(/:\s*set this to true or false/g, ": true");
-  if (fixed === ws) fail(`Command failed (exit ${result.status}): ${cmd}`);
-  writeFileSync(wsPath, fixed);
-  console.log("  → Normalized pnpm-workspace.yaml (placeholders → true), retrying shadcn");
-  run(cmd, PROJECT_DIR);
+  let recovered = recoverFromImmatureLockfile(`${result.stdout || ""}${result.stderr || ""}`, PROJECT_DIR);
+  if (!recovered) {
+    const wsPath = join(PROJECT_DIR, "pnpm-workspace.yaml");
+    if (existsSync(wsPath)) {
+      const ws = readFileSync(wsPath, "utf8");
+      const fixed = ws.replace(/:\s*set this to true or false/g, ": true");
+      if (fixed !== ws) {
+        writeFileSync(wsPath, fixed);
+        console.log("  → Normalized pnpm-workspace.yaml (placeholders → true), retrying shadcn");
+        recovered = true;
+      }
+    }
+  }
+  if (!recovered) fail(`Command failed (exit ${result.status}): ${cmd}`);
+
+  if (/shadcn@latest\s+init/.test(cmd)) rmSync(join(PROJECT_DIR, "components.json"), { force: true });
+  const retry = capture(cmd, PROJECT_DIR);
+  if (retry.stdout) process.stdout.write(retry.stdout);
+  if (retry.stderr) process.stderr.write(retry.stderr);
+  if (retry.status !== 0) fail(`Command failed (exit ${retry.status}): ${cmd}`);
 }
 
 function shadcn() {
   log("Installing shadcn/ui");
 
-  // Pre-create pnpm-workspace.yaml with known build-script-using packages
-  // approved. This prevents shadcn's internal `pnpm add` (which pulls in msw via
-  // @base-ui/react transitive deps) from creating a placeholder yaml + exiting
-  // 1 on its FIRST run. If we let that happen, the retry can write the
-  // components but skips `src/lib/utils.ts` (because shadcn init treats
-  // components.json already existing as a "do you want to overwrite?" prompt
-  // that --yes does not auto-accept).
-  const wsPath = join(PROJECT_DIR, "pnpm-workspace.yaml");
-  const existingWs = existsSync(wsPath) ? readFileSync(wsPath, "utf8") : "";
-  // unrs-resolver is a transitive native dep of eslint-config-next (via
-  // eslint-plugin-import-x → @rspack/binding-resolver). It MUST be approved or
-  // any future `pnpm install` (e.g. when the user adds a package) exits with
-  // ERR_PNPM_IGNORED_BUILDS even when `strict-dep-builds=false` is in .npmrc.
-  const knownBuildPkgs = ["msw", "sharp", "esbuild", "@tailwindcss/oxide", "@swc/core", "@parcel/watcher", "unrs-resolver"];
-  const newWs =
-    "allowBuilds:\n" +
-    knownBuildPkgs.map((p) => `  ${p.includes("/") ? `"${p}"` : p}: true`).join("\n") +
-    "\n" +
-    // Both advisories are reached only through next's OWN bundled copies of
-    // postcss and sharp, not the project's direct dependency on either -
-    // verified on a live run (`pnpm audit --prod` reports `.>next>postcss`
-    // and `.>next>sharp`). `pnpm update` cannot move a transitive dep by
-    // itself; pnpm 11 needs this override instead. Drop it once next bundles
-    // patched versions of both.
-    "overrides:\n" +
-    '  postcss: ">=8.5.18"\n' +
-    '  sharp: ">=0.35.0"\n' +
-    // A published-minutes-ago version is how an npm worm reaches a project
-    // (ChainDrop, 2026: 1557 poisoned versions, pulled within hours). pnpm 11
-    // already defaults to 1440; 4320 is the 3-day floor the advisories ask for.
-    // minimumReleaseAgeStrict must stay false: pnpm defaults it to TRUE as soon
-    // as minimumReleaseAge is set explicitly, which turns "the only match is too
-    // new" into a hard install failure in front of a non-technical user.
-    "minimumReleaseAge: 4320\n" +
-    "minimumReleaseAgeStrict: false\n";
-  if (existingWs !== newWs) {
-    writeFileSync(wsPath, newWs);
-    console.log("  → Pre-wrote pnpm-workspace.yaml with known build-script packages approved");
-  }
-
   // npx is required - pnpm dlx fails with ERR_PNPM_NO_IMPORTER_MANIFEST_FOUND
   // because shadcn's CLI probes its cwd via the package-manager context and
   // pnpm's dlx sandbox confuses that detection.
+  //
+  // A leftover components.json (e.g. from a prior failed attempt) turns
+  // init's --yes into an unanswered "overwrite?" prompt that then also skips
+  // writing src/lib/utils.ts - clear it first so init always runs clean.
+  rmSync(join(PROJECT_DIR, "components.json"), { force: true });
   runShadcn("npx shadcn@latest init --defaults --yes");
 
   // Belt-and-suspenders: write src/lib/utils.ts if shadcn didn't (can happen if
@@ -1268,6 +1355,7 @@ function shadcn() {
   // blocked even with --yes). The standard shadcn utils.ts is stable.
   const utilsPath = join(PROJECT_DIR, "src/lib/utils.ts");
   if (!existsSync(utilsPath)) {
+    mkdirSync(join(PROJECT_DIR, "src/lib"), { recursive: true });
     writeFileSync(
       utilsPath,
       `import { clsx, type ClassValue } from "clsx";\nimport { twMerge } from "tailwind-merge";\n\nexport function cn(...inputs: ClassValue[]) {\n  return twMerge(clsx(inputs));\n}\n`,
@@ -1281,6 +1369,7 @@ function shadcn() {
   );
 
   log("Writing LinkButton (shadcn v4 has no asChild)");
+  mkdirSync(join(PROJECT_DIR, "src/components/ui"), { recursive: true });
   writeFileSync(
     join(PROJECT_DIR, "src/components/ui/link-button.tsx"),
     `import Link, { type LinkProps } from "next/link";
@@ -1726,7 +1815,28 @@ async function scwRegistryNamespace() {
     return;
   }
   log("Creating Scaleway Container Registry namespace");
-  registryNamespace = await ensureRegistryNamespace(name, { projectId: scwProjectId });
+  registryNamespace = registryNamespaceOverride
+    ? await ensureRegistryNamespace(registryNamespaceOverride, { exact: true, projectId: scwProjectId })
+    : await ensureRegistryNamespace(name, { projectId: scwProjectId });
+
+  // Registry namespace names are global across all of Scaleway (unlike a
+  // Project or a container, which are only unique within the account), so a
+  // taken slug forces ensureRegistryNamespace() to suffix it. /deploy still
+  // finds the result by prefix (findRegistryNamespace), but the operator
+  // cannot guess the exact name from the app name alone, so it's worth a note.
+  if (registryNamespace.name !== slugify(name)) {
+    const claudeMdPath = join(PROJECT_DIR, "CLAUDE.md");
+    const claudeMd = readFileSync(claudeMdPath, "utf8");
+    const sep = claudeMd.endsWith("\n") ? "\n" : "\n\n";
+    const note =
+      `## Registry namespace\n\n` +
+      `Registry namespace: \`${registryNamespace.name}\` (Container Registry namespace names are global ` +
+      `across all of Scaleway, so the harness suffixes them). \`/deploy\` discovers it automatically; ` +
+      `\`--registry-namespace\` is only needed to override.\n`;
+    writeFileSync(claudeMdPath, claudeMd + sep + note);
+    ok(`Registry namespace note added to CLAUDE.md (suffixed to ${registryNamespace.name})`);
+  }
+
   ok(`Registry namespace ready: ${registryNamespace.endpoint}`);
 }
 
@@ -1968,10 +2078,12 @@ async function scwContainer() {
   containerDomain = created.domain_name || containerDomain;
 
   // No linkage file is written (CONTRACT.md §2, §7: app repos carry no
-  // Scaleway metadata at all). Every later script finds this same container
-  // again by name - the Project resolves by name (resolveProjectId()), the
-  // namespace and container by name within it (ensureNamespace() /
-  // findContainerByName(), both called with `name` again, exactly as above).
+  // Scaleway metadata at all - the name-only Registry namespace note in the
+  // generated CLAUDE.md excepted, CONTRACT.md §2). Every later script finds
+  // this same container again by name - the Project resolves by name
+  // (resolveProjectId()), the namespace and container by name within it
+  // (ensureNamespace() / findContainerByName(), both called with `name`
+  // again, exactly as above).
   ok(`Container deployed and ready: https://${containerDomain}`);
 }
 
@@ -2124,13 +2236,18 @@ await step("smokeTest", smokeTest);
 // the toolchain (CONTRACT.md §7).
 const { owner: ghOwner, repo: ghRepoName } = getGhOwnerRepo();
 
+const registryNote =
+  registryNamespace && registryNamespace.name !== slugify(name)
+    ? `\n   Registry:   ${registryNamespace.name} (suffixed - see CLAUDE.md "Registry namespace")`
+    : "";
+
 console.log(`
 🎉 bootstrap-init complete.
 
    Project:    ${PROJECT_DIR}
    GitHub:     https://github.com/${ghOwner}/${ghRepoName}
    Scaleway:   https://console.scaleway.com/ (Project "${name}"${scwProjectId ? `, ${scwProjectId}` : ""})
-   Live:       ${containerDomain ? `https://${containerDomain}` : "(UNRESOLVED - --skip-deploy was passed, or the container URL was not captured)"}
+   Live:       ${containerDomain ? `https://${containerDomain}` : "(UNRESOLVED - --skip-deploy was passed, or the container URL was not captured)"}${registryNote}
 
 Next: Claude takes over for the cahier-des-charges step, addon invocations
 (add-db to replace the DATABASE_URL placeholder, add-auth, add-email,

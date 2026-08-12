@@ -8,16 +8,18 @@
 // Reference: https://www.scaleway.com/en/developers/api/cockpit/regional-api/
 //
 // queryLogs() is one of CONTRACT.md §3's three documented exceptions and
-// deliberately KEEPS using scwFetch: Cockpit's own API has no "get logs"
+// uses a plain fetch, not scwFetch: Cockpit's own API has no "get logs"
 // endpoint, so the flow is two hops:
 //   1. Cockpit RegionalAPI: create/find a Token (a Cockpit-scoped secret key)
 //      and look up the Project's logs Data Source, whose `url` is a
 //      Loki-compatible base URL (looks like https://logs.cockpit.fr-par.scw.cloud).
 //   2. Talk directly to that URL using the standard Loki HTTP API
 //      (`/loki/api/v1/query_range`) authenticated with the Cockpit token.
-//      This is a different host than api.scaleway.com, with no SDK method for
-//      it at all, so scwFetch()'s absolute-URL passthrough is what makes
-//      step 2 possible.
+//      This is a different host than api.scaleway.com, and live-verified
+//      2026-08: the gateway 403s on X-Auth-Token plus the standard
+//      OAuth-style bearer header (what scwFetch sends by default), and
+//      answers 200 on a bare X-Token header. scwFetch cannot cleanly drop
+//      its default header, so step 2 uses a plain fetch instead.
 //
 // A Cockpit token's secret is a write-once reveal, exactly like an IAM API
 // key: the create response has a `secretKey` field, but nothing else ever
@@ -28,7 +30,7 @@
 // token. This mirrors how DATABASE_URL/IAM keys are handled elsewhere in the
 // harness (CONTRACT.md §4) and avoids leaking a new token on every rerun.
 
-import { api, sdkCall, scwFetch, requireCredentials, ScwError, REGION, slugify } from "./_scw-auth.mjs";
+import { api, sdkCall, requireCredentials, ScwError, REGION, slugify, sleep } from "./_scw-auth.mjs";
 import { getSecret, putSecret, secretExists } from "./secrets.mjs";
 import { pathToFileURL } from "node:url";
 
@@ -110,11 +112,8 @@ function parseSince(since) {
 /**
  * Run a LogQL query against the Project's Cockpit logs Data Source (standard
  * Loki HTTP API, not a Scaleway-specific endpoint - Cockpit's logs backend
- * IS Loki). Sends both `X-Auth-Token` (via scwFetch's `token` option, for
- * consistency with the rest of this codebase) and a standard
- * `Authorization: Bearer` header (what Loki/Grafana normally expect, per
- * Scaleway's own LOKI_BEARER_TOKEN example for logcli) since the gateway's
- * exact header preference isn't documented; harmless to send both.
+ * IS Loki). Authenticates with a bare `X-Token` header - see the file header
+ * for the live-verified reason this is a plain fetch, not scwFetch.
  * Endpoint: GET {logsUrl}/loki/api/v1/query_range?query=&start=&end=&limit=&direction=
  * @param {{query:string, since?:string|Date, limit?:number, opts?:object}} args
  * @returns {Promise<Array<{timestamp:string, labels:object, line:string}>>}
@@ -125,20 +124,47 @@ export async function queryLogs({ query, since, limit = 100, opts } = {}) {
   const start = parseSince(since);
   const end = new Date();
 
-  const res = await scwFetch(`${logsUrl.replace(/\/+$/, "")}/loki/api/v1/query_range`, {
-    method: "GET",
-    token,
-    headers: { Authorization: `Bearer ${token}` },
-    query: {
-      query,
-      start: start.toISOString(),
-      end: end.toISOString(),
-      limit,
-      direction: "backward",
-    },
-  });
+  const url = new URL(`${logsUrl.replace(/\/+$/, "")}/loki/api/v1/query_range`);
+  const params = { query, start: start.toISOString(), end: end.toISOString(), limit, direction: "backward" };
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v));
+  }
+  const headers = { "X-Token": token, "User-Agent": "baudrier" };
 
-  const streams = res?.data?.result || [];
+  const retries = 3;
+  let lastErr, res;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    if (attempt > 0) await sleep(Math.min(500 * 2 ** (attempt - 1), 4000));
+    try {
+      res = await fetch(url, { method: "GET", headers });
+    } catch (e) {
+      lastErr = new ScwError(`network error calling ${url.pathname}: ${e.message}`, { type: "network", apiPath: url.pathname });
+      res = null;
+      continue;
+    }
+    if (res.status === 429 || res.status >= 500) {
+      lastErr = new ScwError(`Cockpit logs API ${res.status} on ${url.pathname}`, { status: res.status, type: "retryable", apiPath: url.pathname });
+      res = null;
+      continue;
+    }
+    break;
+  }
+  if (!res) throw lastErr;
+
+  const text = await res.text();
+  if (!res.ok) {
+    throw new ScwError(`Cockpit logs API ${res.status} on ${url.pathname}: ${text.slice(0, 200)}`, { status: res.status, apiPath: url.pathname });
+  }
+  let parsed = null;
+  if (text) {
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = { raw: text };
+    }
+  }
+
+  const streams = parsed?.data?.result || [];
   const entries = [];
   for (const stream of streams) {
     for (const [tsNanos, line] of stream.values || []) {

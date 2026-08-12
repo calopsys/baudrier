@@ -44,7 +44,7 @@
 //                             token (cannot be auto-disambiguated by affixing;
 //                             suggestions may be empty -> the caller warns).
 
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -73,13 +73,24 @@ if (!/^[a-z0-9][a-z0-9-]{0,48}[a-z0-9]$/.test(NAME)) {
 }
 const P = normalizeName(NAME);
 
+let SELF = null;
+try {
+  SELF = realpathSync(process.cwd());
+} catch {}
+
 // ─── sources ─────────────────────────────────────────────────────────────
 function fromSiblings() {
   try {
     const names = [];
     for (const e of readdirSync(PARENT_DIR, { withFileTypes: true })) {
       if (names.length >= 500) break;
-      if (e.isDirectory() && !e.name.startsWith(".")) names.push(e.name);
+      if (!e.isDirectory() || e.name.startsWith(".")) continue;
+      // /bootstrap runs in place, so the checkout is one of the scanned
+      // siblings; a project must not collide with itself.
+      try {
+        if (realpathSync(join(PARENT_DIR, e.name)) === SELF) continue;
+      } catch {}
+      names.push(e.name);
     }
     return { names, ok: true };
   } catch {

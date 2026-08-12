@@ -15,7 +15,7 @@ check it before re-deriving a Scaleway behaviour from scratch.
 ## The gate
 
 ```bash
-node tools/verify.mjs          # 70 checks, all must pass
+node tools/verify.mjs          # 76 checks, all must pass
 node tools/verify.mjs --only 15,16
 ```
 
@@ -41,7 +41,7 @@ a check that only ever passes is worse than no check.
   and the health check. Both exemptions are load-bearing: a blocked ACME challenge puts a
   custom domain into an unrecoverable `error` state.
 - **Scaleway access goes through the SDK**, never hand-rolled REST. `scw` the binary is
-  used only for credential setup. Two raw-`fetch` exceptions are documented in CONTRACT.md.
+  used only for credential setup. The non-SDK exceptions are documented in CONTRACT.md.
 - **Dependencies resolve through `tools/deps-dir.mjs`.** Nothing else may compute the
   plugin data directory: `CLAUDE_PLUGIN_DATA` reaches hook processes but *not* Bash tool
   calls, which is why the two sides must share one resolver.

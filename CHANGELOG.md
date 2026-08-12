@@ -1,5 +1,50 @@
 # Changelog
 
+## v1.2.3 (2026-08-12)
+
+Bootstrap robustness: fixes six of the seven C-class defects from the live
+1.2.0 run. C7 (the reserved role name `admin`) is deliberately kept as-is:
+the guard prevents a future admin lockout.
+
+### Fixed
+
+- **The supply-chain age floor now precedes the first install.**
+  `writeSupplyChainWorkspaceYaml()` runs in `scaffoldT3()` before
+  `pnpm install`, so the lockfile never captures a version the floor later
+  rejects. When pnpm still hits `ERR_PNPM_NO_MATURE_MATCHING_VERSION` (an
+  exact pin under 3 days old; `strict: false` rescues only ranges),
+  `recoverFromImmatureLockfile()` deletes `pnpm-lock.yaml` and re-resolves
+  once. This also closes the documented gap where the first install ran
+  under a looser floor.
+- **The shadcn step cleans up after itself.** A leftover `components.json`
+  is deleted before init and before the retry (it turned `--yes` into an
+  unanswered overwrite prompt), the retry is captured like the first
+  attempt, and both fallback writes create their parent directories first.
+- **pnpm updates recover headless.** When `pnpm self-update` does not land,
+  the preflight actually runs `npm i -g pnpm@latest`; the generated
+  `.npmrc` pre-answers pnpm 11's modules-purge confirmation
+  (`confirm-modules-purge=false`).
+- **Registry namespaces survive global name collisions.** Names are unique
+  across all of Scaleway, so the harness now creates `<slug>-<8 hex>` by
+  default and both `/bootstrap` and `/deploy` discover the namespace by a
+  name-prefix match within the app's own Project. A suffixed name is noted
+  in the generated CLAUDE.md; a taken name fails with an actionable error;
+  `--registry-namespace` overrides and fails loudly on `/deploy` when the
+  name does not exist.
+- **The name-collision guard no longer reports the checkout itself.** The
+  in-place bootstrap made the project its own sibling; the scan now
+  excludes the current checkout by real path.
+- **Cockpit log queries authenticate.** The Loki gateway accepts only the
+  `X-Token` header (live-verified); `queryLogs` now sends exactly that via
+  a plain fetch instead of the header pair that got 403.
+
+### Added
+
+- **Checks 72-77 in `tools/verify.mjs`**, and check 52 rewritten to pin the
+  new yaml placement (its old placement clause enforced the bug). Check 76
+  is behavioral: it runs the collision guard against the repo's own parent.
+  Each check failed on the pre-fix tree.
+
 ## v1.2.2 (2026-08-12)
 
 Fixes five correctness bugs in generated code, found by the same live run

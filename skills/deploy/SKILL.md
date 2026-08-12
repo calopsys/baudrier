@@ -111,7 +111,7 @@ The first time in this conversation a branch's preview is deployed, tell the use
 
 Invoke `_detect-project-root` to get `PROJECT_NAME` and confirm this is a Next.js project. Note the **git repository root** (usually the current directory; in a monorepo it's above `WEB_DIR`) - `deploy.mjs` needs to run from there, since that's where `.git` lives and where `docker build` reads its context.
 
-There is no workflow file to read a registry namespace out of - the harness itself builds and pushes the image (CONTRACT.md §5), and `deploy.mjs` already defaults `--registry-namespace` to the slugified project name, so you only need to pass it explicitly if this app's registry namespace was ever named differently.
+There is no workflow file to read a registry namespace out of - the harness itself builds and pushes the image (CONTRACT.md §5). `deploy.mjs` discovers this app's registry namespace automatically: it looks, within the app's own Scaleway Project, for a name matching the project's slug (with an optional random suffix added at creation time for global-uniqueness reasons, CONTRACT.md §2). A namespace with a genuinely different name shows up as the `Registry namespace:` line in the project's `CLAUDE.md`. Pass `--registry-namespace <name>` only to force an explicit override - it fails loudly if that exact name does not exist, instead of silently creating a new namespace.
 
 Tell the user briefly what's about to happen:
 > Je vais committer et pousser vos changements, construire et publier l’image, migrer la base de données, puis mettre à jour le site. Ça prend en général quelques minutes.
@@ -179,7 +179,7 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/deploy.mjs" \
   --project-name "<PROJECT_NAME>" > "$LOG_FILE" 2>&1
 ```
 
-`--registry-namespace` defaults to the slugified project name - pass it explicitly only if this app's registry namespace was created under a different name.
+`--registry-namespace` is optional: by default the harness discovers the namespace automatically (see Step 2 above). Pass it only to force an explicit override, naming the exact namespace from the project's `CLAUDE.md` `Registry namespace:` line if it diverges from the slug - an override that does not exist fails loudly instead of creating a new namespace.
 
 The tool returns a `bash_id` (useful for `KillBash` in case of a hang) and an `output-file` (the harness's own capture of the background bash stdout - it contains just the `LOG_FILE=...` line, since the rest is redirected).
 

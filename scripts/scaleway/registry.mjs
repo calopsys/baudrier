@@ -8,9 +8,18 @@
 // pushed by CI stays forever and keeps costing storage until something
 // deletes it. pruneTags() below is that "something"; CONTRACT.md §1 says to
 // call it explicitly after every successful deploy.
+//
+// Namespace names are unique across ALL of Scaleway, not just this Project or
+// this organization (live-verified 2026-08: an unrelated org already owned an
+// app's plain slug). ensureRegistryNamespace() therefore creates a namespace
+// as `<slug>-<8 hex>` by default, and findRegistryNamespace() discovers it
+// again later by a name-prefix match within the app's own Project - CONTRACT.md
+// §2 assumes one Scaleway Project per app, so nothing needs a persisted
+// linkage file for this.
 
-import { REGION, api, sdkCall, requireCredentials, slugify } from "./_scw-auth.mjs";
+import { randomBytes } from "node:crypto";
 import { pathToFileURL } from "node:url";
+import { REGION, ScwError, api, sdkCall, requireCredentials, slugify } from "./_scw-auth.mjs";
 
 /* ----------------------------------------------------------------- helpers */
 
@@ -18,33 +27,121 @@ async function registryApi() {
   return api("Registry", "v1");
 }
 
+/** Is `e` a create-time "name already taken" failure, as opposed to any other error? */
+function isNameConflict(e) {
+  return (e?.status === 400 || e?.status === 409) && /already\s*exist/i.test(e?.message || "");
+}
+
 /* ------------------------------------------------------------------ namespaces */
 
 /**
- * Find-or-create a Container Registry namespace by (slugified) name.
+ * Find an existing registry namespace for `baseName` within the Project.
+ *
+ * Matches the bare slug or the slug plus the 8-hex-char suffix
+ * `ensureRegistryNamespace` mints by default - a random suffix breaks a
+ * plain find-or-create, so discovery falls back to a prefix match, which
+ * also picks up a pre-existing bare-slug namespace from before this scheme.
+ *
+ * @param {string} baseName
+ * @param {object} [opts]
+ * @param {string} [opts.projectId]
+ * @param {string} [opts.region]
+ * @returns {Promise<{id:string, name:string, endpoint:string}|null>}
+ */
+export async function findRegistryNamespace(baseName, opts = {}) {
+  const region = opts.region || REGION;
+  const creds = requireCredentials();
+  const projectId = opts.projectId || creds.projectId;
+  const slug = slugify(baseName);
+  const registry = await registryApi();
+
+  const existing = await sdkCall(() => registry.listNamespaces({ region, projectId }).all());
+  const pattern = new RegExp(`^${slug}(-[0-9a-f]{8})?$`);
+  const matches = existing.filter((n) => pattern.test(n.name));
+  if (matches.length === 0) return null;
+
+  // More than one match should not happen (one Project per app) - prefer the
+  // exact slug over a suffixed one, else take the first.
+  const hit = matches.find((n) => n.name === slug) || matches[0];
+  return { id: hit.id, name: hit.name, endpoint: hit.endpoint };
+}
+
+/**
+ * Resolve a Container Registry namespace by name, with three modes:
+ *   - `opts.exact === true`: find-or-create exactly `slugify(name)` (no
+ *     suffix). A create-time name conflict still throws `registry_name_taken`.
+ *   - `opts.createIfMissing === false`: resolve only, via
+ *     `findRegistryNamespace` - throws `registry_namespace_not_found` when
+ *     absent instead of creating one.
+ *   - default: `findRegistryNamespace(name)` first; if found, return it; else
+ *     create `<slug>-<8 hex>` (global uniqueness, see file header). A
+ *     create-time conflict on that suffixed name retries once with a fresh
+ *     suffix before giving up as `registry_name_taken`.
  * @returns {Promise<{id:string, name:string, endpoint:string}>}
  */
 export async function ensureRegistryNamespace(name, opts = {}) {
   const region = opts.region || REGION;
   const creds = requireCredentials();
   const projectId = opts.projectId || creds.projectId;
-  const slug = slugify(name);
   const registry = await registryApi();
+  const description = opts.description ?? "";
+  const isPublic = opts.isPublic ?? false;
 
-  const existing = await sdkCall(() => registry.listNamespaces({ region, name: slug, projectId }).all());
-  const hit = existing.find((n) => n.name === slug);
-  if (hit) return { id: hit.id, name: hit.name, endpoint: hit.endpoint };
+  async function create(candidateName) {
+    const created = await sdkCall(() =>
+      registry.createNamespace({ region, name: candidateName, projectId, description, isPublic }),
+    );
+    return { id: created.id, name: created.name, endpoint: created.endpoint };
+  }
 
-  const created = await sdkCall(() =>
-    registry.createNamespace({
-      region,
-      name: slug,
-      projectId,
-      description: opts.description ?? "",
-      isPublic: opts.isPublic ?? false,
-    }),
+  if (opts.exact) {
+    const slug = slugify(name);
+    const existing = await sdkCall(() => registry.listNamespaces({ region, name: slug, projectId }).all());
+    const hit = existing.find((n) => n.name === slug);
+    if (hit) return { id: hit.id, name: hit.name, endpoint: hit.endpoint };
+
+    try {
+      return await create(slug);
+    } catch (e) {
+      if (!isNameConflict(e)) throw e;
+      throw new ScwError(
+        `Registry namespace "${slug}" is already taken on Scaleway. Registry namespace names are unique across ` +
+          "ALL of Scaleway - all organizations, not just this Project (live-verified 2026-08). " +
+          "Pass --registry-namespace <other-name> to force a different name.",
+        { type: "registry_name_taken", details: { tried: [slug] } },
+      );
+    }
+  }
+
+  if (opts.createIfMissing === false) {
+    const found = await findRegistryNamespace(name, { projectId, region });
+    if (found) return found;
+    throw new ScwError(
+      `Registry namespace not found for "${name}" (slug "${slugify(name)}") in project ${projectId}.`,
+      { type: "registry_namespace_not_found" },
+    );
+  }
+
+  const found = await findRegistryNamespace(name, { projectId, region });
+  if (found) return found;
+
+  const slug = slugify(name);
+  const tried = [];
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const candidate = `${slug}-${randomBytes(4).toString("hex")}`;
+    tried.push(candidate);
+    try {
+      return await create(candidate);
+    } catch (e) {
+      if (!isNameConflict(e)) throw e;
+    }
+  }
+  throw new ScwError(
+    `Every candidate registry namespace name was already taken on Scaleway (tried: ${tried.join(", ")}). ` +
+      "Registry namespace names are unique across ALL of Scaleway - all organizations, not just this Project " +
+      "(live-verified 2026-08). Pass --registry-namespace <other-name> to force a specific one.",
+    { type: "registry_name_taken", details: { tried } },
   );
-  return { id: created.id, name: created.name, endpoint: created.endpoint };
 }
 
 /**
