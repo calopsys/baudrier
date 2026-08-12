@@ -32,17 +32,22 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/setup-auth-users.mjs" \
   --web-dir "<WEB_DIR>"
 ```
 
-The script runs 15 sub-steps: preflight (refuses if `auth.ts` exists), email detection (via `_check-deps email`), install `next-auth@beta` + `@auth/drizzle-adapter`, AUTH_SECRET generation, schema patch (imports `pgTable/text/integer/primaryKey/index` + `AdapterAccount` type, append 4 NextAuth tables + optional `password_reset_tokens` if email), `drizzle-kit generate` (writes the SQL migration, no DB connection - applied by the next `/deploy`), write `password.ts`, write `auth.ts` (marker `// baudrier:auth-modes users`, `Session.user.id` non-nullable via module augmentation), creation of `rate-limit.ts` + `rateLimitedProcedure` if missing (standalone case), adding `protectedProcedure` to `trpc.ts` if missing, write tRPC router (variant chosen based on `emailOk`: `auth-router.ts` or `auth-router-with-reset.ts`, the latter sending via Scaleway Transactional Email), register `authRouter` in `root.ts`, write API route with rate limiting, write pages (signin/signup/dashboard/account + forgot-password/reset-password if email), push AUTH_SECRET.
+The script runs 16 sub-steps: preflight (refuses if `auth.ts` exists), email detection (via `_check-deps email`), install `next-auth@beta` + `@auth/drizzle-adapter`, AUTH_SECRET generation, schema patch (imports `pgTable/text/integer/primaryKey/index` + `AdapterAccount` type, append 4 NextAuth tables + optional `password_reset_tokens` if email), `drizzle-kit generate` (writes the SQL migration, no DB connection - applied by the next `/deploy`), write `password.ts`, write `auth.ts` (marker `// baudrier:auth-modes users`, `Session.user.id` non-nullable via module augmentation), creation of `rate-limit.ts` + `rateLimitedProcedure` if missing (standalone case), adding `protectedProcedure` to `trpc.ts` if missing, write tRPC router (variant chosen based on `emailOk`: `auth-router.ts` or `auth-router-with-reset.ts`, the latter sending via Scaleway Transactional Email), register `authRouter` in `root.ts`, write API route with rate limiting, write pages (signin/signup/dashboard/account + forgot-password/reset-password if email), push AUTH_SECRET, `pnpm tsc --noEmit` sanity check.
 
 ### During execution
 
 The script prints live:
 - `▸ <step>` then `✅ <result>` / `⚠️ <warning>` (notably if `rate-limit.ts` is created in standalone)
-- At the end, a structured **handoff banner** (15/15 sub-steps expected)
+- At the end, a structured **handoff banner** (16/16 sub-steps expected)
 - On the last line on success, a parseable JSON object:
   ```json
-  {"success":true,"authMode":"users","emailReset":bool,"emailProvider":"tem|none","envVars":["AUTH_SECRET"]}
+  {"success":true,"authMode":"users","emailReset":bool,"emailProvider":"tem|none","envVars":["AUTH_SECRET"],"tscOk":true,"warnings":[]}
   ```
+
+`tscOk` reports the `pnpm tsc --noEmit` result. `success:true` with `tscOk:false` means the work
+is NOT done: read the tsc output printed above the JSON, then fix the errors, or, if they are
+pre-existing and unrelated to `/add-auth`, say so plainly to the user. Do not summarise success
+before this check. Relay any relevant entries from `warnings` to the user in plain language.
 
 ### On success
 
@@ -59,6 +64,7 @@ Capture `emailReset` and `emailProvider` from the JSON for the summary. Move on 
    - `generateMigration` failed → `schema.ts` doesn't compile for drizzle-kit (the step opens no DB connection, so `DATABASE_URL` is never the cause) → fix the schema then `cd <WEB_DIR> && npx drizzle-kit generate` by hand.
    - `writeAuthRouter` / `writeAuthTs` / other `write*` failed → filesystem permission (rare).
    - `pushEnvVars` failed → all the code is in place, only AUTH_SECRET didn't land → rerun manually with the value visible in the logs.
+   - `tscCheck` failed → the project does not compile → read the tsc output; the code is all written, so continue manually from there.
 4. Continue manually.
 
 ---

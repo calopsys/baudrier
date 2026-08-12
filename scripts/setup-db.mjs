@@ -66,12 +66,16 @@ import { devDbCredentials } from "./scaleway/app-credentials.mjs";
 // business doing - see scripts/scaleway/iam.mjs header comment.
 const DB_PERMISSION_SETS = ["ServerlessSQLDatabaseReadWrite"];
 
-// Per-request delegation: the operator's own key mints its own IAM access
-// when it can. When it cannot (no IAMManager), the operator's personal key
-// powers the database connection instead (see scripts/scaleway/app-credentials.mjs) -
-// so this message is now a RARE last resort, only reached when even the
-// personal-key fallback fails (devDbCredentials()'s principal cannot be
-// resolved). It is the forwardable French request for that rare handover.
+// Per-request delegation, in order: (1) the operator's own key mints its own
+// IAM access when it can (Cas A); (2) BAUDRIER_DB_KEY, an admin-delegated key
+// already sitting in Secret Manager; (3) devDbCredentials()
+// (scripts/scaleway/app-credentials.mjs), which reads SCW_DEFAULT_APPLICATION_ID
+// first and falls back to an IAM self-read only when that is unset; (4) if
+// devDbCredentials() cannot resolve an application id this way, it throws
+// "needs_application_id" and that error propagates untouched - self-service,
+// the operator sets one env var and reruns. The message below is the true
+// last resort: an admin handover, reached only when devDbCredentials() fails
+// for a reason the operator cannot fix alone.
 const NEEDS_ADMIN_DB_MESSAGE =
   "Ni votre clé Scaleway ni votre clé personnelle ne permettent de créer les accès de la base de données. " +
   "Ce cas est rare : contactez le support si vous le rencontrez. " +
@@ -297,8 +301,9 @@ async function ensureIamAccess() {
       let dev;
       try {
         dev = await devDbCredentials();
-      } catch {
-        throw new ScwError(NEEDS_ADMIN_DB_MESSAGE, {
+      } catch (devErr) {
+        if (devErr?.type === "needs_application_id") throw devErr;
+        throw new ScwError(`${NEEDS_ADMIN_DB_MESSAGE} (${devErr?.message || devErr})`, {
           type: "needs_admin",
           details: {
             recipe: "db",
@@ -306,6 +311,7 @@ async function ensureIamAccess() {
             appName: `${name}-db`,
             permissionSets: DB_PERMISSION_SETS,
             projectId: creds.projectId,
+            cause: devErr?.message,
           },
         });
       }

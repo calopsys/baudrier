@@ -98,14 +98,16 @@ async function resolveDelegatedDbKey(creds) {
     try {
       const dev = await devDbCredentials();
       return { applicationId: dev.principalId, secretKey: dev.secretKey, devFallback: true };
-    } catch {
-      throw new ScwError(NEEDS_ADMIN_DB_MESSAGE, {
+    } catch (devErr) {
+      if (devErr?.type === "needs_application_id") throw devErr;
+      throw new ScwError(`${NEEDS_ADMIN_DB_MESSAGE} (${devErr?.message || devErr})`, {
         type: "needs_admin",
         details: {
           recipe: "db",
           secretName: DELEGATED_DB_KEY_SECRET_NAME,
           permissionSets: ["ServerlessSQLDatabaseReadWrite"],
           projectId: creds.projectId,
+          cause: devErr?.message,
         },
       });
     }

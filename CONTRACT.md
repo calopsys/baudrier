@@ -405,6 +405,7 @@ any platform.
 | `SCW_DEFAULT_ORGANIZATION_ID` | Scaleway Organization |
 | `SCW_DEFAULT_REGION` | always `fr-par`; this is the default applied when unset |
 | `SCW_DEFAULT_PROJECT_ID` | Cas A: optional override, skips the by-name Project lookup and targets this Project id directly. Cas B: mandatory - a Project-scoped key cannot list Projects, so this is the only way it declares which Project it owns (§1) |
+| `SCW_DEFAULT_APPLICATION_ID` | Cas B: the id of the IAM application that bears the key (not a secret). Optional but recommended: it removes the only IAM read the database path needs - a Cas B key cannot read its own IAM record (§1: the shape probe defines Cas B by that 403), and Serverless SQL uses the principal id as the database username (§4). Absent, `/add-db` raises `needs_application_id` with self-service console steps. Cas A: ignored (check 78) |
 
 **Per-app scope resolves by Scaleway Project id or name, never by a stored
 file.** App repos carry **no Scaleway metadata at all** -
@@ -980,7 +981,11 @@ Manager and the containers it is synced into. `/add-auth`, `/add-role` and
 `/add-2fa` follow the same rule: their setup scripts run `drizzle-kit
 generate` only, and the role backfill ships as an `UPDATE` appended to the
 generated migration file, never as a live statement from this machine
-(`tools/verify.mjs` check 66).
+(`tools/verify.mjs` check 66). Enforcement of this rule is static, in
+check 66 (`drizzle-kit push|studio|migrate` and tsx/ts-node spawns are
+banned in scripts): `_destructive-guard.mjs` cannot help here - it guards
+Scaleway API calls inside the SDK wrappers and has no way to intercept a
+child process.
 
 **Stored data is an optimisation, not a dependency.** Because there is no
 REAL `DATABASE_URL` on the operator's machine (only the harmless
@@ -1320,6 +1325,17 @@ and the templates no longer list it.
 ---
 
 ## 8. Definition of done
+
+**Why there is no end-to-end run in the gate** (decided 2026-08-13, after
+the live-run defect waves): a fresh-scaffold run of
+`bootstrap → add-db → add-auth → add-role → add-2fa` needs a reachable git
+remote even with `--skip-deploy` (the preflight `ls-remote` gate), the npm
+registry at several stages, and live Scaleway credentials for every `scw*`
+step - none of which the gate may depend on. The setup scripts also execute
+their pipeline at import time, so nothing is importable for a lighter
+harness. The substitute is deliberate: static pins for every past
+regression class, plus fixture-spawn behavioral checks (67, 76) where a
+script can run against a synthetic directory.
 
 `node tools/verify.mjs` must exit 0. It checks: every `.mjs` parses, every
 relative import resolves, every `scripts/...` path named in a `SKILL.md` exists,

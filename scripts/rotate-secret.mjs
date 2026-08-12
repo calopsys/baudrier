@@ -286,13 +286,14 @@ async function rotateDatabaseUrl({ projectName, target, branch }) {
       raw = await getSecret(DELEGATED_DB_KEY_SECRET_NAME);
     } catch (secretErr) {
       if (secretErr?.type !== "not_found") throw secretErr;
-      throw new ScwError(needsAdminDbRotationMessage(projectName), {
+      throw new ScwError(`${needsAdminDbRotationMessage(projectName)} (${e?.message || e})`, {
         type: "needs_admin",
         details: {
           recipe: "rotation",
           appName,
           key: secretName,
           secretName: DELEGATED_DB_KEY_SECRET_NAME,
+          cause: e?.message,
         },
       });
     }

@@ -35,14 +35,19 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/setup-2fa.mjs" \
   --web-dir "<WEB_DIR>"
 ```
 
-7 sub-steps (preflight, install otpauth + qrcode, TOTP secret, backup codes, writing the code, **storage in Scaleway Secret Manager** + scan QR, push of the environment variables). Ends with a handoff banner + JSON:
-`{"success":true,"storedIn":"secretmanager|file","secretName":"<NAME>_2FA","qrPath":"…/.2fa-setup/qrcode.png"}`
+8 sub-steps (preflight, install otpauth + qrcode, TOTP secret, backup codes, writing the code, **storage in Scaleway Secret Manager** + scan QR, push of the environment variables, `pnpm tsc --noEmit` sanity check). Ends with a handoff banner + JSON:
+`{"success":true,"storedIn":"secretmanager|file","secretName":"<NAME>_2FA","qrPath":"…/.2fa-setup/qrcode.png","tscOk":true,"warnings":[]}`
 
 Relay it in plain language (`↳ Generating your secret…`, `↳ Storing your keys securely…`).
 
+`tscOk` reports the `pnpm tsc --noEmit` result. `success:true` with `tscOk:false` means the work
+is NOT done: read the tsc output printed above the JSON, then fix the errors, or, if they are
+pre-existing and unrelated to `/add-2fa`, say so plainly to the user. Do not summarise success
+before this check. Relay any relevant entries from `warnings` to the user in plain language.
+
 **On success**: capture `storedIn`, `secretName`, `qrPath`. Move on to Step 3.
 
-**On failure**: read the error above the banner (`❌ Failed at: <step>`, maps 1:1 to a function in `setup-2fa.mjs`). Causes: preflight (no admin auth / 2FA already present), install (pnpm/network), env push. If `src/lib/rate-limit.ts` was missing (a project that ran `/add-auth` outside of bootstrap), the script **creates a minimal one automatically** while writing the code: no more broken build.
+**On failure**: read the error above the banner (`❌ Failed at: <step>`, maps 1:1 to a function in `setup-2fa.mjs`). Causes: preflight (no admin auth / 2FA already present), install (pnpm/network), env push. If `src/lib/rate-limit.ts` was missing (a project that ran `/add-auth` outside of bootstrap), the script **creates a minimal one automatically** while writing the code: no more broken build. `tscCheck` failed → the project does not compile - read the tsc output; the code is all written, so continue manually from there.
 
 ---
 

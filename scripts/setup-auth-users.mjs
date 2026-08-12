@@ -17,7 +17,7 @@
 //   - Live logs: ▸ <step>, ✅ <result>, ⚠️ <warning>
 //   - Handoff banner at the end
 //   - Last line on success: JSON Claude can parse:
-//       {"success":true,"authMode":"users","emailReset":bool,"emailProvider":"tem|none","envVars":["AUTH_SECRET"]}
+//       {"success":true,"authMode":"users","emailReset":bool,"emailProvider":"tem|none","envVars":["AUTH_SECRET"],"tscOk":true,"warnings":[]}
 
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
@@ -64,6 +64,7 @@ const STEPS = [
   "writeApiRoute",
   "writeAuthPages",
   "pushEnvVars",
+  "tscCheck",
 ];
 const completed = [];
 const warnings = [];
@@ -73,6 +74,7 @@ const state = {
   emailOk: false,
   emailProvider: "none", // "tem" | "none" - Scaleway Transactional Email is the only provider
   migrationFiles: [],
+  tscOk: null,
 };
 
 async function step(stepName, fn) {
@@ -670,6 +672,24 @@ async function pushEnvVars() {
   ok("AUTH_SECRET pushed");
 }
 
+// ─── Step 14: tsc check ───────────────────────────────────────────────
+async function tscCheck() {
+  log("Running pnpm tsc --noEmit (sanity check)");
+  const res = capture("pnpm tsc --noEmit", WEB_DIR);
+  state.tscOk = res.status === 0;
+  if (!state.tscOk) {
+    if (res.stdout) console.log(res.stdout);
+    if (res.stderr) console.log(res.stderr);
+    warn(
+      "tsc reported errors. Auth is in place but the project doesn't compile cleanly. " +
+        "Common causes: a pre-existing TS error unrelated to /add-auth, or a layout/page our " +
+        "patches didn't fully cover. Ask Claude to investigate the tsc output.",
+    );
+  } else {
+    ok("Type check passed");
+  }
+}
+
 // ─── MAIN ─────────────────────────────────────────────────────────────
 await step("preflight", preflight);
 await step("detectEmail", detectEmail);
@@ -686,6 +706,7 @@ await step("registerAuthRouter", registerAuthRouter);
 await step("writeApiRoute", writeApiRoute);
 await step("writeAuthPages", writeAuthPages);
 await step("pushEnvVars", pushEnvVars);
+await step("tscCheck", tscCheck);
 
 dumpHandoff(true);
 
@@ -723,5 +744,7 @@ console.log(
     emailProvider: state.emailProvider,
     envVars: ["AUTH_SECRET"],
     migrationFiles: state.migrationFiles,
+    tscOk: state.tscOk,
+    warnings,
   }),
 );

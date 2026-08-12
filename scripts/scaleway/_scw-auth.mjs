@@ -47,6 +47,9 @@ export function loadCredentials() {
     secretKey: process.env.SCW_SECRET_KEY,
     projectId: process.env.SCW_DEFAULT_PROJECT_ID,
     organizationId: process.env.SCW_DEFAULT_ORGANIZATION_ID,
+    // Cas B only: the IAM application id that bears the key. A Cas B key
+    // cannot read its own IAM record, so this is the self-serve alternative.
+    applicationId: process.env.SCW_DEFAULT_APPLICATION_ID,
     region: process.env.SCW_DEFAULT_REGION || REGION,
     source: "environment",
   };

@@ -91,6 +91,8 @@ SCW_DEFAULT_REGION=fr-par
 
 Si vous suivez le **Cas B**, ajoutez aussi `SCW_DEFAULT_PROJECT_ID=<l’identifiant de projet transmis par votre administrateur>`. Cette variable est obligatoire dans ce cas : votre clé est limitée à un seul Projet et ne peut pas lister ceux de l’organisation.
 
+Ajoutez aussi `SCW_DEFAULT_APPLICATION_ID=<l’identifiant de l’application IAM transmis par votre administrateur>`. Cette variable n’est pas secrète : c’est l’identifiant de l’application IAM qui porte votre clé. En Cas B, elle évite à Baudrier la seule lecture IAM dont la base de données a besoin. En Cas A, elle est ignorée.
+
 Ces valeurs sont visibles par toute personne qui utilise cet environnement cloud. Sur un environnement personnel, cela veut dire vous seul(e). Claude Code ne propose aucun autre coffre-fort de secrets pour cet usage : c’est le mécanisme prévu.
 
 **3. Script de configuration**

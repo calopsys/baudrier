@@ -53,14 +53,17 @@ Votre collaborateur vous transmet le nom qu’il a choisi pour son application, 
 4. Générez une clé API pour cette application, **sans date d’expiration**. Vous obtenez une
    paire clé d’accès / clé secrète. La clé secrète ne s’affiche qu’une fois, à la création.
 5. Transmettez à votre collaborateur, par un canal de confiance : la **clé d’accès**, la
-   **clé secrète**, l’**identifiant du Projet** créé à l’étape 1 et l’**identifiant de
-   l’organisation**. Il les colle dans les variables d’environnement de son environnement
-   cloud « Baudrier » (`SCW_ACCESS_KEY`, `SCW_SECRET_KEY`, `SCW_DEFAULT_PROJECT_ID`,
-   `SCW_DEFAULT_ORGANIZATION_ID`), puis démarre une nouvelle conversation.
+   **clé secrète**, l’**identifiant du Projet** créé à l’étape 1, l’**identifiant de
+   l’organisation** et l’**identifiant de l’application IAM** créée à l’étape 2. Il les colle
+   dans les variables d’environnement de son environnement cloud « Baudrier »
+   (`SCW_ACCESS_KEY`, `SCW_SECRET_KEY`, `SCW_DEFAULT_PROJECT_ID`,
+   `SCW_DEFAULT_ORGANIZATION_ID`, `SCW_DEFAULT_APPLICATION_ID`), puis démarre une nouvelle
+   conversation. La base de données Serverless SQL utilise cet identifiant d’application
+   comme nom d’utilisateur ; la clé ne peut pas le lire elle-même.
 
-Baudrier ne vous sollicite plus après cette étape. Il n’y a plus de seconde demande au
-moment de `/publish` : cette commande ne fait plus que retirer la restriction d’IP, elle ne
-change jamais de clé.
+Baudrier ne vous sollicite plus après cette étape, sauf le cas rare décrit ci-dessous. Il
+n’y a plus de seconde demande au moment de `/publish` : cette commande ne fait plus que
+retirer la restriction d’IP, elle ne change jamais de clé.
 
 ## Renouveler la clé
 
@@ -72,3 +75,27 @@ environnement cloud et redéployé son application.
 Votre collaborateur ne peut pas faire ce renouvellement lui-même. La commande
 `/rotate-secret` détecte cette forme de clé, s’arrête, et lui donne le message à vous
 transmettre.
+
+## Cas rare - créer l’accès base de données à la main (`BAUDRIER_DB_KEY`)
+
+Ce cas est rare : dernier recours, il ne se présente que si la clé propre de votre
+collaborateur ne porte pas le droit de créer elle-même l’accès de sa base de données.
+Baudrier le détecte et lui donne le message à vous transmettre.
+
+Faites ceci, une seule fois par application concernée :
+
+1. Dans **IAM → Applications → Créer une application**, créez une application dédiée
+   (nom suggéré : `<nom>-db`).
+2. Créez une politique attachée à cette application, avec **une seule règle**, à l’échelle
+   **du Projet** de cette application, portant la permission
+   `ServerlessSQLDatabaseReadWrite`.
+3. Générez une clé API pour cette application, **sans date d’expiration**.
+4. Dans le Secret Manager du Projet, créez un secret nommé `BAUDRIER_DB_KEY` contenant ce
+   JSON, avec l’identifiant de l’application de l’étape 1 et la clé secrète de l’étape 3 :
+
+   ```json
+   {"application_id":"...","secret_key":"..."}
+   ```
+
+Baudrier lit ce secret tout seul à la prochaine tentative de votre collaborateur ; il n’a
+rien d’autre à faire de son côté.

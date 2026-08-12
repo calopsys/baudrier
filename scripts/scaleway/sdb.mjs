@@ -99,17 +99,22 @@ export const DB_CPU_MAX_DEFAULT = 5;
  * Find-or-create a Serverless SQL Database by name (idempotent).
  * Endpoint: GET  /serverless-sqldb/v1alpha1/regions/{region}/databases  (find, filtered by name)
  *           POST /serverless-sqldb/v1alpha1/regions/{region}/databases  (create, if not found)
+ *
+ * minCpu/maxCpu apply on create only - calling this again on an existing
+ * database is a pure find, and its bounds do not change. Use
+ * setDatabaseCpuBounds() (/scale, or an explicit CLI flag below) to change
+ * the bounds of a database that already exists.
  * @param {string} name
  * @param {object} [o]
- * @param {number} [o.minCpu=0]   cpu_min
- * @param {number} [o.maxCpu=5]   cpu_max (harness default - the API's own is 15)
+ * @param {number} [o.minCpu=0]   cpu_min, applied on create only
+ * @param {number} [o.maxCpu=5]   cpu_max (harness default - the API's own is 15), applied on create only
  * @param {object} [o.opts]       {projectId, organizationId} overrides
- * @returns {Promise<{id,name,dbName,endpoint,port,status}>}
+ * @returns {Promise<{id,name,dbName,endpoint,port,status,created}>}
  */
 export async function ensureDatabase(name, { minCpu = DB_CPU_MIN_DEFAULT, maxCpu = DB_CPU_MAX_DEFAULT, opts = {} } = {}) {
   const slug = slugify(name);
   const found = await getDatabase(slug, opts);
-  if (found) return found;
+  if (found) return { ...found, created: false };
 
   const creds = requireCredentials();
   const dbApi = await api(SDB_PRODUCT, SDB_VERSION);
@@ -124,7 +129,7 @@ export async function ensureDatabase(name, { minCpu = DB_CPU_MIN_DEFAULT, maxCpu
       cpuMax: maxCpu,
     }),
   );
-  return normalize(created);
+  return { ...normalize(created), created: true };
 }
 
 /**
@@ -265,6 +270,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     const i = rest.indexOf(`--${name}`);
     return i >= 0 && rest[i + 1] !== undefined ? rest[i + 1] : def;
   };
+  const hasFlag = (name) => rest.includes(`--${name}`);
 
   (async () => {
     try {
@@ -273,10 +279,19 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
           const name = rest[0];
           if (!name) throw new Error("usage: sdb.mjs ensure <name> [--min-cpu N] [--max-cpu N]");
           console.log(`▸ ensuring Serverless SQL Database "${name}"...`);
-          const db = await ensureDatabase(name, {
-            minCpu: Number(flag("min-cpu", 0)),
-            maxCpu: Number(flag("max-cpu", 15)),
-          });
+          const minCpu = Number(flag("min-cpu", DB_CPU_MIN_DEFAULT));
+          const maxCpu = Number(flag("max-cpu", DB_CPU_MAX_DEFAULT));
+          let db = await ensureDatabase(name, { minCpu, maxCpu });
+          // ensureDatabase() applies minCpu/maxCpu on create only - an
+          // explicit flag against an existing database needs its own call.
+          const minExplicit = hasFlag("min-cpu");
+          const maxExplicit = hasFlag("max-cpu");
+          if (!db.created && (minExplicit || maxExplicit)) {
+            const nextMin = minExplicit ? minCpu : db.cpuMin;
+            const nextMax = maxExplicit ? maxCpu : db.cpuMax;
+            console.log(`▸ applying explicit CPU bounds to existing database ${db.id}: min=${nextMin} max=${nextMax}...`);
+            db = await setDatabaseCpuBounds(name, { minCpu: nextMin, maxCpu: nextMax });
+          }
           console.log(`✅ database ${db.id} (status: ${db.status})`);
           console.log(JSON.stringify(db));
           break;

@@ -67,11 +67,12 @@ const STEPS = [
   "patchSignOut",
   "storeSecrets",
   "pushEnvVars",
+  "tscCheck",
 ];
 const completed = [];
 const warnings = [];
 let current = null;
-const state = { base32: null, otpauthUrl: null, backupCodes: [], backupHashes: [], qrPath: null, storedIn: null, migrationFiles: [] };
+const state = { base32: null, otpauthUrl: null, backupCodes: [], backupHashes: [], qrPath: null, storedIn: null, migrationFiles: [], tscOk: null };
 
 // Recognized src/lib/rate-limit.ts variants (see templates/2fa/rate-limit.ts
 // for the DB-backed one and scripts/setup-security.mjs for the memory-only
@@ -437,6 +438,23 @@ async function pushEnvVars() {
   ok("Env vars pushed");
 }
 
+async function tscCheck() {
+  log("Running pnpm tsc --noEmit (sanity check)");
+  const res = run("pnpm tsc --noEmit", WEB_DIR, { capture: true, allowFail: true });
+  state.tscOk = res.status === 0;
+  if (!state.tscOk) {
+    if (res.stdout) console.log(res.stdout);
+    if (res.stderr) console.log(res.stderr);
+    warn(
+      "tsc reported errors. 2FA is in place but the project doesn't compile cleanly. " +
+        "Common causes: a pre-existing TS error unrelated to /add-2fa, or a layout/page our " +
+        "patches didn't fully cover. Ask Claude to investigate the tsc output.",
+    );
+  } else {
+    ok("Type check passed");
+  }
+}
+
 // ─── main ─────────────────────────────────────────────────────────────
 await step("preflight", preflight);
 await step("installDeps", installDeps);
@@ -448,6 +466,7 @@ await step("writeCode", writeCode);
 await step("patchSignOut", patchSignOut);
 await step("storeSecrets", storeSecrets);
 await step("pushEnvVars", pushEnvVars);
+await step("tscCheck", tscCheck);
 
 dumpHandoff();
 console.log(`
@@ -477,5 +496,7 @@ console.log(
     qrPath: state.qrPath,
     migrationFiles: state.migrationFiles,
     envVars: ["ADMIN_TOTP_SECRET", "ADMIN_2FA_BACKUP_HASHES"],
+    tscOk: state.tscOk,
+    warnings,
   }),
 );

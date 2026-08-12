@@ -60,14 +60,20 @@ Scaleway credentials are **environment variables only, never collected in chat**
 **Presence check:**
 
 ```bash
-node -e 'for (const k of ["SCW_ACCESS_KEY","SCW_SECRET_KEY","SCW_DEFAULT_ORGANIZATION_ID","SCW_DEFAULT_REGION"]) console.log(k + "=" + (process.env[k] ? "set" : "MISSING"))'
+node -e 'for (const k of ["SCW_ACCESS_KEY","SCW_SECRET_KEY","SCW_DEFAULT_ORGANIZATION_ID","SCW_DEFAULT_REGION","SCW_DEFAULT_PROJECT_ID"]) console.log(k + "=" + (process.env[k] ? "set" : "MISSING"))'
 ```
 
-If any line says `MISSING`, **stop here** - do not ask the user to paste anything into the chat. Say, in French:
+If `SCW_ACCESS_KEY`, `SCW_SECRET_KEY`, `SCW_DEFAULT_ORGANIZATION_ID`, or `SCW_DEFAULT_REGION` says `MISSING`, **stop here** - do not ask the user to paste anything into the chat. Say, in French:
 
 > ⚠️ Il manque au moins une variable Scaleway dans cet environnement. Ouvrez le tableau de bord Claude Code, modifiez l’environnement cloud « Baudrier », et complétez les variables `SCW_ACCESS_KEY`, `SCW_SECRET_KEY`, `SCW_DEFAULT_ORGANIZATION_ID`, `SCW_DEFAULT_REGION` (le détail exact est dans le chapitre Installation du README). Une fois enregistré, **démarrez une NOUVELLE conversation** : celle-ci ne peut pas relire les variables d’un environnement modifié pendant qu’elle tournait déjà.
 
-If all four are present, validate them live with one real API call:
+`SCW_DEFAULT_PROJECT_ID` reporting `MISSING` here is not fatal by itself: it is mandatory
+only in Cas B, and the Rights check below already catches a Cas B member who forgot it,
+with its own message. `SCW_DEFAULT_APPLICATION_ID` is optional too, and not part of this
+list: when present, the database path skips its one IAM read entirely; when absent,
+`/add-db` can still ask for it later if it turns out to be needed.
+
+If the four mandatory variables are present, validate them live with one real API call:
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/check-deps.mjs" scaleway

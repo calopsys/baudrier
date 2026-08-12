@@ -1936,6 +1936,17 @@ define("35", "Database: 0-5 vCPU autoscaling default, adjustable via /scale", ()
   if (!sdbSrc.includes("setDatabaseCpuBounds")) {
     fails.push({ file: sdb, detail: "setDatabaseCpuBounds is gone - /scale cannot change the database bounds" });
   }
+  // The CLI's own flag defaults must read the same constants, not a copy of
+  // their current numeric value: a numeric literal drifts silently the next
+  // time DB_CPU_MIN_DEFAULT/DB_CPU_MAX_DEFAULT change, and `ensure` (run with
+  // no flags) would then apply the OLD bound while every other caller already
+  // moved to the new one.
+  if (!/flag\("min-cpu",\s*DB_CPU_MIN_DEFAULT\)/.test(sdbSrc)) {
+    fails.push({ file: sdb, detail: '`ensure`\'s --min-cpu flag does not default to DB_CPU_MIN_DEFAULT - it is a numeric literal instead' });
+  }
+  if (!/flag\("max-cpu",\s*DB_CPU_MAX_DEFAULT\)/.test(sdbSrc)) {
+    fails.push({ file: sdb, detail: '`ensure`\'s --max-cpu flag does not default to DB_CPU_MAX_DEFAULT - it is a numeric literal instead, today 15, the API default this check exists to cap' });
+  }
   const scale = "scripts/scale.mjs";
   if (!exists(scale)) {
     fails.push({ file: scale, detail: "missing" });
@@ -3619,18 +3630,42 @@ define("66", "Operator never opens a DB connection from a setup flow", () => {
   // to a live-DB command (scripts/setup-db.mjs does exactly this); only real
   // code doing so is a defect. Comments are stripped first, same convention
   // as check 11(c) and check 21.
-  const DB_CONN_RE = /drizzle-kit\s+(push|studio)\b/;
+  //
+  // `migrate` joined `push`/`studio` here: it also opens a live connection
+  // from wherever it runs, and CONTRACT.md's whole point is that only the
+  // migration Serverless Job and the production container may ever do that -
+  // never the operator's own machine, not even for the one-shot migrate path.
+  const DB_CONN_RE = /drizzle-kit\s+(push|studio|migrate)\b/;
   for (const f of MJS.filter((x) => x.startsWith("scripts/"))) {
     const code = stripComments(read(f));
     if (DB_CONN_RE.test(code)) {
-      fails.push({ file: f, detail: "runs drizzle-kit push/studio - a setup script must never open a live DB connection from the operator's machine" });
+      fails.push({ file: f, detail: "runs drizzle-kit push/studio/migrate - a setup script must never open a live DB connection from the operator's machine" });
     }
     if (code.includes("~/server/db")) {
       fails.push({ file: f, detail: 'imports "~/server/db" - a setup script must never open a live DB connection from the operator\'s machine' });
     }
   }
 
-  // (b) skill prose must never instruct the reader to run these commands by
+  // (b) a setup script must never shell out to `tsx`/`ts-node` either: both
+  // execute arbitrary project TypeScript directly, including any file that
+  // imports "~/server/db" - the same live-connection risk (a) guards against,
+  // one script hop away. `\b` after npx/pnpm/yarn plus the mandatory space
+  // keeps this off ordinary ".tsx" filename strings, which this file's own
+  // sources use freely (e.g. render() targets).
+  //
+  // Lock, not a fix: nothing in the tree runs `tsx`/`ts-node` this way today.
+  // Proven against a synthetic string instead of a real failing site - see
+  // CONTRACT.md-style discipline in check 72/73's header comments for the
+  // same pattern applied to other locks.
+  const TSX_RE = /\b(npx|pnpm|yarn)\s+(tsx|ts-node)\b/;
+  for (const f of MJS.filter((x) => x.startsWith("scripts/"))) {
+    const code = stripComments(read(f));
+    if (TSX_RE.test(code)) {
+      fails.push({ file: f, detail: "shells out to tsx/ts-node - a setup script must never execute project TypeScript directly from the operator's machine, the same live-DB risk as drizzle-kit push/studio/migrate" });
+    }
+  }
+
+  // (c) skill prose must never instruct the reader to run these commands by
   // hand. A negation word right before the match is how this repo marks the
   // legitimate "never do this" explanation (same convention as check 24's
   // "gh auth login" gate and check 33c's drizzle-kit migrate window). The
@@ -4206,6 +4241,190 @@ define("77", "cockpit query_range authenticates with X-Token only", () => {
         file,
         detail: "queryLogs() still calls scwFetch() - CONTRACT.md's raw-fetch exception covers this hop only if it is a plain fetch with an explicit X-Token header, not the shared SDK wrapper",
       });
+    }
+  }
+
+  return fails;
+});
+
+define("78", "Cas B: the DB path self-serves on SCW_DEFAULT_APPLICATION_ID", () => {
+  const fails = [];
+
+  // (a) the shared credential layer must know the variable name at all.
+  const auth = "scripts/scaleway/_scw-auth.mjs";
+  if (!exists(auth)) {
+    fails.push({ file: auth, detail: "missing" });
+  } else if (!stripComments(read(auth)).includes("SCW_DEFAULT_APPLICATION_ID")) {
+    fails.push({
+      file: auth,
+      detail: "never references SCW_DEFAULT_APPLICATION_ID - Cas B's database path has no way to self-serve the IAM Application id without a getAPIKey read",
+    });
+  }
+
+  // (b) devDbCredentials() must try SCW_DEFAULT_APPLICATION_ID before it ever
+  // calls Iam.getAPIKey() - export-anchored slicing, the same convention
+  // check 75/77 use for registry.mjs/cockpit.mjs.
+  const appCreds = "scripts/scaleway/app-credentials.mjs";
+  if (!exists(appCreds)) {
+    fails.push({ file: appCreds, detail: "missing" });
+  } else {
+    const code = stripComments(read(appCreds));
+    const fnMatch = code.match(/export\s+async\s+function\s+devDbCredentials\s*\(/);
+    if (!fnMatch) {
+      fails.push({ file: appCreds, detail: "devDbCredentials() not found" });
+    } else {
+      const fnAt = fnMatch.index;
+      const nextExportAt = code.indexOf("\nexport ", fnAt + 1);
+      const body = code.slice(fnAt, nextExportAt > 0 ? nextExportAt : undefined);
+      const appIdx = body.indexOf("applicationId");
+      const getIdx = body.indexOf("getAPIKey");
+      if (!(appIdx >= 0 && getIdx >= 0 && appIdx < getIdx)) {
+        fails.push({
+          file: appCreds,
+          detail: "devDbCredentials() reads applicationId no earlier than the getAPIKey() call - a Project-scoped key with SCW_DEFAULT_APPLICATION_ID set should self-serve the Application id and skip the IAM read entirely",
+        });
+      }
+    }
+    if (!code.includes("needs_application_id")) {
+      fails.push({
+        file: appCreds,
+        detail: 'no "needs_application_id" typed error - devDbCredentials() has no dedicated escalation for the case neither SCW_DEFAULT_APPLICATION_ID nor a resolvable IAM principal is available, so a bare catch surfaces a raw SDK error instead',
+      });
+    }
+  }
+
+  // (c) setup-db.mjs must be able to recognise the same typed error and give
+  // the operator a message that names the fix.
+  const setupDb = "scripts/setup-db.mjs";
+  if (!exists(setupDb)) {
+    fails.push({ file: setupDb, detail: "missing" });
+  } else if (!stripComments(read(setupDb)).includes("needs_application_id")) {
+    fails.push({
+      file: setupDb,
+      detail: 'never references "needs_application_id" - the Cas B database path has no recovery message for the case devDbCredentials() cannot resolve an Application id',
+    });
+  }
+
+  // (d) CONTRACT.md's env-var table must document the new operator variable.
+  if (!exists("CONTRACT.md")) {
+    fails.push({ file: "CONTRACT.md", detail: "missing" });
+  } else if (!/\|\s*`SCW_DEFAULT_APPLICATION_ID`\s*\|/.test(read("CONTRACT.md"))) {
+    fails.push({ file: "CONTRACT.md", detail: "env-var table has no SCW_DEFAULT_APPLICATION_ID row - Cas B's self-serve path is undocumented" });
+  }
+
+  // (e) the admin-facing setup guide must tell the administrator to hand the
+  // variable to the member.
+  const adminDoc = "docs/ADMIN-SCALEWAY.md";
+  if (!exists(adminDoc)) {
+    fails.push({ file: adminDoc, detail: "missing" });
+  } else if (!read(adminDoc).includes("SCW_DEFAULT_APPLICATION_ID")) {
+    fails.push({ file: adminDoc, detail: "never mentions SCW_DEFAULT_APPLICATION_ID - the administrator has no instruction to hand it to a Cas B member" });
+  }
+
+  // (f) the preflight env-presence check is the operator's first signal that
+  // something is missing. Its Step 0 list must include SCW_DEFAULT_PROJECT_ID,
+  // the one variable CONTRACT.md §2 calls mandatory for Cas B, or a member
+  // missing it sails past Step 0 with no warning. Scoped to the actual
+  // `for (const k of [...])` list rather than a whole-file search: the file
+  // already names SCW_DEFAULT_PROJECT_ID elsewhere (the Cas B prose further
+  // down), so a whole-file check would pass today for the wrong reason.
+  const preflight = "skills/_preflight/SKILL.md";
+  if (!exists(preflight)) {
+    fails.push({ file: preflight, detail: "missing" });
+  } else {
+    const src = read(preflight);
+    const listMatch = src.match(/for \(const k of \[([^\]]*)\]\)/);
+    if (!listMatch) {
+      fails.push({ file: preflight, detail: "no `for (const k of [...])` env-presence list found - cannot confirm which vars Step 0 checks" });
+    } else if (!listMatch[1].includes("SCW_DEFAULT_PROJECT_ID")) {
+      fails.push({
+        file: preflight,
+        detail: "the Step 0 env-presence list omits SCW_DEFAULT_PROJECT_ID - Cas B calls it mandatory (CONTRACT.md §2), but a member missing it gets no warning here",
+      });
+    }
+  }
+
+  return fails;
+});
+
+define("79", "sdb ensure: the CLI honors the cost defaults and applies explicit bounds", () => {
+  const fails = [];
+  const sdb = "scripts/scaleway/sdb.mjs";
+  if (!exists(sdb)) return [{ file: sdb, detail: "missing" }];
+  const code = stripComments(read(sdb));
+
+  // Anchor on the CLI switch's own `case "ensure"` label, not on the function
+  // definitions above it - the CLI is what an "/add-db"-style call actually
+  // runs, and it can drift from ensureDatabase()'s own defaults independently.
+  const caseAt = code.indexOf('case "ensure"');
+  if (caseAt < 0) {
+    return [{ file: sdb, detail: 'no `case "ensure"` found in the CLI switch' }];
+  }
+  const nextCaseAt = code.indexOf('case "get"', caseAt);
+  const body = code.slice(caseAt, nextCaseAt > 0 ? nextCaseAt : undefined);
+
+  if (!body.includes("DB_CPU_MIN_DEFAULT")) {
+    fails.push({
+      file: sdb,
+      detail: '`ensure` never references DB_CPU_MIN_DEFAULT - the CLI carries its own copy of the cost floor instead of the one constant every other caller shares',
+    });
+  }
+  if (!body.includes("DB_CPU_MAX_DEFAULT")) {
+    fails.push({
+      file: sdb,
+      detail: '`ensure` never references DB_CPU_MAX_DEFAULT - the CLI carries its own copy of the cost cap instead of the one constant every other caller shares',
+    });
+  }
+  if (/flag\("max-cpu",\s*15\)/.test(body)) {
+    fails.push({
+      file: sdb,
+      detail: '`ensure` still defaults --max-cpu to the literal 15 - the API\'s own default, three times the harness cap DB_CPU_MAX_DEFAULT exists to enforce',
+    });
+  }
+  if (!body.includes("setDatabaseCpuBounds")) {
+    fails.push({
+      file: sdb,
+      detail: "`ensure` never calls setDatabaseCpuBounds - re-running it against an EXISTING database cannot apply an explicit --min-cpu/--max-cpu, since ensureDatabase()'s create path is a no-op once the database already exists",
+    });
+  }
+
+  return fails;
+});
+
+define("80", "Every /add-* setup script reports tscOk", () => {
+  const fails = [];
+
+  for (const f of ["scripts/setup-auth-users.mjs", "scripts/setup-2fa.mjs", "scripts/setup-role.mjs"]) {
+    if (!exists(f)) {
+      fails.push({ file: f, detail: "missing" });
+      continue;
+    }
+    const code = stripComments(read(f));
+    // The LAST JSON.stringify({...}) block, not the first: setup-2fa.mjs
+    // builds an unrelated intermediate payload earlier in the file, and only
+    // the final block is the one printed to stdout as the run's handoff.
+    const at = code.lastIndexOf("JSON.stringify({");
+    if (at < 0) {
+      fails.push({ file: f, detail: "no final JSON.stringify({...}) handoff block found" });
+      continue;
+    }
+    const body = code.slice(at);
+    if (!body.includes("tscOk")) {
+      fails.push({
+        file: f,
+        detail: "the final JSON.stringify block does not report tscOk - Claude has no signal the generated code still typechecks after this script's edits",
+      });
+    }
+    if (!body.includes("warnings")) {
+      fails.push({ file: f, detail: "the final JSON.stringify block does not report warnings" });
+    }
+  }
+
+  for (const skill of ["skills/_setup-auth-users/SKILL.md", "skills/_setup-2fa-admin/SKILL.md"]) {
+    if (!exists(skill)) {
+      fails.push({ file: skill, detail: "missing" });
+    } else if (!read(skill).includes("tscOk")) {
+      fails.push({ file: skill, detail: 'never mentions "tscOk" - the skill does not tell Claude to check the setup script\'s typecheck result' });
     }
   }
 

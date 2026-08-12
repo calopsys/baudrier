@@ -1,5 +1,48 @@
 # Changelog
 
+## v1.2.4 (2026-08-13)
+
+Cas B database self-service (wave D) and the residues of wave E. The D
+report's second item and most of E were already shipped by v1.2.1-v1.2.3.
+
+### Fixed
+
+- **The Cas B database path self-serves.** A Cas B key cannot read its own
+  IAM record (the shape probe defines Cas B by that 403), yet
+  `devDbCredentials()` called `iam.getAPIKey` unguarded and `setup-db.mjs`
+  swallowed the failure into a full admin escalation. Now:
+  `SCW_DEFAULT_APPLICATION_ID` is accepted from the environment and
+  short-circuits the IAM call entirely; when it is absent and the IAM read
+  is denied, a typed `needs_application_id` error carries the cause and the
+  four-click console path (the id is not a secret); the `needs_admin`
+  escalation remains only for the genuinely-admin cases, with its cause
+  preserved. Documented across CONTRACT.md, README, docs/ADMIN-SCALEWAY.md
+  (which now hands over five values and contains the previously-missing
+  `BAUDRIER_DB_KEY` recipe), and the add-db skill (three stale claims
+  fixed). `_preflight` now checks `SCW_DEFAULT_PROJECT_ID`.
+- **`sdb.mjs ensure` honors the cost defaults and explicit bounds.** The
+  CLI defaulted `--max-cpu` to the API's 15 instead of the harness's 5, so
+  the add-db monorepo path created databases at three times the intended
+  cap; explicit `--min-cpu`/`--max-cpu` flags against an existing database
+  now apply via `setDatabaseCpuBounds` instead of being silently ignored.
+- **`tscOk` in every setup script.** `setup-auth-users.mjs` and
+  `setup-2fa.mjs` gain the same non-fatal `tscCheck` + `tscOk`/`warnings`
+  JSON fields `setup-role.mjs` already had, and their skills treat
+  `tscOk: false` as work-not-done.
+
+### Added
+
+- **Checks 78-80**; check 66 now also bans `drizzle-kit migrate` and
+  tsx/ts-node spawns in scripts (locks, proven against synthetic breakage);
+  check 35 pins the CLI flag defaults. CONTRACT.md records why no
+  end-to-end run is part of the gate, and that the destructive guard cannot
+  intercept child processes (spawn-level enforcement is static, check 66).
+
+### Declined or skipped by decision
+
+- The deploy-time `/api/auth/csrf` probe (declined again).
+- The fresh-scaffold end-to-end run (rationale recorded in CONTRACT.md §8).
+
 ## v1.2.3 (2026-08-12)
 
 Bootstrap robustness: fixes six of the seven C-class defects from the live
