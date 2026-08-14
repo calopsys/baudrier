@@ -1,6 +1,6 @@
 ---
 name: blogpost
-description: Write one French blog article from a chat description, on a site vitrine that already has /add-blog installed. Always previews first on the revue branch, shows the full text for approval, and only publishes to production after an explicit verdict. Create-only - modifying or deleting a published article is an ordinary chat edit + /deploy. Use when the user wants to write, publish, or post a new blog article.
+description: Write one French blog article from a chat description, on a site vitrine that already has /add-blog installed. Deploys the article straight to the private revue preview - the preview is the review, there is no chat approval stop - and publishes to production only after an explicit verdict, then tears the preview container down. Create-only - modifying or deleting a published article is an ordinary chat edit + /deploy. Use when the user wants to write, publish, or post a new blog article.
 argument-hint: "[sujet de l’article]"
 allowed-tools: Bash Read Write Edit AskUserQuestion
 compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js and Docker; most workflows also use pnpm, git, and project CLIs (scw, gh)."
@@ -14,7 +14,7 @@ compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js a
 - When generating user-facing content for the scaffolded project (UI labels, emails, copy), write it in the user's language too.
 - Show progress as a short natural-language checklist (in-progress and done states).
 
-You write one blog article from the user's description, in French, and walk it through a mandatory preview before it ever reaches production. This skill is **create-only**: it never edits or deletes an existing article. Modifying or removing a published post is an ordinary chat request ("change this paragraph", "remove this article") followed by `/deploy` - not a skill operation, since a published article is just a file in the repo like any other page.
+You write one blog article from the user's description, in French, and deploy it straight to the private `revue` preview - the user reads the styled article THERE, not in chat. Do not stop the flow to show the full text for approval; the preview IS the review, and the only blocking question is the verdict in Step 8. This skill is **create-only**: it never edits or deletes an existing article. Modifying or removing a published post is an ordinary chat request ("change this paragraph", "remove this article") followed by `/deploy` - not a skill operation, since a published article is just a file in the repo like any other page.
 
 ---
 
@@ -101,7 +101,7 @@ Derive the slug from the subject: lowercase, accents stripped, spaces and punctu
 
 **The slug is stable forever.** It becomes the article's URL (`/blog/<slug>/`) and, once published, the file must never be renamed - a renamed slug 404s the old URL and loses whatever indexing it had (the same rule `/gsc`/`/seo` apply to any page). Check the slug does not already exist under `<WEB_DIR>/src/content/blog/` before writing; if it does, adjust it slightly rather than overwrite.
 
-This collision check applies only to the **first** creation of the article within this run. If Step 9's "Modifier encore" verdict brings the flow back here, re-enter directly at 5b and edit the same file this run already created - never derive a new slug for a revision, or the earlier draft and the revised one would both exist and both publish.
+This collision check applies only to the **first** creation of the article within this run. If Step 8's "Modifier encore" verdict brings the flow back here, re-enter directly at 5b and edit the same file this run already created - never derive a new slug for a revision, or the earlier draft and the revised one would both exist and both publish.
 
 ### 5b - Write `<WEB_DIR>/src/content/blog/<slug>.md`
 
@@ -124,15 +124,7 @@ If a cover was provided, copy it into `<WEB_DIR>/src/assets/blog/` and reference
 
 ---
 
-## Step 6 - Approval loop [MANDATORY, NEVER SKIP]
-
-🚨 **Show the full article text in chat and wait for explicit approval before anything else happens** - no preview deploy, no commit beyond what Step 5 already wrote locally, until the user has read the whole thing. Present title, tags, and the complete body as the user will read it.
-
-If the user asks for changes, edit the file and show the full text again. Repeat until the user approves as-is. Only then continue to Step 7.
-
----
-
-## Step 7 - Build gate, before paying for a Docker build
+## Step 6 - Build gate, before paying for a Docker build
 
 ```bash
 cd "<WEB_DIR>"
@@ -143,19 +135,21 @@ A preview deploy rebuilds the whole container image, which costs several minutes
 
 ---
 
-## Step 8 - Preview deploy
+## Step 7 - Preview deploy - the preview is the review
+
+Do not paste the full article in chat, and do not wait for any approval before this deploy - go straight from the build gate to the preview. Give a one-or-two-sentence recap (title, angle, tags) while the deploy runs, so the user knows what to look for.
 
 Before deploying, always tell the user - a preview container is restricted by construction, whatever state production is in (`/deploy` overrides `ACCESS_RESTRICTED` to `"true"` on every preview deploy, never reading or depending on production's own value, CONTRACT.md §1): la prévisualisation n’est joignable que depuis une adresse déjà autorisée (le VPN de l’entreprise, par défaut) - c’est systématique pour tout aperçu, quel que soit l’état du site en production.
 
 Also add the cost note here, since entering `/deploy` directly at Step 2 (below) skips its own Step 1, where this note would normally come from: ce premier déploiement crée un seul conteneur, réglé pour redescendre à zéro instance entre deux visites - l’aperçu ne coûte donc quasiment rien tant qu’il n’est pas consulté.
 
-Read and execute `skills/deploy/SKILL.md`, entering directly at its **Step 2**, with **target preview**, **skipping its Step 0 and Step 1**. This is the documented exception for `/blogpost`'s two deploys (see `deploy`'s own Step 0): this skill's approval flow already collected the user's consent for both the preview and, later, the production deploy, so there is no need to ask again. The branch is already `revue` (Step 4), so deploy's own Step 2 preview path finds nothing left to switch.
+Read and execute `skills/deploy/SKILL.md`, entering directly at its **Step 2**, with **target preview**, **skipping its Step 0 and Step 1**. This is the documented exception for `/blogpost`'s two deploys (see `deploy`'s own Step 0): asking for an article IS the consent for its preview deploy, and Step 8's verdict is the consent for the production deploy, so there is no need to ask again. The branch is already `revue` (Step 4), so deploy's own Step 2 preview path finds nothing left to switch.
 
-Once the deploy succeeds, hand the user the exact article URL: `<preview-url>/blog/<slug>/`.
+Once the deploy succeeds, hand the user the exact article URL: `<preview-url>/blog/<slug>/`, and invite them to read the article there before answering the verdict. If they report a 403, their current address is not in `ACCESS_ALLOWED_IPS` - collect it once via the ip.me question from `bootstrap`'s Step 3, store it with the same `secrets.mjs put` snippet, then redeploy the preview (the image did not change, so the Docker layers come from cache and the redeploy is quick).
 
 ---
 
-## Step 9 - Verdict
+## Step 8 - Verdict
 
 Ask with `AskUserQuestion`:
 - Question: "Que voulez-vous faire de cet article ?"
@@ -164,22 +158,45 @@ Ask with `AskUserQuestion`:
   - `Modifier encore` - je reprends l’écriture avec vos retours.
   - `Le laisser en attente` - l’article reste sur la branche de révision, personne d’autre ne le voit pour l’instant.
 
-- **`Publier`** -> continue to Step 10.
-- **`Modifier encore`** -> ask what to change, then repeat from Step 5b (edit the same file in place, same slug - see 5a's scoping note) through Step 8 (preview).
-- **`Le laisser en attente`** -> stop here. Tell the user the article stays on `revue` - it is the draft state, nothing is lost, and they can resume with `/blogpost` any time, or ask for it to be published later.
+- **`Publier`** -> continue to Step 9.
+- **`Modifier encore`** -> ask what to change, then repeat from Step 5b (edit the same file in place, same slug - see 5a's scoping note) through Step 7 (preview).
+- **`Le laisser en attente`** -> stop here. Tell the user the article stays on `revue` - it is the draft state, nothing is lost, and they can resume with `/blogpost` any time, or ask for it to be published later. The preview container stays up too (at zero instances it costs close to nothing), so the article stays readable at its preview URL.
 
 ---
 
-## Step 10 - Publish
+## Step 9 - Publish
 
-Read and execute `skills/deploy/SKILL.md`, entering directly at its **Step 2**, with **target production**, **skipping its Step 0 and Step 1** (same documented exception as Step 8 - the verdict in Step 9 already is the explicit consent for this deploy). The current branch is `revue`, not `main`, so deploy's own Step 2 merge-into-`main` path applies exactly as written there: it merges `revue` into `main` first, then deploys production from `main`. This is the existing merge path, not a new one.
+Read and execute `skills/deploy/SKILL.md`, entering directly at its **Step 2**, with **target production**, **skipping its Step 0 and Step 1** (same documented exception as Step 7 - the verdict in Step 8 already is the explicit consent for this deploy). The current branch is `revue`, not `main`, so deploy's own Step 2 merge-into-`main` path applies exactly as written there: it merges `revue` into `main` first, then deploys production from `main`. This is the existing merge path, not a new one.
+
+---
+
+## Step 10 - Preview teardown
+
+After a successful production publish, delete the `revue` preview container: the review is over, `main` now carries the article, and a dangling preview container is one more thing to pay attention to for nothing. The next `/blogpost` run recreates it automatically (deploy's find-or-create path). `deletePreviewContainer` refuses any container whose name lacks `-preview-`, so production is out of reach by construction.
+
+```bash
+CONTAINER_MJS="${CLAUDE_SKILL_DIR}/../../scripts/scaleway/container.mjs" \
+PROJECT_NAME="<project-name>" \
+node --input-type=module -e '
+import { pathToFileURL } from "node:url";
+const { ensureNamespace, findContainerByName, previewContainerName, deletePreviewContainer } =
+  await import(pathToFileURL(process.env.CONTAINER_MJS).href);
+const ns = await ensureNamespace(process.env.PROJECT_NAME);
+const name = previewContainerName(process.env.PROJECT_NAME, "revue");
+const container = await findContainerByName(ns.id, name);
+if (!container) console.log(JSON.stringify({ ok: true, deleted: false, name }));
+else console.log(JSON.stringify(await deletePreviewContainer(container)));
+'
+```
+
+A failure here is a **soft warning only** - the article is already live; tell the user the cleanup did not go through and move on. Never run this step when the verdict was anything other than `Publier`.
 
 ---
 
 ## Step 11 - IndexNow ping
 
 Ping IndexNow only when **all three** conditions hold:
-1. the production deploy in Step 10 succeeded;
+1. the production deploy in Step 9 succeeded;
 2. production's own `ACCESS_RESTRICTED` value is `"false"` - read it fresh here, together with `APP_URL` (the production host, needed for the POST below), the same inline pattern `/deploy`'s own Step 1 uses (Secret Manager is the only readable source of truth for either - CONTRACT.md §1):
 
 ```bash
@@ -224,4 +241,4 @@ Tell the user, in French:
 >
 > Pour changer ou retirer cet article plus tard, dites-le-moi simplement en discussion, puis je déploierai avec `/deploy` - `/blogpost` sert uniquement à créer de nouveaux articles.
 
-If both a preview and a production deploy ran in this conversation, add the cost note once: chaque déploiement prend quelques minutes ; l’aperçu (`revue`) ne coûte quasiment rien tant qu’il n’est pas visité, puisqu’il reste à zéro instance entre deux consultations.
+If both a preview and a production deploy ran in this conversation, add the cost note once: chaque déploiement prend quelques minutes ; l’aperçu a été supprimé après la publication, il ne coûte donc plus rien, et le prochain `/blogpost` le recréera automatiquement.

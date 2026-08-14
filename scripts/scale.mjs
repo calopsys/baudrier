@@ -18,7 +18,7 @@
 // no pricing API, so these two constants would need a manual refresh if
 // Scaleway changes its rates.
 
-import { requireCredentials, slugify } from "./scaleway/_scw-auth.mjs";
+import { previewContainerName, requireCredentials, slugify } from "./scaleway/_scw-auth.mjs";
 import { SCALE_PRESETS, ensureNamespace, findContainerByName, updateContainer, waitForContainerReady } from "./scaleway/container.mjs";
 import { getDatabase, setDatabaseCpuBounds, DB_CPU_MIN_DEFAULT, DB_CPU_MAX_DEFAULT } from "./scaleway/sdb.mjs";
 import { pathToFileURL } from "node:url";
@@ -82,7 +82,7 @@ function usage() {
 function resolveContainerName(projectName, target, branch) {
   if (target === "production") return projectName;
   if (!branch) throw new Error("--branch is required when --target preview");
-  return `${projectName}-preview-${slugify(branch)}`;
+  return previewContainerName(projectName, branch);
 }
 
 async function findContainerOrFail(projectName, target, branch) {

@@ -15,15 +15,13 @@ Writes one **blog article** from your description, in French, and walks it throu
 
 3. **Writing**: Baudrier writes the article - title, short description, and a structured French text (roughly 600 to 1200 words, organized in sections) - on a separate **review** track, never touching your public site yet.
 
-4. **Your approval, always**: Baudrier shows you the **full article text** in the chat. Nothing moves forward until you approve it, exactly as it is or after changes you asked for.
+4. **Private preview, right away**: Baudrier deploys the article to a private preview - a separate address, reachable only from an already-authorized location (your company VPN, by default), whatever the public site's own state is. You read the real, styled page there; there is no long text to review in the chat.
 
-5. **Private preview**: once you approve, Baudrier deploys a private preview - a separate address, reachable only from an already-authorized location (your company VPN, by default), whatever the public site's own state is - so you see the real, styled page before anyone else does.
+5. **Your verdict**: after reading the preview, you choose to publish it for real, ask for more changes, or leave it waiting (nothing is lost, you can resume anytime).
 
-6. **Your verdict**: you choose to publish it for real, ask for more changes, or leave it waiting (nothing is lost, you can resume anytime).
+6. **Publishing**: if you publish, Baudrier deploys the article to your real, public site, then removes the preview - the review is over, and the next article recreates it automatically.
 
-7. **Publishing**: if you publish, Baudrier deploys the article to your real, public site.
-
-8. **Telling search engines**: once public, Baudrier notifies search engines that support instant notification (Bing and a few others) that the article exists, so it gets found faster - skipped automatically if your site is still access-restricted.
+7. **Telling search engines**: once public, Baudrier notifies search engines that support instant notification (Bing and a few others) that the article exists, so it gets found faster - skipped automatically if your site is still access-restricted.
 
 ## What it creates for you
 
@@ -43,8 +41,8 @@ Writes one **blog article** from your description, in French, and walks it throu
 `/blogpost` never touches an article that is already published. To change wording, fix a typo, or remove an old article, just ask Baudrier directly in the chat, then request `/deploy` - the same way you would edit any other page on your site.
 {{/callout}}
 
-{{callout:info|Two deploys, two different costs}}
-Publishing an article always goes through a private preview first, then production - two short deploys, a few minutes each. The preview itself costs close to nothing while it is not being visited: it scales down to nothing between checks.
+{{callout:info|Two deploys, then a cleanup}}
+Publishing an article always goes through a private preview first, then production - two short deploys, a few minutes each. After publication the preview is removed, so it costs nothing at all; while an article waits, the preview scales down to nothing between checks.
 {{/callout}}
 
 {{callout:tip|The "waiting" state is not a loss}}

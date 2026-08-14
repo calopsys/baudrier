@@ -69,6 +69,10 @@ import { REGION, ScwError, api, sdkCall, requireCredentials, slugify } from "./_
 import { getSecret, listSecrets } from "./secrets.mjs";
 import { pathToFileURL } from "node:url";
 
+// Re-exported so skill snippets that already import this module get the
+// canonical preview naming without a second import.
+export { CONTAINER_NAME_MAX, previewContainerName } from "./_scw-auth.mjs";
+
 // v1's memoryLimitBytes and localStorageLimitBytes are, per the SDK's own
 // field docs, literally in bytes. SCALE_PRESETS and every caller's
 // memoryLimit/localStorageLimit are in MB (CONTRACT.md §1's
@@ -379,6 +383,28 @@ export async function deployContainer(containerId, opts = {}) {
   const containers = await containerApi();
   const redeployed = await sdkCall(() => containers.redeployContainer({ containerId, region }));
   return toLegacyContainer(redeployed);
+}
+
+/**
+ * Deletes a PREVIEW container only. The name guard is the whole point: the
+ * harness never deletes a production container (its name carries no
+ * "-preview-"), and a container is the one Scaleway resource that is safe
+ * to remove - the next /deploy recreates it from the registry image.
+ *
+ * @param {{id:string, name:string}} container  from findContainerByName
+ */
+export async function deletePreviewContainer(container, opts = {}) {
+  const { id, name } = container ?? {};
+  if (!id || typeof name !== "string" || !name.includes("-preview-")) {
+    throw new ScwError(
+      `deletePreviewContainer refuse "${name ?? "?"}" : seuls les conteneurs d'aperçu (nom contenant "-preview-") peuvent être supprimés.`,
+      { type: "not_a_preview_container" },
+    );
+  }
+  const region = opts.region || REGION;
+  const containers = await containerApi();
+  await sdkCall(() => containers.deleteContainer({ containerId: id, region }));
+  return { ok: true, deleted: true, id, name };
 }
 
 /**

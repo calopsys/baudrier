@@ -117,10 +117,10 @@ The app's name is no longer something you invent here: `/bootstrap` scaffolds **
 git remote get-url origin
 ```
 
-Take the repo name from that URL (or `basename "$(git rev-parse --show-toplevel)"` as a fallback with no parseable GitHub URL), and check it is kebab-case (lowercase `a-z`, `0-9`, hyphens, 2-50 characters - the same rule `bootstrap-init.mjs` itself enforces).
+Take the repo name from that URL (or `basename "$(git rev-parse --show-toplevel)"` as a fallback with no parseable GitHub URL), and check it is kebab-case (lowercase `a-z`, `0-9`, hyphens) and **20 characters or fewer** - the same rules `bootstrap-init.mjs` itself enforces. The 20-char cap comes from Scaleway: a container name maxes out at 34 chars and the preview container is named `<name>-preview-<branche>`.
 
-- **If it already is kebab-case** → that is `<name>`. Never ask the user to confirm or rename it - the repo already exists on GitHub under that name.
-- **If it is not** → ask the user, once, for a deploy name instead. This only renames the **Scaleway resources** (Project, registry namespace, container) - the git repo itself is never renamed:
+- **If it passes both rules** → that is `<name>`. Never ask the user to confirm or rename it - the repo already exists on GitHub under that name.
+- **If it fails either rule** (not kebab-case, or longer than 20 chars) → ask the user, once, for a deploy name instead. This only renames the **Scaleway resources** (Project, registry namespace, container) - the git repo itself is never renamed:
 
   > Le nom de votre dépôt (`<repo-name>`) n’est pas dans le format attendu par Baudrier pour les ressources Scaleway (minuscules, chiffres et tirets uniquement). Quel nom voulez-vous utiliser pour vos ressources Scaleway (Projet, conteneur...) ? Le dépôt GitHub, lui, garde son nom actuel.
 
@@ -360,6 +360,8 @@ There is no GitHub-App-authorization class of warning in this pipeline (unlike p
 **Handle this once, never re-ask while the secret already exists**: check first whether `ACCESS_ALLOWED_IPS` is already set (`node "${CLAUDE_SKILL_DIR}/../../scripts/scaleway/secrets.mjs" get ACCESS_ALLOWED_IPS`, or infer it from the warning text itself). If it genuinely does not exist yet, ask the user exactly once, in French:
 
 > Pour que vous puissiez voir votre site (il est restreint par défaut), ouvrez https://ip.me dans votre navigateur et collez-moi l’adresse affichée.
+
+🛑 **End your message on that question and stop the turn.** Do not start Step 4 in the same reply: its spec questions bury this one, the user answers the spec instead, and the allowlist stays empty - they then cannot open their own site, and cannot review any preview later (`/blogpost` reviews happen ON the preview). Resume only once the user replies with an address, or explicitly declines (they can add it later via the same warning path).
 
 Once they reply, store it and sync the container:
 

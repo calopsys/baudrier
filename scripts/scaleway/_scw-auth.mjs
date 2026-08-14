@@ -16,6 +16,7 @@
 // env -> session cache -> live-lookup-by-name order (CONTRACT.md §2).
 
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -455,4 +456,33 @@ export function slugify(input, { maxLength = 63 } = {}) {
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
   return (s || "app").slice(0, maxLength).replace(/-$/, "");
+}
+
+/** Serverless Containers reject names over 34 chars (live-verified 2026-08-14). */
+export const CONTAINER_NAME_MAX = 34;
+
+/**
+ * The one resolver for a preview container name. The shape is
+ * `<project>-preview-<branch-slug>`, bounded to CONTAINER_NAME_MAX. The
+ * `<project>-preview-` prefix never shrinks (check-deps.mjs discovers
+ * previews by that prefix); an overlong branch slug is cut and gets a 4-hex
+ * digest so two long branches stay distinct. Every script and skill must
+ * resolve the name here - a second implementation drifts on long branches.
+ */
+export function previewContainerName(projectName, branch) {
+  const prefix = `${slugify(projectName)}-preview-`;
+  const budget = CONTAINER_NAME_MAX - prefix.length;
+  if (budget < 5) {
+    throw new ScwError(
+      `Project name "${projectName}" leaves no room for a preview container name ` +
+        `("${prefix}<branche>" must fit in ${CONTAINER_NAME_MAX} chars). ` +
+        `bootstrap-init.mjs caps the deploy name at ${CONTAINER_NAME_MAX - "-preview-".length - "revue".length} chars to prevent this.`,
+      { type: "invalid_argument" },
+    );
+  }
+  const branchSlug = slugify(branch);
+  if (branchSlug.length <= budget) return `${prefix}${branchSlug}`;
+  const digest = createHash("sha256").update(branchSlug).digest("hex").slice(0, 4);
+  const head = branchSlug.slice(0, budget - 5).replace(/-+$/, "");
+  return `${prefix}${head ? `${head}-${digest}` : digest}`;
 }

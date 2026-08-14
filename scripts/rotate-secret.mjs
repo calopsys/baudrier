@@ -67,7 +67,7 @@
 // `{"ok":false,"error":...}`) for the calling skill to parse. Secret VALUES
 // are never printed, matching scripts/setup-db.mjs's rule for DATABASE_URL.
 
-import { requireCredentials, ScwError, slugify } from "./scaleway/_scw-auth.mjs";
+import { previewContainerName, requireCredentials, ScwError, slugify } from "./scaleway/_scw-auth.mjs";
 import { getSecret, putSecret } from "./scaleway/secrets.mjs";
 import { ensureApplication, ensurePolicy, createApiKey, listApiKeys, deleteApiKey, DELEGATED_DB_KEY_SECRET_NAME } from "./scaleway/iam.mjs";
 import { ensureNamespace, findContainerByName, syncContainerSecrets } from "./scaleway/container.mjs";
@@ -117,12 +117,12 @@ function parseDelegatedDbKey(raw) {
 
 /* ------------------------------------------------------------- container sync */
 
-// Mirrors scale.mjs#resolveContainerName exactly - same naming convention
-// for production vs. preview containers, do not let the two drift.
+// Mirrors scale.mjs#resolveContainerName exactly - both delegate the
+// preview shape to previewContainerName, the one bounded resolver.
 function resolveContainerName(projectName, target, branch) {
   if (target === "preview") {
     if (!branch) throw new ScwError("--branch is required when --target preview", { type: "usage" });
-    return `${projectName}-preview-${slugify(branch)}`;
+    return previewContainerName(projectName, branch);
   }
   return projectName;
 }

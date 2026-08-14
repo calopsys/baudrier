@@ -15,15 +15,13 @@
 
 3. **Rédaction** : Baudrier écrit l’article - titre, courte description, et un texte français structuré (environ 600 à 1200 mots, organisé en sections) - sur une branche de révision séparée, sans jamais toucher votre site public pour l’instant.
 
-4. **Votre validation, toujours** : Baudrier affiche le **texte complet de l’article** dans la discussion. Rien n’avance tant que vous ne l’avez pas validé, tel quel ou après les changements que vous avez demandés.
+4. **Aperçu privé, tout de suite** : Baudrier déploie l’article sur un aperçu privé - une adresse séparée, joignable uniquement depuis un endroit déjà autorisé (le VPN de votre entreprise, par défaut), quel que soit l’état du site public. Vous lisez la vraie page, avec son style, directement là-bas ; pas de long texte à relire dans la discussion.
 
-5. **Aperçu privé** : une fois validé, Baudrier déploie un aperçu privé - une adresse séparée, joignable uniquement depuis un endroit déjà autorisé (le VPN de votre entreprise, par défaut), quel que soit l’état du site public - pour que vous voyiez la vraie page, avec son style, avant tout le monde.
+5. **Votre verdict** : après lecture de l’aperçu, vous choisissez de le publier pour de vrai, de demander encore des modifications, ou de le laisser en attente (rien n’est perdu, vous pouvez reprendre quand vous voulez).
 
-6. **Votre verdict** : vous choisissez de le publier pour de vrai, de demander encore des modifications, ou de le laisser en attente (rien n’est perdu, vous pouvez reprendre quand vous voulez).
+6. **Publication** : si vous publiez, Baudrier déploie l’article sur votre vrai site public, puis supprime l’aperçu - la relecture est terminée, et le prochain article le recréera automatiquement.
 
-7. **Publication** : si vous publiez, Baudrier déploie l’article sur votre vrai site, public.
-
-8. **Prévenir les moteurs de recherche** : une fois public, Baudrier prévient les moteurs qui supportent la notification instantanée (Bing et quelques autres) que l’article existe, pour qu’il soit trouvé plus vite - étape sautée automatiquement si votre site est encore restreint.
+7. **Prévenir les moteurs de recherche** : une fois public, Baudrier prévient les moteurs qui supportent la notification instantanée (Bing et quelques autres) que l’article existe, pour qu’il soit trouvé plus vite - étape sautée automatiquement si votre site est encore restreint.
 
 ## Ce que ça crée pour vous
 
@@ -43,8 +41,8 @@
 `/blogpost` ne touche jamais à un article déjà publié. Pour changer un mot, corriger une coquille, ou retirer un ancien article, demandez simplement à Baudrier directement en discussion, puis demandez `/deploy` - comme vous le feriez pour n’importe quelle autre page de votre site.
 {{/callout}}
 
-{{callout:info|Deux déploiements, deux coûts différents}}
-Publier un article passe toujours par un aperçu privé d’abord, puis la production - deux déploiements courts, quelques minutes chacun. L’aperçu lui-même coûte quasiment rien tant qu’il n’est pas visité : il redescend à zéro entre deux consultations.
+{{callout:info|Deux déploiements, puis un nettoyage}}
+Publier un article passe toujours par un aperçu privé d’abord, puis la production - deux déploiements courts, quelques minutes chacun. Après publication, l’aperçu est supprimé et ne coûte plus rien ; tant qu’un article attend, l’aperçu redescend à zéro entre deux consultations.
 {{/callout}}
 
 {{callout:tip|L’état « en attente » n’est pas une perte}}

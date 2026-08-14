@@ -50,7 +50,8 @@
 // Container linkage is resolved by NAME (CONTRACT.md §2, §7 - app repos carry
 // no Scaleway metadata at all): the app name (deriveAppName()) names the
 // Project, the registry/container namespace, and the production container
-// itself; a preview container is `<app-name>-preview-<branch-slug>` in that
+// itself; a preview container is `<app-name>-preview-<branch-slug>` (bounded
+// to 34 chars by previewContainerName) in that
 // same namespace. If the Project or the container cannot be resolved, or
 // Scaleway credentials aren't configured, the container step is skipped with
 // a warning - the .env write always happens regardless.
@@ -71,7 +72,7 @@ import { readFileSync, writeFileSync, existsSync, chmodSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { findContainerByName, syncContainerSecrets, waitForContainerReady } from "./scaleway/container.mjs";
 import { putSecret } from "./scaleway/secrets.mjs";
-import { loadCredentials, slugify, deriveAppName, resolveProjectId, api, sdkCall, REGION } from "./scaleway/_scw-auth.mjs";
+import { loadCredentials, previewContainerName, slugify, deriveAppName, resolveProjectId, api, sdkCall, REGION } from "./scaleway/_scw-auth.mjs";
 
 const VALID_ENVS = ["production", "preview"];
 
@@ -250,7 +251,7 @@ if (!hasCreds) {
           for (const { key } of pairs) results.push({ key, target: env, ok: false, skipped: true, error: "branch not derivable" });
           continue;
         }
-        resolvedName = `${appName}-preview-${branch}`;
+        resolvedName = previewContainerName(appName, branch);
       }
       const container = await findContainerByName(namespaceId, resolvedName);
       const containerId = container?.id || null;

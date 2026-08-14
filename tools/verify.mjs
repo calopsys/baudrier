@@ -5113,8 +5113,13 @@ define("86", "Vitrine blog: template manifest, no typography plugin, no draft fi
     fails.push({ file: blogpostSkill, detail: "missing" });
   } else {
     const s = read(blogpostSkill);
-    for (const needle of ["api.indexnow.org", "revue", "ACCESS_RESTRICTED"]) {
+    for (const needle of ["api.indexnow.org", "revue", "ACCESS_RESTRICTED", "deletePreviewContainer", "previewContainerName"]) {
       if (!s.includes(needle)) fails.push({ file: blogpostSkill, detail: `does not mention "${needle}"` });
+    }
+    // The preview IS the review (user decision 2026-08-14): the flow must
+    // never block on a full-text approval in chat before the preview deploy.
+    if (s.includes("MANDATORY, NEVER SKIP")) {
+      fails.push({ file: blogpostSkill, detail: "reintroduces the blocking chat approval loop - the article deploys straight to the revue preview, the verdict there is the only blocking question" });
     }
   }
 
@@ -5140,6 +5145,95 @@ define("86", "Vitrine blog: template manifest, no typography plugin, no draft fi
     }
   }
 
+  return fails;
+});
+
+define("87", "Container names: 34-char bound through one resolver", () => {
+  const fails = [];
+
+  const auth = "scripts/scaleway/_scw-auth.mjs";
+  if (!exists(auth)) {
+    fails.push({ file: auth, detail: "missing" });
+  } else {
+    const s = read(auth);
+    if (!/export const CONTAINER_NAME_MAX = 34\b/.test(s)) {
+      fails.push({ file: auth, detail: "does not export CONTAINER_NAME_MAX = 34 - Scaleway rejects longer container names (live-verified 2026-08-14)" });
+    }
+    const fnAt = s.indexOf("export function previewContainerName(");
+    if (fnAt < 0) {
+      fails.push({ file: auth, detail: "does not export previewContainerName - the one bounded resolver for preview container names" });
+    } else if (!s.slice(fnAt).includes("-preview-")) {
+      fails.push({ file: auth, detail: 'previewContainerName no longer builds the "-preview-" prefix check-deps.mjs discovers previews by' });
+    }
+  }
+
+  // Every script that addresses a preview container resolves the name through
+  // the helper - a hand-assembled template literal drifts on long branches
+  // and overflows the 34-char limit.
+  const CALLERS = ["scripts/deploy.mjs", "scripts/scale.mjs", "scripts/rotate-secret.mjs", "scripts/push-env-vars.mjs"];
+  const HAND_ASSEMBLED = /\$\{(?:projectName|PROJECT_NAME|appName)\}-preview-/;
+  for (const f of CALLERS) {
+    if (!exists(f)) {
+      fails.push({ file: f, detail: "missing" });
+      continue;
+    }
+    const s = read(f);
+    if (!s.includes("previewContainerName(")) {
+      fails.push({ file: f, detail: "does not call previewContainerName - preview container names must go through the one bounded resolver" });
+    }
+    if (HAND_ASSEMBLED.test(s)) {
+      fails.push({ file: f, detail: 'hand-assembles a "<name>-preview-" container name - resolve it with previewContainerName instead (34-char limit)' });
+    }
+  }
+
+  const bootstrap = "scripts/bootstrap-init.mjs";
+  if (exists(bootstrap) && !read(bootstrap).includes("CONTAINER_NAME_MAX")) {
+    fails.push({ file: bootstrap, detail: "no longer caps the deploy name from CONTAINER_NAME_MAX - a long name makes '<name>-preview-revue' overflow the 34-char container name limit" });
+  }
+
+  const container = "scripts/scaleway/container.mjs";
+  if (!exists(container)) {
+    fails.push({ file: container, detail: "missing" });
+  } else {
+    const s = read(container);
+    if (!s.includes("previewContainerName")) {
+      fails.push({ file: container, detail: "no longer re-exports previewContainerName - skill snippets import the resolver from here" });
+    }
+    const delAt = s.indexOf("export async function deletePreviewContainer(");
+    if (delAt < 0) {
+      fails.push({ file: container, detail: "does not export deletePreviewContainer - /blogpost's teardown step needs it" });
+    } else if (!s.slice(delAt).includes('includes("-preview-")')) {
+      fails.push({ file: container, detail: 'deletePreviewContainer lost its "-preview-" name guard - the harness must never delete a production container' });
+    }
+  }
+
+  for (const f of ["skills/publish/SKILL.md", "skills/unpublish/SKILL.md"]) {
+    if (exists(f) && !read(f).includes("previewContainerName(")) {
+      fails.push({ file: f, detail: "resolves a preview container name without previewContainerName - the inline snippet must use the bounded resolver" });
+    }
+  }
+
+  return fails;
+});
+
+define("88", "Bootstrap: the ip.me question ends the turn", () => {
+  const fails = [];
+  const f = "skills/bootstrap/SKILL.md";
+  if (!exists(f)) return [{ file: f, detail: "missing" }];
+  const s = read(f);
+
+  const questionAt = s.indexOf("https://ip.me");
+  const stopAt = s.indexOf("End your message on that question and stop the turn");
+  const step4At = s.indexOf("## Step 4");
+
+  if (questionAt < 0) {
+    fails.push({ file: f, detail: "the ip.me question is gone - the user must be asked for their address once" });
+  }
+  if (stopAt < 0) {
+    fails.push({ file: f, detail: 'missing the "End your message on that question and stop the turn" instruction - Step 4\'s spec questions bury the IP question and the allowlist stays empty' });
+  } else if (questionAt >= 0 && step4At >= 0 && !(questionAt < stopAt && stopAt < step4At)) {
+    fails.push({ file: f, detail: "the stop-the-turn instruction is not between the ip.me question and Step 4 - it must break the flow exactly there" });
+  }
   return fails;
 });
 

@@ -43,7 +43,7 @@ import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { ScwError, requireCredentials, slugify } from "./scaleway/_scw-auth.mjs";
+import { ScwError, previewContainerName, requireCredentials, slugify } from "./scaleway/_scw-auth.mjs";
 import {
   ensureNamespace,
   findContainerByName,
@@ -493,7 +493,7 @@ async function migrate() {
 
 async function updateContainerStep() {
   const ns = await ensureNamespace(PROJECT_NAME);
-  const containerName = TARGET === "production" ? PROJECT_NAME : `${PROJECT_NAME}-preview-${slugify(BRANCH)}`;
+  const containerName = TARGET === "production" ? PROJECT_NAME : previewContainerName(PROJECT_NAME, BRANCH);
 
   let container = await findContainerByName(ns.id, containerName);
   if (!container) {

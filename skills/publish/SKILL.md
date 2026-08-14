@@ -28,7 +28,7 @@ Invoke `_detect-project-root` to get `PROJECT_NAME`. If the user didn't specify 
 - Question: "Quel environnement voulez-vous rendre public ?"
 - Options: `Production` / `Aperçu (branche actuelle)`
 
-Resolve the container name: `<PROJECT_NAME>` for production, `<PROJECT_NAME>-preview-<slug-de-la-branche>` for a preview (same naming `/deploy` and `/scale` use). For a preview, also keep the bare `<slug-de-la-branche>` itself - Step 3 needs it separately to name the branch's own `DATABASE_URL_PREVIEW_<SLUG>` secret.
+Resolve the target: production is the container named `<PROJECT_NAME>`; a preview's name is computed inside the snippet below by `previewContainerName` (the canonical `<PROJECT_NAME>-preview-<slug>` shape, bounded to Scaleway's 34-char container name limit - never assemble it by hand). For a preview, keep the bare `<slug-de-la-branche>` itself - it names the branch's own `DATABASE_URL_PREVIEW_<SLUG>` secret and feeds the snippet.
 
 ---
 
@@ -61,18 +61,20 @@ A container GET only ever returns argon2 hashes of secret values, never plaintex
 CONTAINER_MJS="${CLAUDE_SKILL_DIR}/../../scripts/scaleway/container.mjs" \
 SECRETS_MJS="${CLAUDE_SKILL_DIR}/../../scripts/scaleway/secrets.mjs" \
 PROJECT_NAME="<PROJECT_NAME>" \
-CONTAINER_NAME="<resolved container name from Step 1>" \
 TARGET="<production|preview>" \
 BRANCH_SLUG="<slug-de-la-branche, preview only, empty for production>" \
 node --input-type=module -e '
 import { pathToFileURL } from "node:url";
-const { ensureNamespace, findContainerByName, syncContainerSecrets } =
+const { ensureNamespace, findContainerByName, previewContainerName, syncContainerSecrets } =
   await import(pathToFileURL(process.env.CONTAINER_MJS).href);
 const { putSecret } = await import(pathToFileURL(process.env.SECRETS_MJS).href);
 const ns = await ensureNamespace(process.env.PROJECT_NAME);
-const container = await findContainerByName(ns.id, process.env.CONTAINER_NAME);
+const containerName = process.env.TARGET === "preview"
+  ? previewContainerName(process.env.PROJECT_NAME, process.env.BRANCH_SLUG)
+  : process.env.PROJECT_NAME;
+const container = await findContainerByName(ns.id, containerName);
 if (!container) {
-  console.log(JSON.stringify({ ok: false, error: "container_not_found", name: process.env.CONTAINER_NAME }));
+  console.log(JSON.stringify({ ok: false, error: "container_not_found", name: containerName }));
   process.exit(1);
 }
 let ready;

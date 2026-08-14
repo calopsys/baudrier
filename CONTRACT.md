@@ -110,17 +110,29 @@ exact inventory - a missing or unexpectedly extra file fails) is copied in by
 
 **The `revue` branch is the draft state - there is no `draft:` frontmatter
 field.** `content.config.ts`'s zod schema deliberately has none (check 86
-greps for it); `/blogpost` always writes the article on `revue` first, shows
-the full text in chat for approval, deploys a preview there, and only a
-second explicit verdict merges `revue` into `main` and deploys production.
-An article that is not yet approved simply does not exist on `main`.
+greps for it); `/blogpost` always writes the article on `revue` first and
+deploys it straight to the preview - **the preview is the review**: there is
+no blocking full-text approval in chat (check 86 forbids the old
+MANDATORY-approval-loop marker), and only the explicit verdict on the
+previewed page merges `revue` into `main` and deploys production. An article
+that is not yet approved simply does not exist on `main`.
 
 **Two deploys per published post, both routed through `/deploy` at Step 2.**
-`/blogpost` collects both consents itself (the approval loop before the
-preview, the verdict before publishing), so it enters `skills/deploy/SKILL.md`
+`/blogpost` carries both consents itself (asking for an article is the
+consent for its preview; the verdict is the consent for production), so it
+enters `skills/deploy/SKILL.md`
 directly at Step 2 - preview target the first time, production target the
 second - skipping Step 0 and Step 1's target question (`skills/deploy/SKILL.md`'s
 own exception sentence, extended for this; check 86 pins the mention).
+
+**After a production publish, `/blogpost` tears the preview down.** Step 10
+deletes the `revue` preview container via
+`container.mjs#deletePreviewContainer`, which throws on any name lacking
+`-preview-` - production is unreachable by construction, and a deleted
+preview is fully rebuilt by the next `/deploy` (the container is the one
+Scaleway resource with no state of its own). A teardown failure is a soft
+warning: the article is already live. The teardown never runs on a
+« Le laisser en attente » verdict - a pending article keeps its preview.
 
 **IndexNow is a harness-side `curl`, not an SDK call.** After a successful
 production publish, `/blogpost` Step 11 POSTs to `api.indexnow.org` (already
@@ -916,11 +928,24 @@ export async function pruneTags(imageId, {keep});            // -> {deleted:[tag
 ```js
 export const SCALE_PRESETS;  // {S:{cpuLimit,memoryLimit,maxConcurrency}, M, L, XL}
 export const CONTAINER_EXCLUDED_SECRETS;  // Secret Manager names never projected into a container
+export const CONTAINER_NAME_MAX;  // 34 - Scaleway rejects longer container names (re-export
+                                  // from _scw-auth.mjs, live-verified 2026-08-14)
+export function previewContainerName(projectName, branch);  // THE preview name resolver
+                                  // (re-export from _scw-auth.mjs): "<project>-preview-<branch-slug>"
+                                  // bounded to CONTAINER_NAME_MAX. The prefix never shrinks
+                                  // (check-deps.mjs discovers previews by it); an overlong branch
+                                  // slug is cut + 4-hex digest. bootstrap-init.mjs caps the deploy
+                                  // name at 20 chars so "-preview-revue" always fits whole. Never
+                                  // assemble a preview container name by hand.
 export async function ensureNamespace(name, opts?);       // -> {id,name}
 export async function findContainerByName(namespaceId, name);
 export async function createContainer({namespaceId, name, registryImage, ...});
 export async function updateContainer(containerId, patch);
 export async function deployContainer(containerId);
+export async function deletePreviewContainer(container);  // deletes ONE preview container; throws
+                                  // unless container.name contains "-preview-" (production is
+                                  // unreachable by construction). Safe: /deploy recreates it.
+                                  // Used by /blogpost after a production publish.
 export async function getContainer(containerId);
 export async function waitForContainerReady(containerId, {timeoutMs});
 export async function setContainerSecrets(containerId, obj);  // low-level PATCH; obj MUST be the
@@ -1490,7 +1515,7 @@ harness. The substitute is deliberate: static pins for every past
 regression class, plus fixture-spawn behavioral checks (67, 76) where a
 script can run against a synthetic directory.
 
-`node tools/verify.mjs` must exit 0 (85 checks). It checks: every `.mjs` parses, every
+`node tools/verify.mjs` must exit 0 (87 checks). It checks: every `.mjs` parses, every
 relative import resolves, every `scripts/...` path named in a `SKILL.md` exists,
 every referenced skill exists and no deleted skill is referenced, template
 manifests are valid, and no removed-provider token or env var survives outside

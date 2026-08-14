@@ -1,5 +1,34 @@
 # Changelog
 
+## v1.4.1 (2026-08-14)
+
+Three fixes on the vitrine path: the bootstrap IP question now stops the
+turn, preview container names respect Scaleway's 34-char limit, and
+`/blogpost` reviews on the preview instead of in chat, then tears the
+preview down after publication.
+
+### Changed
+
+- **Bootstrap Step 3 breaks on the IP question.** The ip.me question now ends
+  the message; Step 4's spec questions no longer bury it, so the allowlist
+  gets filled before anything else happens (check 88 pins the break and its
+  position).
+- **One bounded resolver for preview container names.** Scaleway rejects
+  container names over 34 chars (live-verified). `previewContainerName`
+  (`_scw-auth.mjs`, re-exported by `container.mjs`) keeps the
+  `<name>-preview-` discovery prefix whole and hash-truncates an overlong
+  branch slug; `deploy.mjs`, `scale.mjs`, `rotate-secret.mjs`,
+  `push-env-vars.mjs` and the `/publish`/`/unpublish` snippets all resolve
+  through it, and `bootstrap-init.mjs` caps the deploy name at 20 chars so
+  `<name>-preview-revue` always fits whole (check 87 pins all of it).
+- **`/blogpost`: the preview is the review.** The blocking full-text approval
+  in chat is gone - the article deploys straight to the private `revue`
+  preview, the user reads the styled page there, and the verdict is the only
+  blocking question (check 86 forbids the old approval-loop marker). After a
+  production publish, the new `container.mjs#deletePreviewContainer` (refuses
+  any name lacking `-preview-`, so production is unreachable) tears the
+  preview container down; a pending article keeps its preview.
+
 ## v1.4.0 (2026-08-14)
 
 The vitrine blog: `/add-blog` installs an Astro 5 content collection once on

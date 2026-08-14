@@ -113,7 +113,7 @@ import { render } from "./_render.mjs";
 import { isRemoteSandbox } from "./_platform.mjs";
 import { ensureDocker } from "./ensure-dockerd.mjs";
 import { buildAndPushImage } from "./_docker-build.mjs";
-import { requireCredentials, projectIdFromEnv, deriveAppName, cacheProjectId, api, sdkCall, slugify, ScwError } from "./scaleway/_scw-auth.mjs";
+import { CONTAINER_NAME_MAX, requireCredentials, projectIdFromEnv, deriveAppName, cacheProjectId, api, sdkCall, slugify, ScwError } from "./scaleway/_scw-auth.mjs";
 import { ensureRegistryNamespace } from "./scaleway/registry.mjs";
 import { SCALE_PRESETS, LANDING_CONTAINER, ensureNamespace, findContainerByName, createContainer, updateContainer, syncContainerSecrets, waitForContainerReady } from "./scaleway/container.mjs";
 import { getSecret, putSecret, listSecrets } from "./scaleway/secrets.mjs";
@@ -221,6 +221,18 @@ if (!nameOverride && !KEBAB_RE.test(appName)) {
   );
 }
 const name = nameOverride || appName;
+
+// Serverless Containers cap a name at CONTAINER_NAME_MAX (34) chars, and the
+// preview container is named "<name>-preview-<branche>". Cap the deploy name
+// so "<name>-preview-revue" always fits with the standard branch un-truncated.
+const DEPLOY_NAME_MAX = CONTAINER_NAME_MAX - "-preview-".length - "revue".length;
+if (name.length > DEPLOY_NAME_MAX) {
+  usageError(
+    `The deploy name "${name}" is ${name.length} chars; the maximum is ${DEPLOY_NAME_MAX}. ` +
+      `Scaleway caps a container name at ${CONTAINER_NAME_MAX} chars and the preview container is named "<name>-preview-<branche>". ` +
+      "Pass --name <deploy-name> to pick a shorter Scaleway resource name (the git repo keeps its own name).",
+  );
+}
 
 // In-place only (CONTRACT.md §7): the repo pre-exists, and this script
 // scaffolds into the checkout it is run from - there is no sibling-directory

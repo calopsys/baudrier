@@ -281,7 +281,9 @@ async function checkScaleway() {
 // Resolved by NAME, live against the SDK (CONTRACT.md §2, §7 - app repos
 // carry no Scaleway metadata at all): the app name (deriveAppName()) names
 // the Project, the container namespace, and the production container itself;
-// a preview container is `<app-name>-preview-<branch-slug>` in that same
+// a preview container is `<app-name>-preview-<branch-slug>` (bounded to 34
+// chars by previewContainerName; the prefix this check matches on never
+// shrinks) in that same
 // namespace. Read-only - never creates a namespace or container as a side
 // effect of checking.
 // -----------------------------------------------------------------------------
