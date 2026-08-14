@@ -71,18 +71,72 @@ on `isLanding`) and `deploy.mjs`'s container-secret syncs when `STACK ===
 landing container (§2's derivation applies unconditionally); the value is
 simply never read, since a static site runs no Auth.js.
 
-Only 15 skills support a vitrine: `deploy`, `publish`, `unpublish`,
-`add-domain`, `costs`, `save-project`, `delete-project`, `add-analytics`,
-`add-dark-mode`, `seo`, `seo-perf`, `geo`, `rotate-secret`, `scale`,
-`gsc`. Every
-other project-scoped skill refuses through one shared gate
-(`skills/_detect-project-root/SKILL.md`'s `PROJECT_TYPE`, checked by each
-refusing skill's own Step 0, greppable marker `PROJECT_TYPE=landing`) with
-one French refusal sentence; `bootstrap`, `prof` and `spec` are not
-project-scoped and carry no gate either way. `tools/verify.mjs` check 83
-pins the three lists and requires every public skill to sit in exactly one
-of them, so a future skill that forgets to pick a list fails loudly instead
-of silently shipping ungated.
+Four gate classes partition every public skill (`tools/verify.mjs` check 83
+pins all four lists and requires every public skill to sit in exactly one of
+them, so a future skill that forgets to pick a list fails loudly instead of
+silently shipping ungated):
+
+1. **15 skills support a vitrine**: `deploy`, `publish`, `unpublish`,
+   `add-domain`, `costs`, `save-project`, `delete-project`, `add-analytics`,
+   `add-dark-mode`, `seo`, `seo-perf`, `geo`, `rotate-secret`, `scale`, `gsc`.
+2. **20 skills refuse a vitrine** through one shared gate
+   (`skills/_detect-project-root/SKILL.md`'s `PROJECT_TYPE`, checked by each
+   refusing skill's own Step 0, greppable marker `PROJECT_TYPE=landing`) with
+   one French refusal sentence (« n’est pas disponible pour un site
+   vitrine »): `add-2fa`, `add-agent`, `add-agent-dashboard`, `add-auth`,
+   `add-automation`, `add-cron`, `add-db`, `add-email`, `add-map`,
+   `add-notification-center`, `add-push-notification`, `add-pwa`, `add-role`,
+   `add-routine`, `add-storage`, `add-workflow`, `clean`, `eco-audit`,
+   `rgpd-audit`, `security`.
+3. **3 skills are not project-scoped** and carry no gate either way:
+   `bootstrap`, `prof`, `spec`.
+4. **2 skills invert the gate and refuse an application instead**:
+   `add-blog`, `blogpost` (the vitrine blog, below). They check the same
+   `PROJECT_TYPE` marker but the mirrored value `PROJECT_TYPE=application`,
+   and answer with the mirrored French sentence « n’est pas disponible pour
+   une application ».
+
+### Vitrine blog
+
+`/add-blog` installs an Astro 5 content collection once on an existing
+vitrine; `/blogpost` writes and publishes one article at a time from a chat
+description. Both are landing-only (class 4 above) and never touch an
+application. `templates/blog/` (6 files, `tools/verify.mjs` check 86 pins the
+exact inventory - a missing or unexpectedly extra file fails) is copied in by
+`/add-blog` Step 4: `src/content.config.ts` (the collection schema),
+`src/pages/blog/index.astro` (listing), `src/pages/blog/[slug].astro`
+(article page), `src/pages/rss.xml.ts` (`@astrojs/rss` endpoint),
+`src/components/PostCard.astro`, and `src/content/blog/.gitkeep`.
+
+**The `revue` branch is the draft state - there is no `draft:` frontmatter
+field.** `content.config.ts`'s zod schema deliberately has none (check 86
+greps for it); `/blogpost` always writes the article on `revue` first, shows
+the full text in chat for approval, deploys a preview there, and only a
+second explicit verdict merges `revue` into `main` and deploys production.
+An article that is not yet approved simply does not exist on `main`.
+
+**Two deploys per published post, both routed through `/deploy` at Step 2.**
+`/blogpost` collects both consents itself (the approval loop before the
+preview, the verdict before publishing), so it enters `skills/deploy/SKILL.md`
+directly at Step 2 - preview target the first time, production target the
+second - skipping Step 0 and Step 1's target question (`skills/deploy/SKILL.md`'s
+own exception sentence, extended for this; check 86 pins the mention).
+
+**IndexNow is a harness-side `curl`, not an SDK call.** After a successful
+production publish, `/blogpost` Step 11 POSTs to `api.indexnow.org` (already
+in the web-session network allowlist, §1's web-sessions block) with the site's
+host, the proof key, and the three changed URLs (article, `/blog/`, `/`) -
+plain `fetch`/`curl` is legitimate here the same way Cockpit's Loki queries
+are (§3 "documented non-SDK exceptions"): IndexNow is not a Scaleway product,
+so there is no SDK to route through. The ping is skipped, with a note to the
+user, whenever `ACCESS_RESTRICTED` is not the literal `"false"` - a restricted
+site 403s every crawler, so the ping would only be rejected.
+
+**The IndexNow key file is public by design.** `/add-blog` Step 8 drops a
+random 64-hex-character `<key>.txt` under `public/`, served as a plain static
+file and committed with the rest of the project - it exists to prove site
+ownership to IndexNow, not to guard anything, and must never be treated as a
+secret or excluded from the repo.
 
 ### Constants
 
@@ -1436,7 +1490,7 @@ harness. The substitute is deliberate: static pins for every past
 regression class, plus fixture-spawn behavioral checks (67, 76) where a
 script can run against a synthetic directory.
 
-`node tools/verify.mjs` must exit 0 (84 checks). It checks: every `.mjs` parses, every
+`node tools/verify.mjs` must exit 0 (85 checks). It checks: every `.mjs` parses, every
 relative import resolves, every `scripts/...` path named in a `SKILL.md` exists,
 every referenced skill exists and no deleted skill is referenced, template
 manifests are valid, and no removed-provider token or env var survives outside

@@ -487,8 +487,9 @@ If the requested change is ambiguous (e.g. "can we remove stuff?"), ask **one si
 - `add-analytics` (Matomo) - same strict opt-in rule as below (only propose it if the user explicitly asked for tracking/statistics)
 - `add-dark-mode`
 - `add-domain` (if the user wants to publish under their own domain now rather than later)
+- `add-blog` (a site that publishes news or articles regularly) - only *record* the choice here, do not install it yet. `add-blog`'s own Step 6 proposes where a "Blog" link fits among the site's nav items, and that only makes sense once the real pages and nav exist - which this bootstrap's own Step 6 (below) is what builds. So this addon actually runs **after** Step 6, not here. The first article itself is offered with `/blogpost` **after** bootstrap finishes, never run inside bootstrap.
 
-Ask which of these three the user wants (if any), then configure only what they picked by reading each skill's own `SKILL.md`, same as below. Skip straight to Step 6 once done.
+Ask which of these four the user wants (if any), then configure `add-analytics`, `add-dark-mode`, and `add-domain` immediately, if picked, by reading each skill's own `SKILL.md`, same as below. Skip straight to Step 6 once done with those three - `add-blog`, if picked, waits for Step 6's own landing branch to finish (below).
 
 **Application**: continue with the addon list below (unchanged).
 
@@ -558,6 +559,7 @@ The infrastructure and the addons are in place. Now we build the real applicatio
    ```
    Fix any error before moving on - `astro check` and a failed `astro build` both mean the site would ship broken.
 4. Commit progress after each major section (`git add . && git commit -m "feat: ..."`), same discipline as the application path below - but the application path's shadcn/ui and Geist-font rules do not apply to Astro.
+5. **If `add-blog` was picked at Step 5**, install it now by reading and executing `skills/add-blog/SKILL.md` - the real pages and nav exist at this point, which is what its own Step 6 (nav link placement) needs. Do not run `/blogpost` here; the first article stays offered after bootstrap finishes (Step 5's own note).
 
 **Application**: continue with the spec-driven / description-driven flow below (unchanged).
 

@@ -1,5 +1,44 @@
 # Changelog
 
+## v1.4.0 (2026-08-14)
+
+The vitrine blog: `/add-blog` installs an Astro 5 content collection once on
+an existing vitrine, `/blogpost` writes and publishes one French article at a
+time from a chat description.
+
+### Added
+
+- **`/add-blog`.** Installs `templates/blog/` (content collection, blog
+  listing, article page, RSS, `PostCard`) on an existing vitrine, once:
+  `@astrojs/rss` + `@astrojs/sitemap` + `sharp`, an ensured `site:`, three
+  anchored `BaseLayout.astro` Edits (`ogType?`/`canonical?` props, RSS/canonical
+  `<link>`s), an IndexNow proof key, and CLAUDE.md updates. It never writes an
+  article itself and never deploys - the empty `/blog` page ships with the
+  next unrelated deploy.
+- **`/blogpost`.** Writes one French article (600-1200 words, JSON-LD
+  `BlogPosting`, `og:type article`, canonical, tags, `<time datetime>`,
+  prev/next) from the user's description, always on the `revue` branch first.
+  Mandatory approval loop shows the full text in chat, then a preview deploy,
+  then an explicit verdict before a second deploy publishes to production.
+  Create-only: modifying or removing a published article is an ordinary chat
+  edit followed by `/deploy`. A successful, unrestricted production publish
+  pings `api.indexnow.org` with the article, `/blog/` and `/` URLs.
+- **No `draft:` frontmatter, by design.** `content.config.ts`'s schema has no
+  draft field - the `revue` branch is itself the draft state, so a published
+  article is exactly what merged into `main`.
+- **A fourth gate class.** `add-blog` and `blogpost` are landing-only: they
+  refuse `PROJECT_TYPE=application` with the mirrored French sentence, the
+  opposite direction from every other gated skill (CONTRACT.md §1).
+- **`/deploy`'s bootstrap-8b exception now also covers `/blogpost`'s two
+  deploys** (preview then production) - its own approval flow already
+  collects both consents, so it skips Step 0 and Step 1 and enters directly
+  at Step 2 with the target fixed.
+- **Checks 83, 86**: check 83 gains a fourth list (`GATE_LANDING_ONLY_SKILLS`)
+  and the mirrored marker/sentence assertions; check 86 pins the
+  `templates/blog/` manifest, forbids Google Fonts and
+  `@tailwindcss/typography` under it, forbids a `draft` field, and cross-checks
+  the deploy exception and both new SKILL.mds' required mentions.
+
 ## v1.3.0 (2026-08-13)
 
 Second stack: sites vitrines (Astro 5 static + Caddy 2), the harness's first

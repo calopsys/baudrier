@@ -47,12 +47,13 @@ Le déploiement complet (build + mise à jour du conteneur + smoke test) se fait
 Ce projet est un site vitrine (Astro statique) : seules les skills suivantes s’appliquent -
 `/deploy`, `/publish`, `/unpublish`, `/add-domain`, `/costs`, `/save-project`,
 `/delete-project`, `/add-analytics`, `/add-dark-mode`, `/seo`, `/seo-perf`, `/geo`,
-`/rotate-secret`, `/scale`, `/gsc`. Les autres skills projet (base de données, authentification,
-automatisations, ...) refusent avec un message explicite : ce site reste modifiable et
-déployable, elles ne s’appliquent simplement pas à un site sans backend.
+`/rotate-secret`, `/scale`, `/gsc`, `/add-blog`, `/blogpost`. Les autres skills projet (base
+de données, authentification, automatisations, ...) refusent avec un message explicite : ce
+site reste modifiable et déployable, elles ne s’appliquent simplement pas à un site sans
+backend.
 
-Une extension blog est prévue pour une prochaine version - `src/content/` reste
-volontairement inutilisé pour l’instant.
+Pas encore de blog sur ce site : `/add-blog` l’installe une fois pour toutes (articles, flux
+RSS, plan du site), puis `/blogpost` rédige et publie chaque article depuis la conversation.
 
 ## Variables d’environnement
 - `APP_URL` - URL publique du conteneur (`https://<domaine>.containers.scw.cloud` par défaut, ou le domaine personnalisé une fois configuré).

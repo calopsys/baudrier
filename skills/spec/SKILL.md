@@ -139,6 +139,7 @@ Summarize, confirm, then proceed to the silent inference + file generation.
 - Fichier, image, document à téléverser (bloc 2) → `add-storage`
 - Carte interactive, agences, magasins, points de vente, adresses, "nous trouver", itinéraire, app principalement construite autour d'une carte (bloc 1-2) → `add-map`
 - Mention explicite d'un thème sombre / mode nuit (bloc 3) → `add-dark-mode`
+- Blog, actualités, articles à publier régulièrement (bloc 1-2) → `add-blog` (site vitrine uniquement)
 - App installable, utilisable hors-ligne, "comme une app mobile", ajout à l'écran d'accueil (bloc 1-2-4) → `add-pwa`
 - Notifications qui arrivent même app fermée, alertes sur le téléphone (bloc 2 ou 4) → `add-push-notification` (implique `add-pwa`)
 - Centre de notifications dans l'app, cloche avec historique (bloc 2) → `add-notification-center` (implique `add-db` et `add-auth` en mode utilisateurs)
@@ -207,6 +208,7 @@ Pour chaque page :
 - Stockage fichiers : oui/non (add-storage)
 - Carte interactive : oui/non (add-map)
 - Mode sombre : oui/non (add-dark-mode)
+- Blog / actualités : oui/non (add-blog) - site vitrine uniquement
 - Application installable (PWA) : oui/non (add-pwa)
 - Notifications push : oui/non (add-push-notification)
 - Centre de notifications : oui/non (add-notification-center)
@@ -261,6 +263,7 @@ Once the user validates the spec content, return control to `/bootstrap` with:
    - add-storage: yes/no
    - add-map: yes/no
    - add-dark-mode: yes/no
+   - add-blog: yes/no (vitrine uniquement)
    - add-pwa: yes/no
    - add-push-notification: yes/no
    - add-notification-center: yes/no

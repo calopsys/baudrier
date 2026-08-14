@@ -29,7 +29,7 @@ A deploy is for review or an explicit user request, never the silent default nex
   - If "Non" → stop here. Tell the user their work is saved, and that they can ask for a deploy whenever they want the site updated.
   - If "Oui" → continue to Step 1.
 
-This step does not apply to `/bootstrap`'s own closing deploy (its Step 8b) - the user's initial request to build the whole app already is that explicit consent, as documented there.
+This step, and Step 1's target question, do not apply to `/bootstrap`'s own closing deploy (its Step 8b) or to `/blogpost`'s two deploys (preview on `revue`, then the production publish) - the user's initial request to build the whole app, and `/blogpost`'s own approval flow, already collect that explicit consent, as documented there. Both cases skip Step 0 and Step 1's target question, and enter directly at Step 2 with the target already fixed.
 
 ---
 

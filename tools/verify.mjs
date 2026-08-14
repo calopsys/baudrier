@@ -4690,25 +4690,30 @@ const GATE_REFUSING_SKILLS = [
   "add-workflow", "clean", "eco-audit", "rgpd-audit", "security",
 ];
 const GATE_NON_PROJECT_SKILLS = ["bootstrap", "prof", "spec"];
+// The mirror gate: these two refuse an APPLICATION instead of a vitrine (the
+// vitrine blog, plan section 6) - same PROJECT_TYPE marker, opposite value,
+// opposite sentence.
+const GATE_LANDING_ONLY_SKILLS = ["add-blog", "blogpost"];
 
 define("83", "Gate coverage: every public skill is supported, refusing, or non-project", () => {
   const fails = [];
   const supported = new Set(GATE_SUPPORTED_SKILLS);
   const refusing = new Set(GATE_REFUSING_SKILLS);
   const nonProject = new Set(GATE_NON_PROJECT_SKILLS);
+  const landingOnly = new Set(GATE_LANDING_ONLY_SKILLS);
 
   const publicSkills = SKILL_DIRS.filter((d) => !d.startsWith("_") && exists(`skills/${d}/DOC.md`));
 
   for (const dir of publicSkills) {
-    const memberships = [supported.has(dir), refusing.has(dir), nonProject.has(dir)].filter(Boolean).length;
+    const memberships = [supported.has(dir), refusing.has(dir), nonProject.has(dir), landingOnly.has(dir)].filter(Boolean).length;
     if (memberships === 0) {
-      fails.push({ file: `skills/${dir}`, detail: "not classified in any of SUPPORTED/REFUSING/NON_PROJECT - a future skill must be added to one list explicitly" });
+      fails.push({ file: `skills/${dir}`, detail: "not classified in any of SUPPORTED/REFUSING/NON_PROJECT/LANDING_ONLY - a future skill must be added to one list explicitly" });
     } else if (memberships > 1) {
-      fails.push({ file: `skills/${dir}`, detail: "classified in more than one of SUPPORTED/REFUSING/NON_PROJECT" });
+      fails.push({ file: `skills/${dir}`, detail: "classified in more than one of SUPPORTED/REFUSING/NON_PROJECT/LANDING_ONLY" });
     }
   }
   const publicSet = new Set(publicSkills);
-  for (const [label, list] of [["SUPPORTED", GATE_SUPPORTED_SKILLS], ["REFUSING", GATE_REFUSING_SKILLS], ["NON_PROJECT", GATE_NON_PROJECT_SKILLS]]) {
+  for (const [label, list] of [["SUPPORTED", GATE_SUPPORTED_SKILLS], ["REFUSING", GATE_REFUSING_SKILLS], ["NON_PROJECT", GATE_NON_PROJECT_SKILLS], ["LANDING_ONLY", GATE_LANDING_ONLY_SKILLS]]) {
     for (const dir of list) {
       if (!publicSet.has(dir)) fails.push({ file: `skills/${dir}`, detail: `listed in ${label} but is not a public skill directory (no DOC.md, or directory missing)` });
     }
@@ -4723,16 +4728,38 @@ define("83", "Gate coverage: every public skill is supported, refusing, or non-p
   }
 
   const REFUSAL_SENTENCE = "n’est pas disponible pour un site vitrine";
+  const APP_REFUSAL_SENTENCE = "n’est pas disponible pour une application";
   for (const dir of GATE_SUPPORTED_SKILLS) {
     const f = `skills/${dir}/SKILL.md`;
     if (exists(f) && read(f).includes(REFUSAL_SENTENCE)) {
       fails.push({ file: f, detail: "a SUPPORTED skill carries the French refusal sentence - it must actually support a vitrine, not refuse it" });
+    }
+    if (exists(f) && read(f).includes(APP_REFUSAL_SENTENCE)) {
+      fails.push({ file: f, detail: "a SUPPORTED skill carries the mirrored application-refusal sentence - it must actually support both project types, not refuse either" });
     }
   }
   for (const dir of GATE_REFUSING_SKILLS) {
     const f = `skills/${dir}/SKILL.md`;
     if (exists(f) && !read(f).includes(REFUSAL_SENTENCE)) {
       fails.push({ file: f, detail: "a REFUSING skill has no French refusal sentence - PROJECT_TYPE=landing is wired but the operator would see no explanation" });
+    }
+    if (exists(f) && read(f).includes(APP_REFUSAL_SENTENCE)) {
+      fails.push({ file: f, detail: "a REFUSING (vitrine-refusing) skill also carries the mirrored application-refusal sentence - it must refuse exactly one project type" });
+    }
+  }
+
+  for (const dir of GATE_LANDING_ONLY_SKILLS) {
+    const f = `skills/${dir}/SKILL.md`;
+    if (!exists(f)) continue;
+    const s = read(f);
+    if (!s.includes("PROJECT_TYPE=application")) {
+      fails.push({ file: f, detail: 'landing-only skill has no "PROJECT_TYPE=application" marker - the mirrored refusal gate is not wired in' });
+    }
+    if (!s.includes(APP_REFUSAL_SENTENCE)) {
+      fails.push({ file: f, detail: "landing-only skill has no French application-refusal sentence - PROJECT_TYPE=application is wired but the operator would see no explanation" });
+    }
+    if (s.includes(REFUSAL_SENTENCE)) {
+      fails.push({ file: f, detail: "a landing-only skill carries the vitrine refusal sentence - it must refuse an application, not a vitrine" });
     }
   }
 
@@ -5007,6 +5034,109 @@ define("85", "Template manifest + bootstrap rules: landing inventory, strict tok
     }
     if (/fonts\.googleapis\.com|fonts\.gstatic\.com/.test(s)) {
       fails.push({ file: f, detail: "references Google Fonts at runtime - RGPD requires the fontsource packages baked at build time instead" });
+    }
+  }
+
+  return fails;
+});
+
+// Pinned inventory of templates/blog/ - a missing (or unexpectedly extra)
+// file here means /add-blog's copy step (skills/add-blog/SKILL.md Step 4) no
+// longer matches what actually ships.
+const BLOG_TEMPLATE_MANIFEST = [
+  "templates/blog/src/components/PostCard.astro",
+  "templates/blog/src/content/blog/.gitkeep",
+  "templates/blog/src/content.config.ts",
+  "templates/blog/src/pages/blog/[slug].astro",
+  "templates/blog/src/pages/blog/index.astro",
+  "templates/blog/src/pages/rss.xml.ts",
+];
+
+define("86", "Vitrine blog: template manifest, no typography plugin, no draft field", () => {
+  const fails = [];
+
+  const actual = new Set(FILES.filter((f) => f.startsWith("templates/blog/")));
+  const expected = new Set(BLOG_TEMPLATE_MANIFEST);
+  for (const f of BLOG_TEMPLATE_MANIFEST) {
+    if (!exists(f)) fails.push({ file: f, detail: "missing from templates/blog/ - the pinned manifest expects it" });
+  }
+  for (const f of actual) {
+    if (!expected.has(f)) fails.push({ file: f, detail: "unexpected file under templates/blog/ - not in the pinned manifest, update it deliberately if this is intentional" });
+  }
+
+  for (const f of FILES.filter((x) => x.startsWith("templates/blog/"))) {
+    let s;
+    try {
+      s = read(f);
+    } catch {
+      continue;
+    }
+    if (/fonts\.googleapis\.com|fonts\.gstatic\.com/.test(s)) {
+      fails.push({ file: f, detail: "references Google Fonts at runtime - RGPD requires the fontsource packages baked at build time instead" });
+    }
+  }
+
+  // @tailwindcss/typography would fight the semantic tokens the rest of the
+  // vitrine relies on (and break /add-dark-mode) - forbidden under the
+  // template itself. On the two SKILL.mds, scope the scan to an
+  // install/import line: prose like "never install @tailwindcss/typography"
+  // is the documented reason it stays out, not a violation of it.
+  for (const f of FILES.filter((x) => x.startsWith("templates/blog/"))) {
+    if (!exists(f)) continue;
+    if (read(f).includes("@tailwindcss/typography")) {
+      fails.push({ file: f, detail: "references @tailwindcss/typography - its own palette would fight the semantic tokens and break /add-dark-mode (CONTRACT.md's vitrine blog decision)" });
+    }
+  }
+  for (const f of ["skills/add-blog/SKILL.md", "skills/blogpost/SKILL.md"]) {
+    if (!exists(f)) continue;
+    for (const line of read(f).split("\n")) {
+      if (line.includes("@tailwindcss/typography") && (line.includes("pnpm add") || line.includes("import"))) {
+        fails.push({ file: f, detail: "installs or imports @tailwindcss/typography - its own palette would fight the semantic tokens and break /add-dark-mode (CONTRACT.md's vitrine blog decision)" });
+      }
+    }
+  }
+
+  const contentConfig = "templates/blog/src/content.config.ts";
+  if (exists(contentConfig) && /\bdraft\b/.test(read(contentConfig))) {
+    fails.push({ file: contentConfig, detail: "schema declares a `draft` field - the `revue` branch IS the draft state, there must be no draft frontmatter (plan decision 3)" });
+  }
+
+  const deploySkill = "skills/deploy/SKILL.md";
+  if (!exists(deploySkill)) {
+    fails.push({ file: deploySkill, detail: "missing" });
+  } else if (!read(deploySkill).includes("/blogpost")) {
+    fails.push({ file: deploySkill, detail: "the bootstrap-8b exception area does not mention /blogpost - its two deploys (preview then production) also need the Step 0/Step 1 skip documented" });
+  }
+
+  const blogpostSkill = "skills/blogpost/SKILL.md";
+  if (!exists(blogpostSkill)) {
+    fails.push({ file: blogpostSkill, detail: "missing" });
+  } else {
+    const s = read(blogpostSkill);
+    for (const needle of ["api.indexnow.org", "revue", "ACCESS_RESTRICTED"]) {
+      if (!s.includes(needle)) fails.push({ file: blogpostSkill, detail: `does not mention "${needle}"` });
+    }
+  }
+
+  const addBlogSkill = "skills/add-blog/SKILL.md";
+  if (!exists(addBlogSkill)) {
+    fails.push({ file: addBlogSkill, detail: "missing" });
+  } else {
+    const s = read(addBlogSkill);
+    for (const needle of ["templates/blog/", "@astrojs/rss"]) {
+      if (!s.includes(needle)) fails.push({ file: addBlogSkill, detail: `does not mention "${needle}"` });
+    }
+
+    // Every template file that still carries a {{SITE_...}} placeholder must
+    // be named in add-blog's own substitution instructions, or the skill
+    // silently leaves that file's placeholder unfilled (the rss.xml.ts /
+    // [slug].astro / index.astro gap this check was written to catch).
+    for (const f of FILES.filter((x) => x.startsWith("templates/blog/"))) {
+      if (!exists(f) || !read(f).includes("{{SITE_")) continue;
+      const basename = f.split("/").pop();
+      if (!s.includes(basename) && !s.includes(f)) {
+        fails.push({ file: addBlogSkill, detail: `"${f}" carries a {{SITE_...}} placeholder but neither "${f}" nor "${basename}" is named in the substitution instructions` });
+      }
     }
   }
 

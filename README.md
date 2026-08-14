@@ -164,6 +164,7 @@ Les tableaux ci-dessous sont établis en lisant chaque `skills/*/SKILL.md` prés
 | `/seo-perf` | Mesure la performance réelle via l’API PageSpeed Insights et propose des correctifs classés par impact mesuré ; auto-invoquée en fin de `/seo` |
 | `/geo` | Audit et optimisation pour les moteurs IA (ChatGPT, Claude, Perplexity, Google AI Overviews) - llms.txt, politique crawlers IA, schema FAQPage, signaux de citabilité, E-E-A-T. Complémentaire à `/seo` |
 | `/gsc` | Connecte le site à Google Search Console, vérifie le DNS, soumet le sitemap, puis audite la couverture d’indexation, les requêtes principales et les pages à faible CTR |
+| `/blogpost` | Rédige et publie un article de blog depuis la conversation, avec un aperçu obligatoire (branche `revue`) avant la mise en ligne - **site vitrine uniquement** |
 | `/eco-audit` | Audit d’écoresponsabilité d’un site déployé (score EcoIndex A-G, estimation gCO2e/eau par visite), propose des correctifs, remesure après déploiement |
 | `/security` | Audit de sécurité (secrets, auth, headers, dépendances, RGPD) |
 | `/rgpd-audit` | Audit de conformité RGPD - détecte les services tiers utilisés, met à jour le registre des sous-traitants, génère ou rafraîchit la page de politique de confidentialité |
@@ -198,6 +199,7 @@ Chaque addon peut être activé pendant `/bootstrap` ou utilisé seul sur un pro
 | `/add-domain` | Connecter un nom de domaine personnalisé (guidé) |
 | `/add-map` | Carte interactive vectorielle (MapLibre + OpenFreeMap, gratuit sans clé API, UE). Single pin, multi-pin, itinéraire ou map-first |
 | `/add-dark-mode` | Mode sombre (clair / sombre / système) avec sélecteur prêt à l’emploi |
+| `/add-blog` | Installe un blog (collections de contenu Astro, RSS, sitemap, JSON-LD, tags, prev/next) - **site vitrine uniquement** |
 | `/add-pwa` | Transforme l’app en PWA installable (manifest, service worker, icônes, invite d’installation) |
 | `/add-push-notification` | Notifications Web Push (dépend de `/add-pwa`) |
 | `/add-notification-center` | Centre de notifications in-app (cloche, badge non-lu, panneau déroulant) |

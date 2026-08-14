@@ -177,6 +177,8 @@ Wait for the user's reply, then explain the requested topic using the content be
 > - **/add-storage** - Ajoute le stockage de fichiers (images, PDF, vidéos).
 > - **/add-dark-mode** - Ajoute un mode sombre (clair / sombre / automatique) avec un sélecteur prêt à l'emploi.
 > - **/add-map** - Ajoute une carte interactive (un point, plusieurs adresses, un itinéraire) sans Google Maps, sans clé à demander, sans cookies.
+> - **/add-blog** *(site vitrine uniquement)* - Installe un blog une fois pour toutes : page de liste, page d’article, flux RSS, plan du site, tout ce qui aide le référencement.
+> - **/blogpost** *(site vitrine uniquement)* - Écrit et publie un article de blog depuis la conversation, avec un aperçu obligatoire avant la mise en ligne.
 >
 > **Notifications**
 > - **/add-pwa** - Transforme votre app en application installable sur mobile et ordinateur.
