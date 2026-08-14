@@ -56,3 +56,7 @@ Baudrier can do it for you: *"adapt my site to dark mode"*. It re-reads each com
 {{callout:tip|No white flash on first load}}
 Dark mode is applied from the very first render of the page, with no transient white flash. All the technical wiring for that is set up by Baudrier, you have nothing to configure.
 {{/callout}}
+
+## Landing sites (site vitrine)
+
+On a landing site (Astro), there is no `next-themes` and no React: dark mode is a few lines of vanilla JavaScript instead - a pre-hydration script that reads the visitor's saved preference (or their OS setting) and toggles a `dark` class on `<html>`, plus a plain `ThemeToggle.astro` button. The result looks and behaves the same (light/dark, no flash on load).

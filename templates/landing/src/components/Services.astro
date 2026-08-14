@@ -1,0 +1,47 @@
+---
+export interface Service {
+  title: string;
+  description: string;
+}
+
+export interface Props {
+  heading?: string;
+  services?: Service[];
+}
+
+const {
+  heading = "Nos services",
+  services = [
+    { title: "Service un", description: "Décrivez ici le premier service proposé." },
+    { title: "Service deux", description: "Décrivez ici le deuxième service proposé." },
+    { title: "Service trois", description: "Décrivez ici le troisième service proposé." },
+  ],
+} = Astro.props;
+---
+
+<section id="services" class="bg-surface px-6 py-20">
+  <div class="mx-auto max-w-6xl">
+    <h2 class="text-center font-display text-3xl font-bold text-ink">{heading}</h2>
+    <div class="mt-12 grid gap-8 sm:grid-cols-2 lg:grid-cols-3">
+      {
+        services.map((service) => (
+          <div class="rounded-lg border border-muted/20 p-6">
+            <svg
+              class="h-8 w-8 text-accent"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              aria-hidden="true"
+            >
+              <circle cx="12" cy="12" r="9" />
+              <path d="M9 12l2 2 4-4" />
+            </svg>
+            <h3 class="mt-4 font-display text-lg font-semibold text-ink">{service.title}</h3>
+            <p class="mt-2 text-sm text-muted">{service.description}</p>
+          </div>
+        ))
+      }
+    </div>
+  </div>
+</section>

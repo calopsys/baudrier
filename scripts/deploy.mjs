@@ -51,6 +51,7 @@ import {
   updateContainer,
   waitForContainerReady,
   syncContainerSecrets,
+  LANDING_CONTAINER,
 } from "./scaleway/container.mjs";
 import { ensureJobDefinition, startJob, waitForJobRun, setSchedule } from "./scaleway/jobs.mjs";
 import { ensureRegistryNamespace, findRegistryNamespace, listImages, pruneTags } from "./scaleway/registry.mjs";
@@ -60,6 +61,7 @@ import { getSecret, putSecret, secretExists, listSecrets } from "./scaleway/secr
 import { devDbCredentials } from "./scaleway/app-credentials.mjs";
 import { ensureDocker } from "./ensure-dockerd.mjs";
 import { buildAndPushImage } from "./_docker-build.mjs";
+import { detectStack } from "./_stack.mjs";
 
 // Per-request delegation: falls back to the admin-provisioned raw key pair
 // when the operator's own key lacks IAMManager, then to the operator's
@@ -164,9 +166,16 @@ const CONTAINER_TIMEOUT_MS = Number(flag("container-timeout-ms", 300_000));
 const SKIP_COMMIT = has("no-commit");
 let BRANCH = flag("branch");
 
+// Detected from package.json only, never from user input (CONTRACT.md: no
+// repo metadata file). Picks the STEPS list below: a landing (Astro/Caddy)
+// has no database and no agent Jobs, so migrate/agentJobs never run for it.
+const STACK = detectStack(PROJECT_DIR);
+
 /* --------------------------------------------------------------- state */
 
-const STEPS = ["preflight", "commitPush", "buildPush", "migrate", "updateContainer", "agentJobs", "pruneTags", "smokeTest"];
+const LANDING_STEPS = ["preflight", "commitPush", "buildPush", "updateContainer", "pruneTags", "smokeTest"];
+const APPLICATION_STEPS = ["preflight", "commitPush", "buildPush", "migrate", "updateContainer", "agentJobs", "pruneTags", "smokeTest"];
+const STEPS = STACK === "landing" ? LANDING_STEPS : APPLICATION_STEPS;
 const completed = [];
 const warnings = [];
 let current = null;
@@ -256,6 +265,12 @@ async function preflight() {
     fail('--target must be "production" or "preview" (this must be asked explicitly, never inferred).');
   }
   if (!PROJECT_NAME) fail("--project-name is required.");
+  if (STACK === "unknown") {
+    fail(
+      `Could not detect a supported stack in ${PROJECT_DIR} (looked for "astro" or "next" in package.json). ` +
+        "This must be either a vitrine (Astro) or an application (Next.js) scaffolded by /bootstrap.",
+    );
+  }
   requireCredentials();
 
   const inRepo = sh("git", ["rev-parse", "--is-inside-work-tree"]);
@@ -483,13 +498,27 @@ async function updateContainerStep() {
   let container = await findContainerByName(ns.id, containerName);
   if (!container) {
     log(`Container "${containerName}" does not exist yet, creating it...`);
-    container = await createContainer({
-      namespaceId: ns.id,
-      name: containerName,
-      registryImage: IMAGE_URI,
-      scale: "S",
-      minScale: 0,
-    });
+    // A landing (Caddy, static) uses LANDING_CONTAINER's own numbers, never
+    // the application defaults - min_scale differs by target (no cold start
+    // on the public production vitrine, scale-to-zero on preview).
+    const createParams =
+      STACK === "landing"
+        ? {
+            namespaceId: ns.id,
+            name: containerName,
+            registryImage: IMAGE_URI,
+            scale: LANDING_CONTAINER.scale,
+            maxConcurrency: LANDING_CONTAINER.maxConcurrency,
+            minScale: TARGET === "production" ? LANDING_CONTAINER.minScaleProduction : LANDING_CONTAINER.minScalePreview,
+          }
+        : {
+            namespaceId: ns.id,
+            name: containerName,
+            registryImage: IMAGE_URI,
+            scale: "S",
+            minScale: 0,
+          };
+    container = await createContainer(createParams);
     CONTAINER_ID = container.id;
     log("Waiting for the container to leave its creation state...");
     container = await waitForContainerReady(container.id, { timeoutMs: CONTAINER_TIMEOUT_MS });
@@ -539,7 +568,25 @@ async function updateContainerStep() {
 
   log("Syncing container secrets from Secret Manager...");
   if (TARGET === "production") {
-    container = await syncContainerSecrets(container.id, { timeoutMs: CONTAINER_TIMEOUT_MS });
+    // A landing (vitrine) never seeds a DATABASE_URL secret at all (§1/§2) -
+    // only a landing production sync may tolerate that absence; a T3
+    // application's DATABASE_URL always exists once bootstrap has run, so
+    // its absence here must still throw (container.mjs#buildContainerSecretMap).
+    container = await syncContainerSecrets(container.id, {
+      timeoutMs: CONTAINER_TIMEOUT_MS,
+      allowMissingDatabaseUrl: STACK === "landing",
+    });
+  } else if (STACK === "landing") {
+    // A vitrine has no database, so no databaseUrlFrom - DB_SECRET is never
+    // resolved for a landing (resolveDatabaseSecret/migrate never run).
+    container = await syncContainerSecrets(container.id, {
+      overrides: {
+        ACCESS_RESTRICTED: "true",
+        ...(container.domain_name ? { APP_URL: `https://${container.domain_name}` } : {}),
+      },
+      allowMissingDatabaseUrl: true,
+      timeoutMs: CONTAINER_TIMEOUT_MS,
+    });
   } else {
     container = await syncContainerSecrets(container.id, {
       databaseUrlFrom: DB_SECRET.name,
@@ -788,9 +835,12 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     await step("preflight", preflight);
     await step("commitPush", commitPush);
     await step("buildPush", buildPush);
-    await step("migrate", migrate);
+    // Landing has no database and no agent Jobs (CONTRACT.md: vitrines skip
+    // all database resolution) - STEPS above already reflects this, so the
+    // handoff banner never lists these as "not attempted".
+    if (STACK !== "landing") await step("migrate", migrate);
     await step("updateContainer", updateContainerStep);
-    await step("agentJobs", agentJobs);
+    if (STACK !== "landing") await step("agentJobs", agentJobs);
     await step("pruneTags", pruneTagsStep);
     await step("smokeTest", smokeTest);
 
@@ -800,6 +850,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
         success: true,
         target: TARGET,
         branch: BRANCH,
+        stack: STACK,
         containerId: CONTAINER_ID,
         url: CONTAINER_URL,
         image: IMAGE_URI,

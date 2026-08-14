@@ -67,6 +67,12 @@ Keep the "To verify" list short and human. If you verified everything yourself, 
 
 ---
 
+## Step 0 - Garde vitrine
+
+**Garde vitrine** : invoke `_detect-project-root` first. If `PROJECT_TYPE=landing`, stop and tell the user, in their language (French shown): « Cette fonctionnalité n’est pas disponible pour un site vitrine : elle est réservée aux applications web. Votre site reste modifiable, et vous pouvez le déployer avec /deploy. »
+
+---
+
 ## Progress communication
 
 At startup, **display a checklist** in natural language (not "Step N"). During execution, announce each action with `↳ …` then mark `✅` once done. At the end, every box must be `✅`. NEVER mention the internal step numbers to the user.

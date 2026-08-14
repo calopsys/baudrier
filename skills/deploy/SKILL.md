@@ -101,7 +101,11 @@ This repository's GitHub token cannot open or merge pull requests from this envi
 
 ### Preview: cost, and what stays untouched
 
-The first time in this conversation a branch's preview is deployed, tell the user, in plain French, before continuing: a preview creates one Serverless Container and one Serverless SQL database, and this harness never deletes a database (`_destructive-guard.mjs` refuses it), so removing that database later is a manual job in the Scaleway console. Do not repeat this note on a later `/deploy` of the same branch in the same conversation.
+The first time in this conversation a branch's preview is deployed, tell the user, in plain French, before continuing:
+- **Application (Next.js)**: a preview creates one Serverless Container and one Serverless SQL database, and this harness never deletes a database (`_destructive-guard.mjs` refuses it), so removing that database later is a manual job in the Scaleway console.
+- **Vitrine (Astro/Caddy)**: a vitrine has no database at all, so a preview creates only one Serverless Container, at `min_scale=0` - it costs close to nothing while idle and there is nothing to remove manually later.
+
+Do not repeat this note on a later `/deploy` of the same branch in the same conversation.
 
 **A preview deploy must never write `ACCESS_ALLOWED_IPS`.** That secret is production's own access list (CONTRACT.md §6). Adding an address to it while production is restricted grants that address production access. No preview flow may touch it, whatever the user asks for.
 
@@ -109,12 +113,15 @@ The first time in this conversation a branch's preview is deployed, tell the use
 
 ## Step 2 - Project context
 
-Invoke `_detect-project-root` to get `PROJECT_NAME` and confirm this is a Next.js project. Note the **git repository root** (usually the current directory; in a monorepo it's above `WEB_DIR`) - `deploy.mjs` needs to run from there, since that's where `.git` lives and where `docker build` reads its context.
+Invoke `_detect-project-root` to get `PROJECT_NAME` and `PROJECT_TYPE`. Abort only if `PROJECT_TYPE=unknown` - both `landing` (vitrine, Astro/Caddy) and `application` (Next.js) are supported by this skill. Note the **git repository root** (usually the current directory; in a monorepo it's above `WEB_DIR`) - `deploy.mjs` needs to run from there, since that's where `.git` lives and where `docker build` reads its context.
 
 There is no workflow file to read a registry namespace out of - the harness itself builds and pushes the image (CONTRACT.md §5). `deploy.mjs` discovers this app's registry namespace automatically: it looks, within the app's own Scaleway Project, for a name matching the project's slug (with an optional random suffix added at creation time for global-uniqueness reasons, CONTRACT.md §2). A namespace with a genuinely different name shows up as the `Registry namespace:` line in the project's `CLAUDE.md`. Pass `--registry-namespace <name>` only to force an explicit override - it fails loudly if that exact name does not exist, instead of silently creating a new namespace.
 
-Tell the user briefly what's about to happen:
+Tell the user briefly what's about to happen. For `PROJECT_TYPE=application`:
 > Je vais committer et pousser vos changements, construire et publier l’image, migrer la base de données, puis mettre à jour le site. Ça prend en général quelques minutes.
+
+For `PROJECT_TYPE=landing` (a vitrine never migrates a database):
+> Je vais committer et pousser vos changements, construire et publier l’image, puis mettre à jour le site. Ça prend en général quelques minutes.
 
 Mention explicitly that any uncommitted local change will be committed as part of this (so nothing is a surprise): *"Si vous avez des modifications non enregistrées, je vais les committer avant de déployer."*
 
@@ -239,7 +246,9 @@ The script performs, in order, and aborts immediately (before the next step) on 
 6. **pruneTags** - deletes old Container Registry tags beyond the 10 most recent (Container Registry has no retention policy on its own - this is the harness's only defense against unbounded storage cost)
 7. **smokeTest** - fetches `<url>/api/healthz` and requires HTTP 200 with a `{"ok":true}` body. `src/proxy.ts` exempts that exact path from the IP gate (CONTRACT.md §6), so the probe must pass from ANY machine - VPN, web sandbox, or CI. A 403 there is a real failure: the exemption is missing from the project's `src/proxy.ts` (see the failure table below). After a green healthz the script fetches the homepage with the `ACCESS_BYPASS_TOKEN` header (CONTRACT.md §6) and requires HTTP 200 plus the stylesheet heuristic; any other status fails the deploy. Sole downgrade: a 403 despite the token means the app's `src/proxy.ts` predates the bypass check - the script warns with the migration path (copy `bypassTokenMatches()` from `templates/deploy/proxy.ts`) and the deploy still succeeds.
 
-For a **preview** deploy on a branch that has never been deployed before, step 3 also transparently provisions a dedicated preview Serverless SQL database and IAM credentials for it - this is normal and only happens once per branch.
+**For `PROJECT_TYPE=landing`**, the same smoke-test contract holds, but the two pieces above live in different files: the `/api/healthz` exemption is the dedicated `handle` block in `templates/landing/Caddyfile`, and the bypass-token compare is generated into `gate.caddy` by `templates/landing/docker-entrypoint.sh`, not by `src/proxy.ts` or `bypassTokenMatches()` - diagnose a 403 there by reading those two files instead.
+
+For a **preview** deploy of an **application** (`PROJECT_TYPE=application`) on a branch that has never been deployed before, step 3 also transparently provisions a dedicated preview Serverless SQL database and IAM credentials for it - this is normal and only happens once per branch. A vitrine (`PROJECT_TYPE=landing`) has no database at all, so this step is a no-op for it.
 
 ---
 
@@ -258,7 +267,7 @@ Then one line about the homepage, from the log's homepage probe: if it answered 
 
 If `warnings` is non-empty, mention each one in plain language (e.g. a missing stylesheet detection isn't fatal, but worth a manual look).
 
-For a preview, remind the user preview environments scale to zero and cost close to nothing while idle, and that this environment has its own database, isolated from production. Also tell the user their branch stays open for review - they can open the pull request from the Claude Code web interface whenever they are ready; this skill never opens one itself.
+For a preview, remind the user preview environments scale to zero and cost close to nothing while idle. For an application, also mention this environment has its own database, isolated from production - a vitrine has no database sentence to add, since it has none. Also tell the user their branch stays open for review - they can open the pull request from the Claude Code web interface whenever they are ready; this skill never opens one itself.
 
 ### Failure (`"success":false`)
 Read the handoff banner printed just above the JSON line - it names the exact step that failed (`failedStep`) and lists what already completed. Translate the underlying error for the user in plain language, then:

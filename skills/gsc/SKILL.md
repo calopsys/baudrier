@@ -1,6 +1,6 @@
 ---
 name: gsc
-description: Connect a Next.js project to Google Search Console and audit the real Google data - indexing coverage, search queries, clicks, positions, and sitemap status. Complements /seo (on-page audit) with what Google actually sees. Use after the site has been deployed on a custom domain and has had a few weeks of traffic.
+description: Connect a project (application or site vitrine) to Google Search Console and audit the real Google data - indexing coverage, search queries, clicks, positions, and sitemap status. Complements /seo (on-page audit) with what Google actually sees. Use after the site has been deployed on a custom domain and has had a few weeks of traffic.
 compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (scw, gh)."
 ---
 
@@ -53,13 +53,9 @@ The user is **not necessarily an SEO pro**. It is often someone who just put the
 
 ---
 
-## Progress communication
-
-At startup, display a checklist in natural language. During execution, announce with `↳ …` then mark `✅`. **Never** an internal "Step N" / "Étape N" in your user-facing messages. **Never** the internal skill names prefixed with `_` - describe in plain language.
-
----
-
 ## Step 0 - Preflight
+
+Invoke `_detect-project-root` first to get `PROJECT_NAME` and `PROJECT_TYPE`. Both stacks are supported here; abort only on `PROJECT_TYPE=unknown`. `PROJECT_TYPE` selects the sitemap check (Step 3.1) and the redirect location (Step 5).
 
 ### 0.1 - Verify the site is deployed on a usable domain
 
@@ -122,6 +118,12 @@ Delegate to the internal skill **`_setup-gsc`**: it guides the creation of a Goo
 When `_setup-gsc` hands back successfully, re-forge the token and continue to Step 1.
 
 If the user declines the setup -> propose an on-page audit via `/seo` (without GSC) and stop cleanly.
+
+---
+
+## Progress communication
+
+At startup, display a checklist in natural language. During execution, announce with `↳ …` then mark `✅`. **Never** an internal "Step N" / "Étape N" in your user-facing messages. **Never** the internal skill names prefixed with `_` - describe in plain language.
 
 ---
 
@@ -206,12 +208,16 @@ After adding, wait a few seconds/minutes, then run Step 1c (verify). If it fails
 
 ## Step 3 - Submit the sitemap
 
-### 3.1 - Verify that `sitemap.ts` exists
-Look for `src/app/sitemap.ts` (or `apps/web/src/app/sitemap.ts`). Absent -> tell the user to run `/seo` first (which creates the sitemap).
+### 3.1 - Verify that the sitemap exists
+- `PROJECT_TYPE=application`: look for `src/app/sitemap.ts` (or `apps/web/src/app/sitemap.ts`).
+- `PROJECT_TYPE=landing`: look for `@astrojs/sitemap` in `astro.config.mjs` integrations and a `site:` value.
+
+Absent -> tell the user to run `/seo` first (which creates the sitemap for both stacks).
 
 ### 3.2 - Submit (PUT)
+The feed path differs by stack: `sitemap.xml` for an application, `sitemap-index.xml` for a landing (`@astrojs/sitemap` generates an index).
 ```bash
-SITE="sc-domain%3A<domain>"; FEED="https%3A%2F%2F<domain>%2Fsitemap.xml"
+SITE="sc-domain%3A<domain>"; FEED="https%3A%2F%2F<domain>%2Fsitemap.xml"   # landing: %2Fsitemap-index.xml
 curl -s -X PUT -H "Authorization: Bearer $TOK" "https://www.googleapis.com/webmasters/v3/sites/$SITE/sitemaps/$FEED"
 ```
 
@@ -272,7 +278,7 @@ For each, explain the concrete impact and propose an action (see teaching tone).
 
 ## Step 5 - Fixes
 
-Propose applying the fixes (titles / metas / content), same rules as `/seo`. Explicit validation before writing any code. **Never rename an existing route without a 301 redirect** (otherwise 404 on the indexed URLs -> loss of ranking; add the redirect in `next.config.js`).
+Propose applying the fixes (titles / metas / content), same rules as `/seo`. Explicit validation before writing any code. **Never rename an existing route without a 301 redirect** (otherwise 404 on the indexed URLs -> loss of ranking). Add the redirect in `next.config.js` for an application; for a landing add a `redir <old-path> <new-path> permanent` line in the `Caddyfile` route block, after the gate import and before the catch-all handle (Astro's own `redirects` config only emits meta-refresh pages, not a real 301).
 
 ---
 

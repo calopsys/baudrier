@@ -52,3 +52,7 @@ The database is created in the `fr-par` (Paris) region to comply with RGPD on th
 {{callout:warning|Baudrier never deletes a database}}
 Deleting a database is never something Baudrier does on its own, even if asked - it's technically blocked. If you genuinely want a database gone, that's a deliberate, manual action you take yourself in the Scaleway console. This is intentional: with no on-demand backup available right before a deletion, an accidental one would be unrecoverable past the last daily snapshot.
 {{/callout}}
+
+## Landing sites (site vitrine)
+
+Not available on a landing site: this command is reserved for full applications. If your project is a landing site (built with Astro, no database, no user accounts), Baudrier refuses the command and tells you so - your site stays exactly as it is, and remains deployable with `/deploy`.

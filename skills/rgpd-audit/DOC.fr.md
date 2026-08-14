@@ -63,3 +63,7 @@ Si vous avez ajouté ou retiré plusieurs services en peu de temps (par exemple 
 {{callout:warning|RGPD = obligation légale en France}}
 Pour tout site qui collecte ou traite des données personnelles d'utilisateurs français / européens (formulaire de contact, comptes utilisateurs, notifications, analytics, etc.), une politique de confidentialité à jour est **obligatoire**. Les amendes CNIL peuvent grimper. Lancer `/rgpd-audit` régulièrement (tous les 2-3 mois ou après chaque refonte) est une bonne hygiène.
 {{/callout}}
+
+## Sites vitrines
+
+Non disponible sur un site vitrine : cette commande est réservée aux applications complètes. Si votre projet est un site vitrine (Astro, sans base de données ni comptes utilisateurs), Baudrier refuse la commande et vous le dit - votre site reste tel quel, et vous pouvez toujours le déployer avec `/deploy`.

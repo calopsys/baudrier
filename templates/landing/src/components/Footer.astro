@@ -1,0 +1,22 @@
+---
+export interface Props {
+  siteName?: string;
+}
+
+const { siteName = "Mon entreprise" } = Astro.props;
+const year = new Date().getFullYear();
+---
+
+<footer class="border-t border-muted/20 bg-surface px-6 py-10">
+  <div
+    class="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 text-sm text-muted sm:flex-row"
+  >
+    <p>© {year} {siteName}. Tous droits réservés.</p>
+    <nav class="flex gap-6">
+      <a href="/mentions-legales" class="hover:text-accent">Mentions légales</a>
+      <a href="/politique-de-confidentialite" class="hover:text-accent">
+        Politique de confidentialité
+      </a>
+    </nav>
+  </div>
+</footer>

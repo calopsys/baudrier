@@ -20,11 +20,19 @@ You read or change how much compute a deployed container gets. Everything here r
 
 ## Step 1 - Identify the environment
 
-Invoke `_detect-project-root` to get `PROJECT_NAME`. If the user didn't specify which environment, ask via `AskUserQuestion`:
+Invoke `_detect-project-root` to get `PROJECT_NAME`. Detect the stack (never guess from the description):
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/_stack.mjs"
+```
+
+This prints `{"stack":"landing"|"application"|"unknown"}`. A `landing` (vitrine) has no database and no concurrency choice - Steps 2 to 4 below note where it differs, and the **Database** section does not apply to it at all.
+
+If the user didn't specify which environment, ask via `AskUserQuestion`:
 - Question: "Quel environnement voulez-vous ajuster ?"
 - Options: `Production` / `Aperçu (branche actuelle)`
 
-**If the user's request is about the database** (they mention "base de données", slow queries, database cost, or the app has a database and they ask "everything"): jump to the **Database** section at the end instead of (or in addition to) the container flow below.
+**If the user's request is about the database** (they mention "base de données", slow queries, database cost, or the app has a database and they ask "everything"): for an `application`, jump to the **Database** section at the end instead of (or in addition to) the container flow below. For a `landing`, say so in French and stay in the container flow: « Ce site vitrine n’a pas de base de données : il n’y a rien à ajuster de ce côté. »
 
 ---
 
@@ -46,7 +54,9 @@ Present the presets as a simple table, in French, using the numbers the script j
 | L | ... | ... | ... | ~... €/mois |
 | XL | ... | ... | ... | ~... €/mois |
 
-Explain **why concurrency moves with CPU**, in plain language:
+**Vitrine (Astro/Caddy)** : présentez uniquement le CPU et la mémoire de chaque taille, sans la colonne « Requêtes simultanées/instance » ni l’explication ci-dessous - la concurrence reste fixée à 80 requêtes simultanées quelle que soit la taille choisie, un site statique servi par Caddy n’ayant pas de traitement lourd susceptible de saturer une instance. Ajoutez cette phrase à la place : « La concurrence reste à 80 requêtes simultanées pour ce site vitrine, quelle que soit la taille choisie. »
+
+For an **application**, explain **why concurrency moves with CPU**, in plain language:
 > Scaleway limite par défaut chaque instance à 80 requêtes en même temps. Avec seulement 250 mvCPU (taille S), ça sature bien avant que Scaleway ait le temps de démarrer une deuxième instance - c'est pour ça que la taille S limite volontairement à 8 requêtes simultanées : mieux vaut démarrer une nouvelle instance plus tôt que de faire attendre les visiteurs.
 
 Explain **min_scale**, in plain language:
@@ -67,6 +77,8 @@ Then ask about `min_scale` only if relevant to what the user is trying to achiev
 - Question: "Le site doit-il rester toujours allumé, ou peut-il se mettre en veille quand personne ne visite ?"
 - Options: `Toujours allumé (min_scale=1)` / `Veille automatique (min_scale=0, par défaut)`
 
+**Vitrine (Astro/Caddy), environnement production** : cette valeur démarre à `min_scale=1` (toujours allumé), pas à 0 comme pour une application. Si le choix ferait passer la production en dessous de `min_scale=1`, avertissez d’abord en français avant de continuer : « Votre site vitrine en production reste allumé en permanence pour éviter tout temps de démarrage. Le mettre en veille fera attendre quelques secondes le premier visiteur après une pause : voulez-vous vraiment continuer ? »
+
 ---
 
 ## Step 4 - Apply
@@ -76,8 +88,11 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/scale.mjs" apply \
   --project-name "<PROJECT_NAME>" \
   --target <production|preview> [--branch <branch>] \
   --preset <S|M|L|XL> \
-  [--min-scale <0|1>]
+  [--min-scale <0|1>] \
+  [--max-concurrency <N>]
 ```
+
+**Vitrine (Astro/Caddy)**: always add `--max-concurrency 80` here, whatever preset was chosen - a static site's concurrency never moves with size (Step 2's note above).
 
 Wait for the container to report ready (the script waits for you and prints a final JSON line). Relay the result:
 
@@ -88,6 +103,8 @@ If `min_scale` wasn't changed, don't claim it was.
 ---
 
 ## Database - Serverless SQL autoscaling bounds
+
+**This section applies only to an `application`.** A `landing` (vitrine) has no database at all - refuse in French and stop here: « Ce site vitrine n’a pas de base de données : il n’y a rien à afficher ou à modifier ici. »
 
 The database scales its own compute independently of the container, between two bounds in vCPU units. `/add-db` provisions every database at **0 → 5 vCPU** (0 = the database sleeps and costs nothing when idle; 5 caps what a traffic spike can cost). This section changes those bounds.
 

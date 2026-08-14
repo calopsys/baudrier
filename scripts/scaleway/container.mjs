@@ -101,6 +101,11 @@ export const SCALE_PRESETS = Object.freeze({
   XL: Object.freeze({ cpuLimit: 2000, memoryLimit: 4096, maxConcurrency: 80 }),
 });
 
+// A vitrine (templates/landing) serves static files through Caddy, which is
+// IO-light, so preset S safely carries concurrency 80; min_scale 1 in
+// production avoids a cold start on a public site with no backend to warm.
+export const LANDING_CONTAINER = Object.freeze({ scale: "S", maxConcurrency: 80, minScaleProduction: 1, minScalePreview: 0 });
+
 /* ----------------------------------------------------------------- helpers */
 
 async function containerApi() {
@@ -534,13 +539,27 @@ function isContainerExcludedSecret(name) {
  * When the map has no `AUTH_URL`, this function derives one from the map's
  * own `APP_URL` (see the derivation below).
  *
+ * `allowMissingDatabaseUrl` defaults to `false`: a missing `databaseUrlFrom`
+ * secret throws (via `getSecret`), because `setContainerSecrets` replaces
+ * the WHOLE map - silently skipping the key would delete a running
+ * container's `DATABASE_URL`, which is exactly what happened when
+ * `rotate-secret`/`publish` targeted a preview secret that did not exist.
+ * Only a landing (vitrine) project, which never seeds a `DATABASE_URL`
+ * secret at all, should pass `true`.
+ *
  * @param {object} [opts]
  * @param {Record<string,string|null|undefined>} [opts.overrides]
  * @param {string} [opts.databaseUrlFrom="DATABASE_URL"]
  * @param {string} [opts.projectId]
+ * @param {boolean} [opts.allowMissingDatabaseUrl=false]
  * @returns {Promise<Record<string,string>>}
  */
-export async function buildContainerSecretMap({ overrides = {}, databaseUrlFrom = "DATABASE_URL", projectId } = {}) {
+export async function buildContainerSecretMap({
+  overrides = {},
+  databaseUrlFrom = "DATABASE_URL",
+  projectId,
+  allowMissingDatabaseUrl = false,
+} = {}) {
   const scope = projectId ? { projectId } : {};
   const all = await listSecrets(scope);
   const map = {};
@@ -549,7 +568,18 @@ export async function buildContainerSecretMap({ overrides = {}, databaseUrlFrom 
     if (isContainerExcludedSecret(name)) continue;
     map[name] = await getSecret(name, scope);
   }
-  map.DATABASE_URL = await getSecret(databaseUrlFrom, scope);
+  if (allowMissingDatabaseUrl) {
+    // A landing project has no database and seeds no DATABASE_URL secret;
+    // absence is a valid state there, so skip the key instead of throwing.
+    if (all.some((s) => s.name === databaseUrlFrom)) {
+      map.DATABASE_URL = await getSecret(databaseUrlFrom, scope);
+    }
+  } else {
+    // Absence is NOT tolerated by default: getSecret() throws not_found,
+    // which is what must happen instead of silently deleting DATABASE_URL
+    // from the container's next full-map write.
+    map.DATABASE_URL = await getSecret(databaseUrlFrom, scope);
+  }
 
   for (const [key, value] of Object.entries(overrides)) {
     if (value === undefined || value === null) delete map[key];
@@ -586,14 +616,15 @@ export async function buildContainerSecretMap({ overrides = {}, databaseUrlFrom 
  * @param {Record<string,string|null|undefined>} [opts.overrides]
  * @param {string} [opts.databaseUrlFrom="DATABASE_URL"]
  * @param {string} [opts.projectId]
+ * @param {boolean} [opts.allowMissingDatabaseUrl=false] see buildContainerSecretMap
  * @param {number} [opts.timeoutMs=300000]
  * @returns {Promise<object>} the ready container, after the secrets write
  */
 export async function syncContainerSecrets(
   containerId,
-  { overrides, databaseUrlFrom, projectId, timeoutMs = 300_000 } = {},
+  { overrides, databaseUrlFrom, projectId, allowMissingDatabaseUrl, timeoutMs = 300_000 } = {},
 ) {
-  const map = await buildContainerSecretMap({ overrides, databaseUrlFrom, projectId });
+  const map = await buildContainerSecretMap({ overrides, databaseUrlFrom, projectId, allowMissingDatabaseUrl });
   await waitForContainerReady(containerId, { timeoutMs });
   await setContainerSecrets(containerId, map);
   return waitForContainerReady(containerId, { timeoutMs });

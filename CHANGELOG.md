@@ -1,5 +1,48 @@
 # Changelog
 
+## v1.3.0 (2026-08-13)
+
+Second stack: sites vitrines (Astro 5 static + Caddy 2), the harness's first
+project type besides the T3 application.
+
+### Added
+
+- **A vitrine stack, end to end.** `/bootstrap` asks one French question (or
+  reads the literal first token `landing`/`application`) and never infers the
+  stack from the description. A chosen vitrine gets a static Astro 5 site,
+  hand-rolled from `templates/landing/` (26 files, no `create-astro`), one of
+  three Tailwind v4 token presets (Épuré, Chaleureux, Audacieux), and deploys
+  as a Caddy 2 image on the same Container Registry + Serverless Containers
+  pipeline as an application - no database, no Serverless Jobs, no Object
+  Storage. `LANDING_CONTAINER` (`scripts/scaleway/container.mjs`) fixes its
+  resources: preset S, `maxConcurrency` 80, `min_scale` 1 in production
+  (~6,40 EUR/month always-on), 0 on preview.
+- **A Caddyfile gate with proxy.ts parity.** `templates/landing/Caddyfile` +
+  `docker-entrypoint.sh` reproduce every invariant of
+  `templates/deploy/proxy.ts`: only the literal `"false"` opens
+  `ACCESS_RESTRICTED`, the ACME challenge and the exact `/api/healthz` path
+  stay exempt regardless of state, and a bypass token shorter than 32
+  characters mints no bypass line. Documented deviation: the Caddy header
+  compare is not constant-time.
+- **A landing deploy branch.** `scripts/deploy.mjs` detects the stack via the
+  new `scripts/_stack.mjs#detectStack()` and skips the migration Job and the
+  agent-Jobs reconciliation outright for a vitrine; the smoke test, the
+  `revue` preview branch and the container-secret sync are unchanged, minus
+  any database. `buildContainerSecretMap` gains an opt-in
+  `allowMissingDatabaseUrl` flag, passed only by the landing call sites,
+  since a vitrine never seeds a `DATABASE_URL` secret.
+- **A shared refusal gate.** 15 skills support a vitrine (`deploy`, `publish`,
+  `unpublish`, `add-domain`, `costs`, `save-project`, `delete-project`,
+  `add-analytics`, `add-dark-mode`, `seo`, `seo-perf`, `geo`, `rotate-secret`,
+  `scale`, `gsc`); every other project-scoped skill refuses through one shared French
+  gate, wired through `PROJECT_TYPE` in `skills/_detect-project-root/SKILL.md`.
+- **Checks 81-85**: gate parity (Caddyfile/entrypoint vs. proxy.ts), landing
+  image shape (Dockerfile/Caddyfile/.dockerignore), gate coverage (every
+  public skill classified exactly once), landing pipeline invariants (step
+  order, no `DATABASE_URL` seed, container params), and the
+  `templates/landing/` manifest + bootstrap stack/preset wording. Check 48
+  (healthz consumers) now also covers the Caddyfile's `/api/healthz` handler.
+
 ## v1.2.4 (2026-08-13)
 
 Cas B database self-service (wave D) and the residues of wave E. The D

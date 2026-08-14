@@ -62,3 +62,7 @@ A Scaleway Organization can have at most **10 external domains** connected. If y
 {{callout:info|Keep the ACME exemption in proxy.ts}}
 Your app ships with an IP allowlist by default. Its `proxy.ts` always exempts `/.well-known/acme-challenge/*` from that filter, specifically so Scaleway can keep issuing and renewing your HTTPS certificate. Never remove that exemption - doing so would silently break certificate renewal and eventually take your site offline over HTTPS.
 {{/callout}}
+
+## Landing sites (site vitrine)
+
+On a landing site (Astro), the final code-cleanup step is different: instead of touching `sitemap.ts`/`layout.tsx`, Baudrier sets the `site:` field in `astro.config.mjs` to your new domain and installs `@astrojs/sitemap` if it isn't already there. Everything else (checking delegation, waiting for DNS propagation, attaching the domain, updating `APP_URL`) works identically.

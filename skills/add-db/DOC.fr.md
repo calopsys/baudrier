@@ -52,3 +52,7 @@ La base est créée en région `fr-par` (Paris) pour respecter le RGPD côté r�
 {{callout:warning|Baudrier ne supprime jamais une base de données}}
 Supprimer une base de données n'est jamais une action que Baudrier effectue de lui-même, même si on le lui demande - c'est techniquement bloqué. Si vous voulez vraiment supprimer une base, c'est une action manuelle et volontaire que vous effectuez vous-même dans la console Scaleway. C'est voulu : sans sauvegarde à la demande juste avant une suppression, une suppression accidentelle serait irrécupérable au-delà du dernier instantané quotidien.
 {{/callout}}
+
+## Sites vitrines
+
+Non disponible sur un site vitrine : cette commande est réservée aux applications complètes. Si votre projet est un site vitrine (Astro, sans base de données ni comptes utilisateurs), Baudrier refuse la commande et vous le dit - votre site reste tel quel, et vous pouvez toujours le déployer avec `/deploy`.

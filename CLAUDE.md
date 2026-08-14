@@ -3,6 +3,8 @@
 Claude Code plugin: a non-technical French user describes a webapp in plain French, and
 the harness builds and deploys it on Scaleway. French-sovereign fork of
 [hypervibe-harness](https://github.com/flavien-ia/hypervibe-harness) (Apache-2.0).
+Two project stacks share this harness: a T3 (Next.js) application, or a static
+vitrine (Astro + Caddy) - see CONTRACT.md §1 "Two stacks".
 
 ## Read this first
 
@@ -15,7 +17,7 @@ check it before re-deriving a Scaleway behaviour from scratch.
 ## The gate
 
 ```bash
-node tools/verify.mjs          # 79 checks, all must pass
+node tools/verify.mjs          # 84 checks, all must pass
 node tools/verify.mjs --only 15,16
 ```
 

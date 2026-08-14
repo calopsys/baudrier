@@ -44,3 +44,7 @@ Adds push notifications: your app can alert its users on their phone, even when 
 - **iPhone/iPad**: web push only works if the user has **installed the app on their home screen** (iOS 16.4 minimum), and the activation must come from a gesture on their part (the button). This is an Apple rule, not a limitation of your app.
 - Push is tested **after deployment** (the service worker is disabled in development).
 - Natural complement: `/add-notification-center` adds a bell **inside the app** with the notification history. The two combine: a single call then notifies both the bell **and** the phone.
+
+## Landing sites (site vitrine)
+
+Not available on a landing site: this command is reserved for full applications. If your project is a landing site (built with Astro, no database, no user accounts), Baudrier refuses the command and tells you so - your site stays exactly as it is, and remains deployable with `/deploy`.

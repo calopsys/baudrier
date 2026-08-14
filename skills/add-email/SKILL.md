@@ -26,6 +26,8 @@ Scaleway TEM **n'a pas d'adresse de test partagée** (contrairement à d'autres 
 
 ## Step 0 - Preflight: email already configured on THIS project?
 
+**Garde vitrine** : invoke `_detect-project-root` first. If `PROJECT_TYPE=landing`, stop and tell the user, in their language (French shown): « Cette fonctionnalité n’est pas disponible pour un site vitrine : elle est réservée aux applications web. Votre site reste modifiable, et vous pouvez le déployer avec /deploy. »
+
 **First of all**, invoke `_check-deps email` to detect the project state:
 
 ```bash

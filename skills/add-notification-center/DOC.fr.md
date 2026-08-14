@@ -48,3 +48,7 @@ Les deux se complètent et s'installent **dans n'importe quel ordre** : dès que
 
 - Pour créer une notification depuis votre code serveur : `await notifyUser(db, userId, { title: "Commande expédiée", body: "Votre colis arrive jeudi.", url: "/commandes" })`.
 - Si vous ajoutez `/add-push-notification` plus tard, le câblage se fait automatiquement : `notifyUser` se mettra à envoyer aussi la notification système, sans rien changer à votre code.
+
+## Sites vitrines
+
+Non disponible sur un site vitrine : cette commande est réservée aux applications complètes. Si votre projet est un site vitrine (Astro, sans base de données ni comptes utilisateurs), Baudrier refuse la commande et vous le dit - votre site reste tel quel, et vous pouvez toujours le déployer avec `/deploy`.

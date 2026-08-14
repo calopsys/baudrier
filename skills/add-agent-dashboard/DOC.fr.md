@@ -56,3 +56,7 @@ Vous n'avez rien à configurer dans le dashboard quand vous créez un nouvel age
 {{callout:warning|Dashboard = admin only}}
 Toutes les routes du dashboard sont protégées par `adminProcedure`. Seul votre login admin peut accéder à `/admin/agents`. Vos utilisateurs réguliers (mode "users" de `/add-auth`) ne peuvent pas voir cette page. C'est intentionnel, l'historique des agents peut contenir des données sensibles.
 {{/callout}}
+
+## Sites vitrines
+
+Non disponible sur un site vitrine : cette commande est réservée aux applications complètes. Si votre projet est un site vitrine (Astro, sans base de données ni comptes utilisateurs), Baudrier refuse la commande et vous le dit - votre site reste tel quel, et vous pouvez toujours le déployer avec `/deploy`.

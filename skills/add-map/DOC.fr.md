@@ -50,3 +50,7 @@ Si vous avez beaucoup de points sur une zone restreinte (genre boutiques d'une v
 {{callout:warning|Geocoding au runtime}}
 Si vos utilisateurs entrent des adresses libres dans un formulaire et que vous voulez les afficher sur la carte automatiquement, ça demande un service de geocoding payant (Mapbox / MapTiler) : OpenStreetMap Nominatim limite trop strictement pour ça. Baudrier utilise Nominatim **uniquement à l'installation** pour vos points fixes, pas en production.
 {{/callout}}
+
+## Sites vitrines
+
+Non disponible sur un site vitrine : cette commande est réservée aux applications complètes. Si votre projet est un site vitrine (Astro, sans base de données ni comptes utilisateurs), Baudrier refuse la commande et vous le dit - votre site reste tel quel, et vous pouvez toujours le déployer avec `/deploy`.

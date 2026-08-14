@@ -195,7 +195,7 @@ Que `database.found` et `storage.found` soient vrais ou non, affiche cette secti
 >
 > Les liens de la console Scaleway pour les gérer toi-même (les consulter, en faire un export, ou les supprimer manuellement si tu es sûr) te seront redonnés dans le récap final.
 
-Si `database.found` et `storage.found` sont tous les deux `false` (aucune base, aucun bucket configurés pour ce projet), dis-le simplement : *"Ce projet n'a ni base de données ni stockage de fichiers configurés - rien à préserver de ce côté, mais je ne les supprimerais de toute façon jamais si c'était le cas."*
+Si `database.found` et `storage.found` sont tous les deux `false` (aucune base, aucun bucket configurés pour ce projet), dis-le simplement : *"Ce projet n'a ni base de données ni stockage de fichiers configurés - rien à préserver de ce côté, mais je ne les supprimerais de toute façon jamais si c'était le cas."* Pour un site vitrine (`PROJECT_TYPE=landing`), c’est la situation normale, pas une lacune : un site vitrine n’a jamais de base de données ni de bucket, donc il n’y a jamais de lien de console à donner pour eux.
 
 ### 2.1 Section "🔵 Infrastructure jetable (je peux la supprimer automatiquement)"
 
@@ -318,7 +318,7 @@ le faire, manuellement, dans la console Scaleway aux liens ci-dessus.
 Je ne peux pas le faire à ta place, et je ne le ferai jamais automatiquement.
 ```
 
-Remplis chaque `<...>` avec les valeurs réelles de l'inventaire (Phase 1). Si `database.found` est `false` et `storage.found` est `false`, remplace ce bloc par une simple ligne : *"Ce projet n'avait ni base de données ni stockage de fichiers configurés - rien à te signaler de ce côté."* - mais ne saute jamais cette section silencieusement, dis toujours explicitement où en est la base/le stockage.
+Remplis chaque `<...>` avec les valeurs réelles de l'inventaire (Phase 1). Si `database.found` est `false` et `storage.found` est `false`, remplace ce bloc par une simple ligne : *"Ce projet n'avait ni base de données ni stockage de fichiers configurés - rien à te signaler de ce côté."* - mais ne saute jamais cette section silencieusement, dis toujours explicitement où en est la base/le stockage. Pour un site vitrine (`PROJECT_TYPE=landing`), formule-le comme un fait normal du type de site, pas comme une absence à justifier - il n’y a jamais de lien de console base/stockage à fournir pour un site vitrine.
 
 ### 4.1 "✅ Supprimé automatiquement"
 Tableau des entrées de `report.deleted` traduites en langage accessible.

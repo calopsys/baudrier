@@ -8,6 +8,8 @@ Baudrier est un fork de [Hypervibe Harness](https://github.com/flavien-ia/hyperv
 
 Les applications générées sont exclusivement en français et sont déployées **restreintes à votre IP par défaut** ; une skill dédiée (`/publish`) les ouvre ensuite au public quand vous êtes prêt.
 
+`/bootstrap` construit deux types de projets : une **application web** complète (comptes, formulaires, données), ou un **site vitrine** statique (quelques pages de présentation, sans compte ni base de données), servi par Caddy et toujours actif. Vous choisissez au tout début, en un mot ou en répondant à une question.
+
 ## État du projet
 
 La conversion est terminée : toutes les skills de ce plugin ciblent désormais

@@ -68,3 +68,7 @@ La skill ne propose pas de `/restore-project`. C'est volontaire : restaurer un e
 {{callout:tip|Le filet de sécurité avant /delete-project}}
 Le réflexe : avant de supprimer définitivement un projet avec `/delete-project`, lance d'abord `/save-project` (la skill te le propose aussi automatiquement à ce moment-là).
 {{/callout}}
+
+## Sites vitrines
+
+Sur un site vitrine, le résumé dit clairement : **code + secrets, pas de base ni de stockage** - rien ne manque, un site vitrine n’a tout simplement ni l’un ni l’autre.

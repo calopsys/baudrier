@@ -56,3 +56,7 @@ You have nothing to configure in the dashboard when you create a new agent: `/ad
 {{callout:warning|Dashboard = admin only}}
 All the dashboard routes are protected by `adminProcedure`. Only your admin login can access `/admin/agents`. Your regular users ("users" mode of `/add-auth`) cannot see this page. This is intentional, agent history can contain sensitive data.
 {{/callout}}
+
+## Landing sites (site vitrine)
+
+Not available on a landing site: this command is reserved for full applications. If your project is a landing site (built with Astro, no database, no user accounts), Baudrier refuses the command and tells you so - your site stays exactly as it is, and remains deployable with `/deploy`.

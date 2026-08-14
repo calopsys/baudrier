@@ -68,3 +68,7 @@ Pas de "produit à activer" séparé, ni de carte bancaire à renseigner avant d
 {{callout:warning|Sécurité des données utilisateur}}
 En privé, le contrôle d'accès est crucial : votre code doit vérifier que l'utilisateur qui demande un fichier en a bien le droit avant de générer l'URL signée. Si Baudrier construit l'UI pour vous, ces vérifications sont incluses (vérification de propriété, vérification de session). Si vous écrivez votre propre code, ne supprimez pas ces checks.
 {{/callout}}
+
+## Sites vitrines
+
+Non disponible sur un site vitrine : cette commande est réservée aux applications complètes. Si votre projet est un site vitrine (Astro, sans base de données ni comptes utilisateurs), Baudrier refuse la commande et vous le dit - votre site reste tel quel, et vous pouvez toujours le déployer avec `/deploy`.

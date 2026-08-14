@@ -55,3 +55,7 @@ A job that serves **your app** runs on the app's own infrastructure: it must kee
 {{callout:warning|A rare case with no home yet}}
 If what you truly need is a process that stays awake all the time reacting within seconds (a live listener, a persistent connection), Baudrier will tell you honestly: this is not a one-command setup today. It will offer the closest working alternatives (a fast-ticking scheduled task, or an AI agent's continuous mode if the process is AI-driven) rather than silently forcing your need into a shape that won't really fit.
 {{/callout}}
+
+## Landing sites (site vitrine)
+
+Not available on a landing site: this command is reserved for full applications. If your project is a landing site (built with Astro, no database, no user accounts), Baudrier refuses the command and tells you so - your site stays exactly as it is, and remains deployable with `/deploy`.

@@ -55,3 +55,7 @@ Un job qui sert **votre app** part sur l'infrastructure de l'app elle-même : il
 {{callout:warning|Un cas rare sans solution toute faite}}
 Si ce dont vous avez vraiment besoin, c'est un processus qui reste éveillé en permanence et réagit en quelques secondes (une écoute en direct, une connexion persistante), Baudrier vous le dira honnêtement : ce n'est pas une mise en place en une commande aujourd'hui. Elle vous proposera les alternatives les plus proches qui fonctionnent réellement (une tâche planifiée à intervalle rapproché, ou le mode continu d'un agent IA si le processus est piloté par l'IA) plutôt que de forcer silencieusement votre besoin dans une forme qui ne conviendra pas vraiment.
 {{/callout}}
+
+## Sites vitrines
+
+Non disponible sur un site vitrine : cette commande est réservée aux applications complètes. Si votre projet est un site vitrine (Astro, sans base de données ni comptes utilisateurs), Baudrier refuse la commande et vous le dit - votre site reste tel quel, et vous pouvez toujours le déployer avec `/deploy`.

@@ -36,3 +36,7 @@ Measures your site's ecological footprint and proposes concrete fixes to lighten
 
 - The CO2e/water figures are **methodological estimates** (EcoIndex formulas): perfect for comparing before/after and situating your site, not for an official carbon assessment.
 - The #1 item is almost always **images**: it is also the easiest to fix, and it speeds up the site along the way. Ecology and performance go in the same direction.
+
+## Landing sites (site vitrine)
+
+Not available on a landing site: this command is reserved for full applications. If your project is a landing site (built with Astro, no database, no user accounts), Baudrier refuses the command and tells you so - your site stays exactly as it is, and remains deployable with `/deploy`.

@@ -37,9 +37,11 @@ Si vraiment rien ne se détecte, demande à l'utilisateur :
 
 Critères :
 - `package.json` existe à la racine du projet
-- Au moins un de : un Serverless Container Scaleway résolu par le nom du projet, `.git/`, présence de `next` dans les dépendances
+- Au moins un de : un Serverless Container Scaleway résolu par le nom du projet, `.git/`, présence de `next` ou `astro` dans les dépendances
 
 Si rien ne correspond, signale-le mais propose de continuer quand même (ça pourrait être un projet non-Baudrier que l'utilisateur veut quand même sauvegarder).
+
+Invoque `_detect-project-root` pour obtenir `PROJECT_TYPE` (`landing` ou `application`) : ça détermine le texte du récap sur la base de données (voir l’étape 3).
 
 ### 1c. Présenter le plan à l'utilisateur
 
@@ -160,7 +162,9 @@ Si une étape a `status: "error"`, mentionne-la honnêtement avec le message d'e
 
 Si l'étape `git-bundle` est sautée (pas un dépôt git), insiste : **sans git bundle, le code source n'est pas dans la sauvegarde**. Demande à l'utilisateur s'il veut quand même garder ce zip ou tout annuler.
 
-**Rappelle systématiquement**, même si l'utilisateur ne pose pas la question, que la base de données n'est pas dans le zip - donc qu'aucune donnée métier (clients, commandes, contenus...) n'y figure. Ne présente **jamais** les sauvegardes automatiques de Scaleway comme un filet de sécurité garanti (leur fréquence/rétention exactes ne sont pas vérifiées ici) - dis plutôt clairement que si l'utilisateur veut un vrai filet de sécurité pour ses données, c'est à lui de déclencher un export. Ne jamais sous-entendre que la sauvegarde est "complète" sans cette précision.
+**Si `PROJECT_TYPE=landing`**, remplace l’avertissement base de données ci-dessous par une phrase neutre : « Site vitrine : code + secrets, pas de base ni de stockage. » - un site vitrine n’a ni base de données ni stockage de fichiers, ce n’est donc pas une lacune de la sauvegarde.
+
+**Sinon (`PROJECT_TYPE=application`), rappelle systématiquement**, même si l'utilisateur ne pose pas la question, que la base de données n'est pas dans le zip - donc qu'aucune donnée métier (clients, commandes, contenus...) n'y figure. Ne présente **jamais** les sauvegardes automatiques de Scaleway comme un filet de sécurité garanti (leur fréquence/rétention exactes ne sont pas vérifiées ici) - dis plutôt clairement que si l'utilisateur veut un vrai filet de sécurité pour ses données, c'est à lui de déclencher un export. Ne jamais sous-entendre que la sauvegarde est "complète" sans cette précision.
 
 ---
 

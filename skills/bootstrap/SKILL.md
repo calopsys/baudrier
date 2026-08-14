@@ -1,7 +1,7 @@
 ---
 name: bootstrap
-description: "Bootstrap a T3 stack project. Describe what you want to build and Claude infers the right stack."
-argument-hint: "[description of the app]"
+description: "Bootstrap a new project: a T3 stack application, or an Astro + Caddy landing site (site vitrine). The first argument token picks the stack; Claude never infers it from the description."
+argument-hint: "[landing|application] [description of the app]"
 compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js, pnpm, git, and Docker."
 ---
 
@@ -80,6 +80,37 @@ Step 0 is a gate, not one of the 8 tracked steps. Do not add it to the checklist
 
 ## Step 1 - Project identity
 
+### Stack choice (do this first)
+
+Before anything else, look at the first token of `$ARGUMENTS` (the raw text the user passed to `/bootstrap`, if any):
+
+- The literal token `landing` → the **vitrine** path (a static Astro + Caddy landing site, CONTRACT.md's second stack). The rest of `$ARGUMENTS`, if any, is the project description.
+- The literal token `application` → the **application** path (the T3 stack flow already described below, unchanged). The rest of `$ARGUMENTS`, if any, is the project description.
+- Anything else, or no arguments at all → ask exactly **one** `AskUserQuestion`, in French:
+
+  > Que souhaitez-vous créer ?
+
+  with exactly these two options:
+  - « Un site vitrine : quelques pages de présentation, sans comptes ni données »
+  - « Une application web : comptes, formulaires, données »
+
+**Never infer the stack from the description text.** A description that happens to mention "compte" or "formulaire" is not a substitute for this question - only the strict first-token match above, or this explicit question, decide the stack.
+
+**If the vitrine path is chosen** (by token or by answer), ask a second `AskUserQuestion`, in French, for the visual token preset:
+
+> Quel style visuel voulez-vous ?
+
+with exactly these three options:
+- « Épuré : sobre, aéré, typographie fine »
+- « Chaleureux : couleurs chaudes, formes arrondies »
+- « Audacieux : contrastes forts, typographie très large, sections sombres »
+
+Remember the chosen preset (`epure`, `chaleureux`, or `audacieux`) - Step 2 passes it to the script as `--preset`.
+
+Every step from Step 2 onward carries a **"Landing (vitrine)" branch** wherever the vitrine path differs from the application path described in that step. When a step has no such branch, its instructions are unchanged for both stacks - this is true of Step 3 in particular. The rest of Step 1 below (name + description) is unchanged for both stacks.
+
+### Name and description
+
 The app's name is no longer something you invent here: `/bootstrap` scaffolds **in place**, into the repo checkout it is run from (CONTRACT.md §7 - that repo already exists, and is the checkout the session opened on). CONTRACT.md §2's rule is that a Scaleway Project's name is always the app name, which is always the repo name - so read it, silently:
 
 ```bash
@@ -107,11 +138,13 @@ Once the name and description are captured, **immediately display the 8-step che
 
 ## Step 2 - Infrastructure construction (deterministic script)
 
-This step runs `bootstrap-init.mjs`, **in place** inside the current checkout, which mechanically chains 26 sub-steps: preflight + a dedicated **Scaleway Project**, T3 scaffold, demo cleanup (incl. replacing the home with a minimal page `<h1>{name}</h1>`), healthcheck router, shadcn + LinkButton + Geist fix, security hardening, base SEO, **404 page polish**, the Scaleway **deploy artifacts** (Dockerfile, `output: 'standalone'`, `copy-assets.js`, the IP-allowlist proxy), **CLAUDE.md core**, the privacy-policy page, commit, a push to the pre-existing `origin`, a **Container Registry namespace**, a **Serverless Containers namespace**, a direct **`docker build` + push** of the image (no GitHub Actions anywhere, CONTRACT.md §5), the **container** itself pointed at that freshly-pushed image, and a **smoke test** (fetch the URL, check 200 + that the stylesheet actually loads).
+This step runs `bootstrap-init.mjs`, **in place** inside the current checkout, which mechanically chains 26 sub-steps for an application (14 for a vitrine - see below): preflight + a dedicated **Scaleway Project**, T3 scaffold, demo cleanup (incl. replacing the home with a minimal page `<h1>{name}</h1>`), healthcheck router, shadcn + LinkButton + Geist fix, security hardening, base SEO, **404 page polish**, the Scaleway **deploy artifacts** (Dockerfile, `output: 'standalone'`, `copy-assets.js`, the IP-allowlist proxy), **CLAUDE.md core**, the privacy-policy page, commit, a push to the pre-existing `origin`, a **Container Registry namespace**, a **Serverless Containers namespace**, a direct **`docker build` + push** of the image (no GitHub Actions anywhere, CONTRACT.md §5), the **container** itself pointed at that freshly-pushed image, and a **smoke test** (fetch the URL, check 200 + that the stylesheet actually loads).
+
+**Landing (vitrine)**: the script instead chains the shorter `LANDING_STEPS` pipeline (same file): preflight, the dedicated Scaleway Project, the Astro app scaffold (rendered from the chosen token preset), the deploy artifacts (a three-stage Dockerfile plus a Caddy IP-gate carrying the same invariants as `proxy.ts`), the generated CLAUDE.md, commit + push, the registry and container namespaces, the direct `docker build` + push, the container itself (**always-on**, `min_scale` 1, `maxConcurrency` 80, no database), and the same smoke test.
 
 ### Invocation (background + narration via Monitor)
 
-The script takes several minutes (a cold Next.js image build with no warm layer cache is the long pole). Two Claude Code harness constraints to know about:
+The script takes several minutes (a cold image build with no warm layer cache is the long pole). Two Claude Code harness constraints to know about:
 - **Synchronous `Bash` buffers everything** until the end → the user would wait blind for several minutes.
 - **Long `sleep`s at the start of a command (≥ ~30s) are blocked** by a harness safety rail ("Blocked: sleep 45 ..."). No manual `sleep 45 && tail` pattern. It is locked.
 
@@ -149,6 +182,8 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/bootstrap-init.mjs" \
   --locale fr_FR > "$LOG_FILE" 2>&1
 ```
 
+**Landing (vitrine)**: add `--stack landing --preset <preset>` to the command above (the preset chosen at Step 1's second question - `epure`, `chaleureux`, or `audacieux`). Everything else about this step - the background launch, the log file, the Monitor, the `^▸ [A-Z]` regex - is unchanged.
+
 The tool returns a `bash_id` (useful for `KillBash` in case of a hang) and an `output-file` (the file where the harness captures the background bash stdout - it contains just the `LOG_FILE=...` line since the rest is redirected).
 
 **If the operator's key lacks `ProjectManager`** (per-request delegation, CONTRACT.md §1): the `scwProject` sub-step fails with a JSON line carrying `"type":"needs_admin"` and `details.recipe: "project"`. Relay the script's French message to the user as-is - it is already a forwardable request, and points at `docs/ADMIN-SCALEWAY.md`, section Recette unique. Wait for the user to come back with the Project ID the admin created. Then re-run the same command from step 2, adding the flag:
@@ -175,7 +210,7 @@ The script scaffolds **directly into the current directory** - never a new subfo
 
 Announce to the user:
 
-> Script launched in the background. Several minutes, 26 sub-steps (the longest part is waiting for the image build). I will relay each new step as it goes.
+> Script launched in the background. Several minutes, 26 sub-steps for an application (14 for a vitrine) - the longest part is waiting for the image build. I will relay each new step as it goes.
 
 Then launch the `Monitor` tool with this script (replace `<LOG_FILE>` with the real path remembered at step 3), `timeout_ms: 1200000` (20 min - the local `docker build`/push has no fixed timeout of its own but this is a generous margin for a cold layer cache), `persistent: false`, and a short `description` like `"bootstrap progress"`:
 
@@ -236,14 +271,14 @@ You will receive `task-notification`s as they come. For each:
 **Safety net hang**: the `Monitor` has a `timeout_ms: 1200000` (20 min). If the timeout fires without us having seen `[DONE]`, it is a real hang. Read `tail -n 200 "<LOG_FILE>"` to diagnose. Kill the background bash with `KillBash` on the remembered `bash_id` (or `pkill -f bootstrap-init.mjs`).
 
 The script writes to `$LOG_FILE`:
-- `▸ <step>` when it starts each sub-step (26 main steps)
+- `▸ <step>` when it starts each sub-step (26 main steps for an application, 14 for a vitrine)
 - `✅ <result>` at the end of each
 - At the very end, a **handoff banner**:
   ```
   ────────────────────────────────────────────────────────
   Bootstrap-init handoff state
   ────────────────────────────────────────────────────────
-  ✅ Completed (X/26): preflight, scwProject, scaffoldT3, ...
+  ✅ Completed (X/26 for an application, X/14 for a vitrine): preflight, scwProject, scaffoldT3, ...
   ❌ Failed at: <step>           (if failure)
   ⏸  Not attempted: ...           (if failure)
   ⚠️  N warning(s) during the run: ... (if applicable)
@@ -355,6 +390,18 @@ The smoke test itself authenticates with `ACCESS_BYPASS_TOKEN` and does not depe
 
 The infrastructure is ready and deployed. Now we define what we are going to build in it.
 
+**Landing (vitrine)**: skip 4a/4b below entirely and follow this shortened flow instead - a vitrine has no database, no auth, and no addons, so there is nothing to infer:
+
+1. Ask the user, in French, in one message, for:
+   - the sections wanted on the page (from the scaffolded component library, see Step 6: hero, services, à propos, témoignages, contact, ...);
+   - the tone (e.g. professionnel, chaleureux, familial, technique);
+   - the contact information to display (email, téléphone, adresse - static coordinates only, no form).
+   Do **not** ask about database, authentication, email, storage, or any other addon - none of those exist for a vitrine.
+2. Present a short summary (sections + tone + contact info) and ask for validation, looping on change requests exactly like 4b's pattern below (validate, or describe a change and re-present the summary).
+3. Once validated, skip straight to Step 5.
+
+**Application**: continue with 4a below (unchanged).
+
 ### 4a - Mode choice
 
 **Use the askUser tool** to present the three options:
@@ -436,6 +483,15 @@ If the requested change is ambiguous (e.g. "can we remove stuff?"), ask **one si
 
 ## Step 5 - Addon configuration
 
+**Landing (vitrine)**: the addon list is much shorter - a vitrine has no database, no auth, no email, no storage, and no map. Offer only:
+- `add-analytics` (Matomo) - same strict opt-in rule as below (only propose it if the user explicitly asked for tracking/statistics)
+- `add-dark-mode`
+- `add-domain` (if the user wants to publish under their own domain now rather than later)
+
+Ask which of these three the user wants (if any), then configure only what they picked by reading each skill's own `SKILL.md`, same as below. Skip straight to Step 6 once done.
+
+**Application**: continue with the addon list below (unchanged).
+
 Configure each optional service that the user requested at Step 4. For each, **read the corresponding skill file** from this plugin and follow its instructions step by step.
 
 **Important:** Read the skill's SKILL.md content and execute the steps described in it as if you were following the instructions yourself.
@@ -490,6 +546,20 @@ Communication pattern to follow instead:
 ## Step 6 - Building the application
 
 The infrastructure and the addons are in place. Now we build the real application.
+
+**Landing (vitrine)**: the flow below (spec-driven or description-driven, tRPC routers, Drizzle schema, admin dashboards, Geist font) does not apply - a vitrine is a static site with no backend. Follow this instead:
+
+1. Compose `src/pages/index.astro` (replacing the neutral starter Step 2 scaffolded) and any other page the Step 4 spec asked for, using **only** the components already scaffolded under `src/components/` (`Header`, `Hero`, `Services`, `About`, `Testimonials`, `Contact`, `Footer`) and the semantic design tokens in `src/styles/theme.css` (`--color-surface`, `--color-ink`, `--color-accent`, `--font-display`, `--font-body`, etc.) - never invent a new component or a raw hex color when a token already exists for it.
+2. Write the French copy for every section directly from the user's description and the Step 4 answers (sections wanted, tone, contact info). Contact stays static coordinates - no form.
+3. Once the pages compile, gate the result with:
+   ```bash
+   pnpm check
+   pnpm build
+   ```
+   Fix any error before moving on - `astro check` and a failed `astro build` both mean the site would ship broken.
+4. Commit progress after each major section (`git add . && git commit -m "feat: ..."`), same discipline as the application path below - but the application path's shadcn/ui and Geist-font rules do not apply to Astro.
+
+**Application**: continue with the spec-driven / description-driven flow below (unchanged).
 
 ### If a spec (.md) was provided:
 
@@ -588,6 +658,8 @@ Use a direct Edit (the `_update-claude-md` helper does not handle insertion at a
 
 Any site published in France needs at minimum **Legal Notice** and **Privacy Policy**. We create them systematically.
 
+**Landing (vitrine)**: the two legal pages already exist (`src/pages/mentions-legales.astro`, `src/pages/politique-de-confidentialite.astro`, scaffolded at Step 2 with « À compléter » placeholder spans - no `{{}}` markers). 7b.1's questionnaire below is reused **verbatim** - gather the same information - but 7b.2 and 7b.3 differ: instead of creating a page, use `Edit` to fill each « À compléter » span in the two existing `.astro` files with the gathered answers. Do **not** create `src/app/mentions-legales/page.tsx` or any other Next.js-shaped path. 7b.4 (footer links) needs no action - `Footer.astro` already links both pages.
+
 #### 7b.1 - Gather the info from the user
 
 Before generating the pages, ask the user for the following info (if not already known):
@@ -636,6 +708,8 @@ Add the links to "Legal notice" and "Privacy policy" in the site footer or layou
 ### 7c - Favicon
 
 The T3 starter ships a generic Next.js `favicon.ico` (the Next logo). We replace it with a project-specific favicon, **without asking a question** (autonomy): we derive it from the project name and palette.
+
+**Landing (vitrine)**: skip the `src/app/icon.svg` approach below entirely (that is Next.js App Router-specific). Instead write `public/favicon.svg` directly - `BaseLayout.astro` already links it. Read the accent/ink colors from `src/styles/theme.css` (the `--color-accent` / `--color-ink` semantic tokens) instead of `globals.css`, then follow the same initials + gradient template as steps 1-3 below, skipping step 4 (there is no `favicon.ico` to delete for a landing scaffold).
 
 **Approach**: a `src/app/icon.svg`. The Next.js App Router automatically detects an `icon.svg` file (or `icon.png`, `favicon.ico`...) placed at the root of `src/app/` and generates the `<link rel="icon">` tags on its own, with no code to write in the layout or in `metadata`. The SVG is crisp at all sizes and weighs nothing.
 
@@ -686,6 +760,8 @@ Analyze the JSON output (npm-audit-compatible shape: `advisories` / `metadata.vu
 
 > ℹ️ If `pnpm audit` itself errors (offline, or an older pnpm slipped through), don't block the bootstrap - note it and move on. The deploy in 8b is the real gate.
 
+**Landing (vitrine)**: also run `pnpm check` (the project's `astro check` gate) alongside `pnpm audit --prod --json` above. A vitrine has no ESLint - `astro check` is its only static gate - so do not run or expect a lint script for this stack.
+
 - **Production vulnerability, critical or high**: parse the JSON output to identify the offending packages + their `fixAvailable.version`. `pnpm update <package>@<safe-version>` only fixes a DIRECT dependency - it cannot move a transitive one (e.g. `postcss`, `sharp` pulled in by another package). For a transitive advisory, add or extend the `overrides:` block in `pnpm-workspace.yaml` (pnpm 11 reads workspace-level overrides from there, not from `package.json`), then run `pnpm install`. Do not ask the user - just fix it.
 - **Moderate or low severity**: ignore silently.
 - **If nothing needs fixing**: move on without saying anything.
@@ -712,7 +788,9 @@ Then present a **two-part summary** to the user:
 
 #### Part 1 - What was done
 
-List everything that was configured during bootstrap, grouped by category. Only include what actually applies:
+List everything that was configured during bootstrap, grouped by category. Only include what actually applies.
+
+**Landing (vitrine) - mandatory cost line**: a vitrine's container is always-on (`min_scale` 1, CONTRACT.md's second-stack decision) - it never scales to zero the way an application container does. For `PROJECT_TYPE=landing`, the Infrastructure bullet list below **must** add this bullet, in French, every time: `- Coût de fonctionnement : environ 6,40 € par mois (le site reste actif en permanence, il n’est jamais mis en veille)`.
 
 > **Project - Summary**
 >

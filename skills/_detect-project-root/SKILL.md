@@ -1,6 +1,6 @@
 ---
 name: _detect-project-root
-description: Internal helper to detect the basic structure of the current project (project name, monorepo vs single app, web directory path, Next.js detection). Returns a minimal set of 4 variables that most add-* skills need at the very beginning of their execution. Idempotent and fast. Not meant to be invoked directly by users.
+description: Internal helper to detect the basic structure of the current project (project name, monorepo vs single app, web directory path, Next.js detection, stack type). Returns a minimal set of 5 variables that most add-* skills need at the very beginning of their execution. Idempotent and fast. Not meant to be invoked directly by users.
 user-invocable: false
 allowed-tools: Bash
 compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (gh, scw)."
@@ -20,14 +20,15 @@ You detect the basic structure of the current project and return a minimal set o
 
 ## What this helper returns
 
-A 4-variable snapshot:
+A 5-variable snapshot:
 
 | Variable | Possible values | Used by |
 |---|---|---|
 | `PROJECT_NAME` | `my-app`, `mon-app`, etc. | Everything: Scaleway resource naming (Serverless Container/namespace, Object Storage bucket, Serverless Job, IAM application - all go through `slugify(PROJECT_NAME)`, see `scripts/scaleway/_scw-auth.mjs#slugify`), monorepo packages, etc. |
 | `WEB_DIR` | `.` (single app) or `apps/web` (monorepo) | Most `add-*` skills (any skill that edits files inside the Next.js app) - e.g. add-db, add-cron, add-auth |
 | `IS_MONOREPO` | `yes` / `no` | add-automation, add-db, and any skill that branches on monorepo layout |
-| `IS_NEXTJS` | `yes` / `no` | All add-* skills (to refuse if the project is not Next.js) |
+| `IS_NEXTJS` | `yes` / `no` | All add-* skills (to refuse if the project is not Next.js). Kept exactly as-is for the 22 existing callers that read it |
+| `PROJECT_TYPE` | `landing` / `application` / `unknown` | The shared refusal gate (project-scoped skills that only support applications), and the supported skills that branch on the stack (save-project, costs, delete-project, add-domain, add-analytics, add-dark-mode, seo, seo-perf, geo, rotate-secret) |
 
 **This is intentionally minimal.** Specific checks like `HAS_DB`, `HAS_AUTH`, `HAS_TEM` remain inline in the skills that need them - they are contextual and shouldn't pollute every skill's context.
 
@@ -68,20 +69,28 @@ node -e "const p=require('./WEB_DIR/package.json'); process.stdout.write(p.depen
 
 Replace `WEB_DIR` with the detected value. If the output is `none`, set `IS_NEXTJS=no`. Otherwise `IS_NEXTJS=yes`.
 
-## Step 4 - Sanity check
+## Step 4 - Detect the stack
 
-If `PROJECT_NAME` is empty or `IS_NEXTJS=no`:
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/_stack.mjs"
+```
+
+Parse the one JSON line on stdout, e.g. `{"stack":"landing"}`. Set `PROJECT_TYPE` from its `stack` field (`landing` / `application` / `unknown`).
+
+## Step 5 - Sanity check
+
+If `PROJECT_NAME` is empty or `PROJECT_TYPE=unknown`:
 
 Tell the user:
-> I cannot detect a Next.js project in the current folder. Check that:
+> I cannot detect a project in the current folder. Check that:
 > - You are at the root of the project (or in `apps/web` / another T3 folder)
-> - A `package.json` exists and lists `next` as a dependency
+> - A `package.json` exists and lists `next` (application web) or `astro` (site vitrine) as a dependency
 >
 > If this is a new project, run `/bootstrap` first.
 
 Then return an error state to the caller (so it can abort).
 
-## Step 5 - Return the snapshot
+## Step 6 - Return the snapshot
 
 Report to the caller in this exact format so it can parse the values:
 
@@ -90,6 +99,7 @@ PROJECT_NAME=<value>
 WEB_DIR=<value>
 IS_MONOREPO=<yes|no>
 IS_NEXTJS=<yes|no>
+PROJECT_TYPE=<landing|application|unknown>
 ```
 
 Example success output:
@@ -98,9 +108,10 @@ PROJECT_NAME=mon-app
 WEB_DIR=apps/web
 IS_MONOREPO=yes
 IS_NEXTJS=yes
+PROJECT_TYPE=application
 ```
 
-The caller reads these 4 lines and uses them throughout its own execution without having to redetect anything.
+The caller reads these 5 lines and uses them throughout its own execution without having to redetect anything.
 
 ---
 
@@ -108,7 +119,7 @@ The caller reads these 4 lines and uses them throughout its own execution withou
 
 Every `add-*` skill should call this in Step 1 (or wherever it currently does `test -f package.json`), **replacing** the ad-hoc detection code. The invocation is a single line:
 
-> Invoke `_detect-project-root` to get PROJECT_NAME, WEB_DIR, IS_MONOREPO, IS_NEXTJS.
+> Invoke `_detect-project-root` to get PROJECT_NAME, WEB_DIR, IS_MONOREPO, IS_NEXTJS, PROJECT_TYPE.
 
 The helper is **idempotent** - calling it multiple times in the same session is fine (it just re-reads the filesystem).
 

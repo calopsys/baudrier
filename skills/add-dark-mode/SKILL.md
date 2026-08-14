@@ -19,6 +19,8 @@ Adds dark mode support to the current Next.js project with `next-themes` (the st
 
 ## Step 0 - Preflight: dark mode already configured?
 
+Invoke `_detect-project-root` to get `PROJECT_TYPE`. **If `PROJECT_TYPE=landing`, skip straight to the "Astro branch" section below** - a site vitrine has no `next-themes`, no React, and its own preflight check. Everything from here to Step 12 is the `PROJECT_TYPE=application` (Next.js) flow.
+
 **First of all**, invoke `_check-deps dark-mode` to detect whether `next-themes` is already in place:
 
 ```bash
@@ -64,6 +66,115 @@ Wait for the answer.
 ### If `dm_ok = false` (not configured yet)
 
 Continue normally to Step 1. This is the initial installation flow.
+
+---
+
+## Astro branch (`PROJECT_TYPE=landing`)
+
+No `next-themes`, no React, no `pnpm add`: an Astro landing toggles a `.dark` class on `<html>` with a few lines of vanilla JS, and the dark values live next to the light ones in `theme.css`. The gate at the end is `pnpm build`, not `pnpm tsc --noEmit` (a static site has nothing to type-check the way a Next app does).
+
+### A0 - Preflight: already configured?
+
+```bash
+test -f "<WEB_DIR>/src/components/ThemeToggle.astro" && echo configured || echo not_configured
+```
+
+If `configured`: show the same kind of menu as the Next.js branch (change default mode, reinstall the toggle, redo the token audit, help place the button, uninstall), adapted to the files below. Uninstalling removes `@custom-variant dark` from `global.css`, the `.dark { ... }` block from `theme.css`, the inline script at the BaseLayout anchor, and `ThemeToggle.astro`.
+
+### A1 - Enable the dark variant in `global.css`
+
+Add, right after `@import "tailwindcss";`:
+
+```css
+@custom-variant dark (&:where(.dark, .dark *));
+```
+
+Same reasoning as the Next.js branch (Step 3 above): Tailwind v4 reads no JS config, so the variant must be declared in CSS, and `:where()` keeps its specificity at 0-0-0. If already present (re-run case), do not duplicate it.
+
+### A2 - Add dark values for the semantic tokens in `theme.css`
+
+The landing's semantic tokens (`--color-surface`, `--color-ink`, `--color-accent`, etc. - see `templates/landing/src/styles/presets/*.css`) already live in `<WEB_DIR>/src/styles/theme.css`. Redefine them under a `.dark { ... }` block in the same file, right after the `@theme` block - do not create a second file:
+
+```css
+.dark {
+  --color-surface: oklch(0.16 0.02 250);
+  --color-ink: oklch(0.95 0.01 250);
+  /* ...one line per existing token, same rules as Step 4.b above (keep the
+     accent hue, adjust lightness, subtle dark borders) */
+}
+```
+
+Present the proposed values to the user before writing them, exactly as the Next.js branch does in Step 4.b.
+
+### A3 - Inject the pre-hydration theme script at the BaseLayout anchor
+
+Astro ships no client runtime by default, so the anti-flash trick is a small inline script, not a provider. Insert it at the theme anchor comment in `<WEB_DIR>/src/layouts/BaseLayout.astro` (the marked comment the template ships specifically for this, right in `<head>` so it runs before paint):
+
+```
+<!-- baudrier:theme-script-anchor - /add-dark-mode injects the pre-hydration theme script here -->
+```
+
+```astro
+<script is:inline>
+  (function () {
+    const stored = localStorage.getItem("theme");
+    const preferDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    const dark = stored ? stored === "dark" : preferDark;
+    document.documentElement.classList.toggle("dark", dark);
+  })();
+</script>
+```
+
+`is:inline` is required: Astro must not defer or bundle this script, since the whole point is to set the class before the first paint.
+
+### A4 - Create `ThemeToggle.astro` (vanilla JS)
+
+Create `<WEB_DIR>/src/components/ThemeToggle.astro`:
+
+```astro
+<button id="theme-toggle" type="button" aria-label="Changer de thème" class="cursor-pointer">
+  <span class="theme-toggle-icon">🌓</span>
+</button>
+
+<script is:inline>
+  document.getElementById("theme-toggle")?.addEventListener("click", () => {
+    const isDark = document.documentElement.classList.toggle("dark");
+    localStorage.setItem("theme", isDark ? "dark" : "light");
+  });
+</script>
+```
+
+Two states (light/dark), not three: a static site has no server-driven "system" mode to distinguish from - A3's script already resolves `prefers-color-scheme` once, on first load, when nothing is stored yet. Adapt the icon/classes to the project's own header markup and semantic tokens.
+
+### A5 - Propose a location for the toggle
+
+Same idea as Step 9 above: detect `Header.astro`/`Footer.astro` and propose where to insert `<ThemeToggle />`, with the user's confirmation before editing. Add the import to the target file's frontmatter (`---` block): `import ThemeToggle from "../components/ThemeToggle.astro";` (adjust the relative path to the target file's own location).
+
+### A6 - Update CLAUDE.md
+
+Invoke `_update-claude-md` with:
+- `stack`: `- **Dark mode**: vanilla JS (light / dark, no next-themes) + Tailwind v4 \`@custom-variant dark\``
+- `conventions`:
+  - `- Colors: use the semantic tokens from \`theme.css\` (\`--color-surface\`, \`--color-ink\`, etc.) - the \`.dark\` block automatically overrides them, no \`dark:*\` class needed in most components.`
+  - `- The pre-hydration script at the BaseLayout theme anchor (\`is:inline\`) must run before paint - do not move it out of \`<head>\` or make it deferred/bundled.`
+
+### A7 - Verify that it builds
+
+```bash
+cd "<WEB_DIR>"
+pnpm build
+```
+
+If there's an error, read it, fix it, re-check. Do not continue until the build succeeds - Astro's `astro check` gate covers type errors, but `pnpm build` is what actually exercises this skill's own inline scripts and CSS.
+
+### A8 - Summary
+
+Tell the user:
+- Dark mode installed: 2 modes (light / dark), first load follows the OS preference (`prefers-color-scheme`) unless already changed once
+- The theme is persisted in `localStorage` on the client side, no flash on reload (pre-hydration script)
+- `<ThemeToggle />` created; mention where it was inserted, or how to import it if the user said "skip"
+- To adjust a color in dark: modify the `.dark { ... }` block in `theme.css`, not the components
+- To re-run the skill and change the default / re-audit the colors / reposition the toggle: `/add-dark-mode`
 
 ---
 

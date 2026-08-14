@@ -51,3 +51,7 @@ Les services externes renvoient parfois deux fois le même événement (c'est no
 {{callout:warning|Mauvais candidats}}
 Un traitement **continu** (surveiller une boîte mail 24h/24), un **état à garder en mémoire** entre les exécutions, ou des **minutes de calcul intensif** : c'est le territoire de `/add-automation` (worker dédié). Une IA **au service direct de vos utilisateurs**, en boucle autonome : `/add-agent`. Une mission récurrente **pour vous-même** : `/add-routine`.
 {{/callout}}
+
+## Sites vitrines
+
+Non disponible sur un site vitrine : cette commande est réservée aux applications complètes. Si votre projet est un site vitrine (Astro, sans base de données ni comptes utilisateurs), Baudrier refuse la commande et vous le dit - votre site reste tel quel, et vous pouvez toujours le déployer avec `/deploy`.

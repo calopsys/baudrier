@@ -41,3 +41,7 @@ Turns your site into an installable app (PWA) on phone and computer, without goi
 
 - The service worker is **disabled in development** (so it does not pollute your cache while you code): installation and offline mode are tested **after deployment**, on the live site.
 - The logical next step: `/add-push-notification` to send notifications to your users' phones.
+
+## Landing sites (site vitrine)
+
+Not available on a landing site: this command is reserved for full applications. If your project is a landing site (built with Astro, no database, no user accounts), Baudrier refuses the command and tells you so - your site stays exactly as it is, and remains deployable with `/deploy`.

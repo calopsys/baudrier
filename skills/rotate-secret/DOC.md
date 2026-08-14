@@ -50,3 +50,7 @@ For the most critical secrets (`DATABASE_URL`, `AUTH_SECRET`, `STORAGE_ACCESS_KE
 {{callout:warning|Containers vs. Jobs - why "rotated" doesn't always mean "redeployed"}}
 If your project has an autonomous agent (`/add-agent`), rotating its keys (`SCW_GENERATIVE_API_KEY`, `TEM_API_SECRET_KEY`) does **not** trigger a container redeploy for that part - the agent runs as a Serverless Job, which reads Secret Manager natively and simply uses the new value on its next scheduled run. Baudrier tells you which of the two happened so you're never left wondering whether the change is actually live.
 {{/callout}}
+
+## Landing sites (site vitrine)
+
+`/rotate-secret` works the same on a landing site. Its only stack difference: the database and authentication categories simply never appear in the menu, since a landing site never had them provisioned in the first place.

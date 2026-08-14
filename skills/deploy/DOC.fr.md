@@ -37,7 +37,7 @@ Ce choix décide aussi d’une autre chose : ce qui rejoint la ligne principale 
 ## Astuces
 
 {{callout:tip|Environnements par branche}}
-Chaque branche que vous prévisualisez reçoit sa propre adresse et sa propre base de données, isolée de la production. Cette isolation a un prix : chaque branche ainsi prévisualisée garde sa propre base de données Serverless SQL, et le harnais ne supprime jamais une base. La retirer est une opération manuelle dans la console Scaleway. Préférez une seule branche de revue à plusieurs branches éphémères.
+Chaque branche que vous prévisualisez reçoit sa propre adresse, isolée de la production. Pour une application avec base de données, cette isolation a un prix : chaque branche ainsi prévisualisée garde sa propre base de données Serverless SQL, et le harnais ne supprime jamais une base - la retirer est une opération manuelle dans la console Scaleway. Un site vitrine n’a pas de base de données du tout, donc son aperçu n’est qu’un seul conteneur au repos, à coût quasi nul. Dans tous les cas, préférez une seule branche de revue à plusieurs branches éphémères.
 {{/callout}}
 
 {{callout:info|Pourquoi les migrations tournent à part}}

@@ -59,3 +59,7 @@ Chaque tâche planifiée obtient son propre petit mécanisme dédié sur l'infra
 {{callout:warning|Mauvais candidat pour /add-cron}}
 Si votre besoin est un **processus continu** qui doit rester actif entre deux exécutions (une écoute en direct, un consommateur de file d'attente), c'est `/add-automation` qu'il faut lancer à la place (pas `/add-cron`). Baudrier détecte ce cas et vous redirige automatiquement.
 {{/callout}}
+
+## Sites vitrines
+
+Non disponible sur un site vitrine : cette commande est réservée aux applications complètes. Si votre projet est un site vitrine (Astro, sans base de données ni comptes utilisateurs), Baudrier refuse la commande et vous le dit - votre site reste tel quel, et vous pouvez toujours le déployer avec `/deploy`.

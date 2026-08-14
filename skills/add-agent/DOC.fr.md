@@ -83,3 +83,7 @@ Chaque exécution de l'agent est tracée dans la base : prompt initial, chaque t
 {{callout:info|Des exécutions par rafales, pas un serveur toujours allumé}}
 Un Job Serverless Scaleway tourne par rafales, pas en permanence. Selon comment vous déclenchez l'agent, un clic "Lancer maintenant" ou même une exécution planifiée peut prendre quelques minutes à être pris en compte plutôt que quelques secondes - la contrepartie d'une facturation proche de zéro entre les exécutions. Baudrier vous donne le compromis exact pour votre déclencheur au moment de la configuration.
 {{/callout}}
+
+## Sites vitrines
+
+Non disponible sur un site vitrine : cette commande est réservée aux applications complètes. Si votre projet est un site vitrine (Astro, sans base de données ni comptes utilisateurs), Baudrier refuse la commande et vous le dit - votre site reste tel quel, et vous pouvez toujours le déployer avec `/deploy`.

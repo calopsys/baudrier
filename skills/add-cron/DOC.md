@@ -59,3 +59,7 @@ Each scheduled task gets its own small, dedicated mechanism on Scaleway's infras
 {{callout:warning|Bad candidate for /add-cron}}
 If your need is a **continuous process** that must stay running between ticks (a live listener, a queue consumer), you should run `/add-automation` instead (not `/add-cron`). Baudrier detects this case and redirects you automatically.
 {{/callout}}
+
+## Landing sites (site vitrine)
+
+Not available on a landing site: this command is reserved for full applications. If your project is a landing site (built with Astro, no database, no user accounts), Baudrier refuses the command and tells you so - your site stays exactly as it is, and remains deployable with `/deploy`.

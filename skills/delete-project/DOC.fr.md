@@ -54,3 +54,7 @@ La machine de l'opérateur n'a pas d'accès direct à la base de données (voir 
 {{callout:info|Le dossier local reste sous ta responsabilité}}
 Pour ta sécurité, l'assistant ne supprime jamais le dossier de code du projet sur ton ordinateur. À la fin, tu reçois le chemin exact à ouvrir dans ton explorateur de fichiers.
 {{/callout}}
+
+## Sites vitrines
+
+Un site vitrine n’a ni base de données ni bucket de stockage au départ, donc il n’y a tout simplement rien à préserver ni de lien de console à donner de ce côté - le rapport le dit clairement, comme un état normal pour ce type de site, pas comme une lacune.

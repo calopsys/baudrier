@@ -22,3 +22,7 @@ Restores the default access restriction: only requests coming from the office VP
 {{callout:info|Not a total lockdown}}
 This restores the same soft, application-level gate every app ships with by default - it's a courtesy boundary, not network-level blocking.
 {{/callout}}
+
+## Landing sites (site vitrine)
+
+`/unpublish` applies identically to a landing site: the redeploy that follows restarts the container and re-reads the access gate, whether it's implemented in Next.js's `proxy.ts` or in a landing site's Caddyfile.

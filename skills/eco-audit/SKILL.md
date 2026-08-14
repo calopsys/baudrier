@@ -34,6 +34,8 @@ The user is not a green IT expert. Explain each concept on its first occurrence:
 
 ## Step 0: Preflight
 
+**Garde vitrine** : invoke `_detect-project-root` first. If `PROJECT_TYPE=landing`, stop and tell the user, in their language (French shown): « Cette fonctionnalité n’est pas disponible pour un site vitrine : elle est réservée aux applications web. Votre site reste modifiable, et vous pouvez le déployer avec /deploy. »
+
 1. **Deployed site**: the audit measures the site **online**. Retrieve the prod URL (`APP_URL` in `.env`, or a known custom domain) and verify it responds (`curl -s -o /dev/null -w "%{http_code}"`). If not deployed, explain and stop cleanly.
 
 2. **Detect the VPN IP restriction** (must run before any PSI call): every app ships IP-restricted by default (`ACCESS_RESTRICTED=true`, CONTRACT.md §6) - Google's PageSpeed Insights servers cannot load the site at all in that state. Resolve the container to confirm the site is deployed, then read the live value from Secret Manager - a container GET only ever returns an argon2 hash, never plaintext (CONTRACT.md §1), so Secret Manager is the only readable source of truth:

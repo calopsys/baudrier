@@ -19,6 +19,8 @@ You add an **in-app notification center**: a bell with a badge showing the numbe
 
 ## Step 0: Re-run? (idempotence)
 
+**Garde vitrine** : invoke `_detect-project-root` first. If `PROJECT_TYPE=landing`, stop and tell the user, in their language (French shown): « Cette fonctionnalité n’est pas disponible pour un site vitrine : elle est réservée aux applications web. Votre site reste modifiable, et vous pouvez le déployer avec /deploy. »
+
 Marker `baudrier:notification-center` at the top of `<WEB_DIR>/src/server/notify.ts`.
 
 ```bash

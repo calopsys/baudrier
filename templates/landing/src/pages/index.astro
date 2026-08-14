@@ -1,0 +1,20 @@
+---
+import BaseLayout from "../layouts/BaseLayout.astro";
+import Hero from "../components/Hero.astro";
+import Services from "../components/Services.astro";
+import Contact from "../components/Contact.astro";
+import Footer from "../components/Footer.astro";
+---
+
+<BaseLayout
+  title="Mon entreprise · Accueil"
+  description="Site vitrine de présentation de l’entreprise et de ses services."
+>
+  <Hero
+    title="Bienvenue chez Mon entreprise"
+    subtitle="Une présentation claire de votre activité, pensée pour vos visiteurs."
+  />
+  <Services />
+  <Contact />
+  <Footer />
+</BaseLayout>

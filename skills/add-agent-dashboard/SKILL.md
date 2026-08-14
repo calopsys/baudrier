@@ -24,6 +24,8 @@ The deterministic code (copying templates + patching `root.ts`) is in `scripts/s
 
 ## Step 0 - Prerequisites
 
+**Garde vitrine** : invoke `_detect-project-root` first. If `PROJECT_TYPE=landing`, stop and tell the user, in their language (French shown): « Cette fonctionnalité n’est pas disponible pour un site vitrine : elle est réservée aux applications web. Votre site reste modifiable, et vous pouvez le déployer avec /deploy. »
+
 ### 0.a - Admin auth
 
 The dashboard lives under `/admin/agents` and uses `adminProcedure` on the tRPC side. So the app must have admin auth configured.

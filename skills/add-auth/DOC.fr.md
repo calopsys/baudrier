@@ -50,3 +50,7 @@ Si vous avez déjà choisi un mode et que vous voulez ajouter l'autre plus tard,
 {{callout:warning|Le mot de passe admin n'est affiché qu'une seule fois}}
 En mode admin, le mot de passe en clair vous est montré **une seule fois** à la fin de la mise en place. Sauvegardez-le dans votre gestionnaire de mots de passe immédiatement, il n'est stocké nulle part en clair sur disque (seul le hash existe).
 {{/callout}}
+
+## Sites vitrines
+
+Non disponible sur un site vitrine : cette commande est réservée aux applications complètes. Si votre projet est un site vitrine (Astro, sans base de données ni comptes utilisateurs), Baudrier refuse la commande et vous le dit - votre site reste tel quel, et vous pouvez toujours le déployer avec `/deploy`.

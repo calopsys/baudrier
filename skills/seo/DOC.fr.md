@@ -55,3 +55,7 @@ Lancez les trois dans cet ordre pour la couverture complète.
 {{callout:warning|Le SEO prend du temps}}
 Une optimisation SEO ne se traduit pas en clics du jour au lendemain. Google recrawle votre site (re-visite et ré-évalue) sur quelques semaines après vos changements. Soyez patient et mesurez les progrès dans Google Search Console (`/gsc`) plusieurs mois plus tard, pas le lendemain.
 {{/callout}}
+
+## Sites vitrines
+
+Sur un site vitrine (Astro), l’audit technique examine `BaseLayout.astro` et le `<head>` de vos pages plutôt que le `layout.tsx` de Next.js, et l’URL canonique vient du champ `site:` de `astro.config.mjs`. La correction automatique des bases installe/configure `@astrojs/sitemap` et écrit `public/robots.txt` directement, plutôt que de lancer le script d’initialisation spécifique à Next.js.

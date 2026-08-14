@@ -43,3 +43,7 @@ Une fois la routine en place : *« mets ma routine en pause »*, *« change l'he
 {{callout:warning|Jamais pour votre app}}
 Tout ce dont votre **app** a besoin pour fonctionner (nettoyages, emails aux clients, synchronisations) va sur l'infrastructure de l'app : `/add-cron`, `/add-workflow`, ou `/add-automation`. Une routine qui s'arrête ne doit jamais casser autre chose que votre propre confort.
 {{/callout}}
+
+## Sites vitrines
+
+Non disponible sur un site vitrine : cette commande est réservée aux applications complètes. Si votre projet est un site vitrine (Astro, sans base de données ni comptes utilisateurs), Baudrier refuse la commande et vous le dit - votre site reste tel quel, et vous pouvez toujours le déployer avec `/deploy`.

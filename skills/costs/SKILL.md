@@ -59,3 +59,7 @@ The script also prints a small table of **static reference limits** (`referenceL
 > - Conteneurs serverless : 200 000 vCPU-secondes et 400 000 GB-secondes gratuits par mois, tous conteneurs confondus.
 
 Never present these as "you have used X / Y" - that number doesn't exist. Only the real spend from Step 2 is a live figure.
+
+**Site vitrine (`PROJECT_TYPE=landing`, invoke `_detect-project-root` to check)**: a landing's production container never scales to zero (`min_scale` 1), unlike an application. Always add this sentence, in French:
+
+> ℹ️ Un site vitrine tourne toujours en production (pas de mise en veille), pour un coût fixe d’environ 6,40 € par mois. Vous pouvez l’ajuster avec /scale.

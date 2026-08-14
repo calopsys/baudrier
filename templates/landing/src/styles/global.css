@@ -1,0 +1,30 @@
+@import "tailwindcss";
+@import "./theme.css";
+
+/* ./theme.css is not part of this template - the scaffold copies one of
+   src/styles/presets/*.css there, so this import always resolves in a
+   generated project even though the file does not exist in templates/. */
+
+@layer base {
+  body {
+    background-color: var(--color-surface);
+    color: var(--color-ink);
+    font-family: var(--font-body);
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: var(--font-display);
+  }
+
+  a {
+    color: var(--color-accent);
+  }
+
+  ::selection {
+    background-color: var(--color-accent);
+    color: var(--color-surface);
+  }
+}

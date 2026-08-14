@@ -43,6 +43,8 @@ If `credential_shape = "project"`, tell the user once, in plain French, before r
 
 ## Step 0 - Quick detection
 
+**Garde vitrine** : invoke `_detect-project-root` first. If `PROJECT_TYPE=landing`, stop and tell the user, in their language (French shown): « Cette fonctionnalité n’est pas disponible pour un site vitrine : elle est réservée aux applications web. Votre site reste modifiable, et vous pouvez le déployer avec /deploy. »
+
 ### 0.a - Detect the Next.js project
 
 Invoke `_detect-project-root` to get `PROJECT_NAME`, `WEB_DIR`, `IS_NEXTJS`, `IS_MONOREPO`. If `IS_NEXTJS=no` → explain to the user that a Next.js project is required (run `/bootstrap` first).

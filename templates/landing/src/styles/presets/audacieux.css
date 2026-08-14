@@ -1,0 +1,30 @@
+/* Audacieux: near-black with one vivid accent, Space Grotesk, radius 0. */
+@import "@fontsource-variable/space-grotesk";
+
+@theme {
+  --color-surface: #0a0a0b;
+  --color-ink: #f4f4f5;
+  --color-muted: #8b8b93;
+  --color-accent: #d6ff3f;
+
+  --font-display: "Space Grotesk Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-body: "Space Grotesk Variable", ui-sans-serif, system-ui, sans-serif;
+
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+
+  --text-base: 1.0625rem;
+  --text-base--line-height: 1.625rem;
+  --text-lg: 1.25rem;
+  --text-lg--line-height: 1.875rem;
+  --text-xl: 1.625rem;
+  --text-xl--line-height: 2rem;
+  --text-2xl: 2.25rem;
+  --text-2xl--line-height: 2.5rem;
+  --text-3xl: 3.25rem;
+  --text-3xl--line-height: 3.5rem;
+  --text-4xl: 4.5rem;
+  --text-4xl--line-height: 4.5rem;
+}

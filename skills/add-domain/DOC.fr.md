@@ -62,3 +62,7 @@ Une Organisation Scaleway peut avoir au maximum **10 domaines externes** connect
 {{callout:info|Ne touchez pas à l'exemption ACME dans proxy.ts}}
 Votre app est protégée par défaut par une liste d'adresses IP autorisées. Son `proxy.ts` exempte toujours `/.well-known/acme-challenge/*` de ce filtre, précisément pour que Scaleway puisse continuer à émettre et renouveler votre certificat HTTPS. Ne retirez jamais cette exemption - cela casserait silencieusement le renouvellement du certificat et rendrait votre site inaccessible en HTTPS à terme.
 {{/callout}}
+
+## Sites vitrines
+
+Sur un site vitrine (Astro), l’étape finale de nettoyage du code est différente : au lieu de toucher `sitemap.ts`/`layout.tsx`, Baudrier renseigne le champ `site:` de `astro.config.mjs` avec votre nouveau domaine et installe `@astrojs/sitemap` s’il n’est pas déjà présent. Le reste (vérification de la délégation, attente de la propagation DNS, rattachement du domaine, mise à jour d’`APP_URL`) fonctionne à l’identique.

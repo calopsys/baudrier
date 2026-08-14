@@ -29,7 +29,7 @@ Per CONTRACT.md: **Scaleway Serverless Containers cannot reference Secret Manage
 
 ## Step 0 - Sanity check
 
-Invoke `_detect-project-root` to get `PROJECT_NAME`. If this doesn't look like a baudrier project (no `CLAUDE.md`, no Next.js `package.json`), abort with a clear message (*"This command is used inside an existing project, not at the root."*).
+Invoke `_detect-project-root` to get `PROJECT_NAME` and `PROJECT_TYPE`. If this doesn't look like a baudrier project (no `CLAUDE.md`, no Next.js or Astro `package.json` - `PROJECT_TYPE=unknown`), abort with a clear message (*"This command is used inside an existing project, not at the root."*).
 
 Before any rotation runs, check the credential shape:
 
@@ -76,6 +76,8 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/list-rotatable-secrets.mjs"
 ```
 
 This queries this project's Scaleway Secret Manager directly (never a local `.env` - `DATABASE_URL` in particular is never written to disk, see CONTRACT.md §4) and shows a categorized menu. Capture the user's choice as `SECRET_KEY` (or `SECRET_KEY` + `PAIR_KEY` if the item covers a pair like `STORAGE_ACCESS_KEY`/`STORAGE_SECRET_KEY` or the VAPID keys).
+
+**For a site vitrine (`PROJECT_TYPE=landing`)**: the database and auth categories (`DATABASE_URL`, `AUTH_SECRET`) are simply absent from this menu - a landing never had them provisioned in the first place (no `/add-db`, no `/add-auth` for that stack), so there is nothing missing to explain, the same way `list-rotatable-secrets.mjs` only ever lists what actually exists.
 
 If the script reports it could not reach Secret Manager (no credentials), tell the user to check the four `SCW_*` variables in the cloud environment dialog, then start a new conversation.
 

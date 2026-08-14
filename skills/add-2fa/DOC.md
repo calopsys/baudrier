@@ -21,3 +21,7 @@ Adds **two-factor authentication** to your app's login: a 6-digit code from an a
 4. **Backup codes**: a set of one-time backup codes is generated in case you lose your phone. They are stored safely (Secret Manager or account), never displayed in plain text in the chat.
 
 > **Prerequisite**: your project must already have a login. If it does not, Baudrier offers to set one up first, then adds 2FA right after.
+
+## Landing sites (site vitrine)
+
+Not available on a landing site: this command is reserved for full applications. If your project is a landing site (built with Astro, no database, no user accounts), Baudrier refuses the command and tells you so - your site stays exactly as it is, and remains deployable with `/deploy`.

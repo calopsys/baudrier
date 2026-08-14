@@ -1,0 +1,61 @@
+---
+// Static coordinates only - a landing site ships with no backend, so there
+// is no form to receive and no route to send it to.
+export interface Props {
+  heading?: string;
+  phone?: string;
+  email?: string;
+  address?: string;
+  hours?: string;
+  bookingUrl?: string;
+}
+
+const {
+  heading = "Contact",
+  phone = "01 23 45 67 89",
+  email = "contact@example.fr",
+  address = "12 rue de l’Exemple, 75000 Paris",
+  hours = "Du lundi au vendredi, de 9h à 18h",
+  bookingUrl,
+} = Astro.props;
+---
+
+<section id="contact" class="bg-surface px-6 py-20">
+  <div class="mx-auto max-w-3xl text-center">
+    <h2 class="font-display text-3xl font-bold text-ink">{heading}</h2>
+    <dl class="mt-8 space-y-3 text-ink">
+      <div>
+        <dt class="sr-only">Téléphone</dt>
+        <dd>
+          <a href={`tel:${phone.replace(/\s+/g, "")}`} class="hover:text-accent">{phone}</a>
+        </dd>
+      </div>
+      <div>
+        <dt class="sr-only">Email</dt>
+        <dd>
+          <a href={`mailto:${email}`} class="hover:text-accent">{email}</a>
+        </dd>
+      </div>
+      <div>
+        <dt class="sr-only">Adresse</dt>
+        <dd class="text-muted">{address}</dd>
+      </div>
+      <div>
+        <dt class="sr-only">Horaires</dt>
+        <dd class="text-muted">{hours}</dd>
+      </div>
+    </dl>
+    {
+      bookingUrl && (
+        <a
+          href={bookingUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          class="mt-8 inline-block rounded-lg bg-accent px-6 py-3 font-semibold text-surface transition-opacity hover:opacity-90"
+        >
+          Prendre rendez-vous
+        </a>
+      )
+    }
+  </div>
+</section>

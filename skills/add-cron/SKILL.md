@@ -42,6 +42,12 @@ The Job's body is always the same tiny, public `curlimages/curl` image (Scaleway
 
 ---
 
+## Step 0 - Garde vitrine
+
+**Garde vitrine** : invoke `_detect-project-root` first. If `PROJECT_TYPE=landing`, stop and tell the user, in their language (French shown): « Cette fonctionnalité n’est pas disponible pour un site vitrine : elle est réservée aux applications web. Votre site reste modifiable, et vous pouvez le déployer avec /deploy. »
+
+---
+
 ## Preflight
 
 Invoke `_detect-project-root` to retrieve `PROJECT_NAME`, `WEB_DIR`, `IS_NEXTJS`, `IS_MONOREPO`. Abort if `IS_NEXTJS=no`.

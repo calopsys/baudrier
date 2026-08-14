@@ -22,3 +22,7 @@ Rétablit la restriction d'accès par défaut : seules les requêtes venant du V
 {{callout:info|Pas un verrouillage total}}
 Ceci rétablit la même barrière légère, au niveau de l'application, que chaque application a par défaut - c'est une barrière de courtoisie, pas un blocage réseau.
 {{/callout}}
+
+## Sites vitrines
+
+`/unpublish` s’applique à l’identique sur un site vitrine : le redéploiement qui suit redémarre le conteneur et relit la porte d’accès, qu’elle soit implémentée dans le `proxy.ts` de Next.js ou dans le Caddyfile d’un site vitrine.

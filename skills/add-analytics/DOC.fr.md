@@ -53,3 +53,7 @@ Contrairement à votre base de données ou votre bucket de stockage, Matomo vit 
 {{callout:tip|Vos visites admin ne faussent pas vos stats}}
 Le suivi est désactivé sur les routes d'administration (`/admin`) : quand vous gérez votre site, vos propres sessions ne sont pas comptées comme des visiteurs. Vous pouvez étendre cette exclusion à vos espaces authentifiés (dashboard, espace membres, compte) - Baudrier vous le propose pendant l'installation.
 {{/callout}}
+
+## Sites vitrines
+
+Sur un site vitrine (Astro), un build statique ne peut pas lire de variable d’environnement à l’exécution : l’URL Matomo et l’identifiant du site sont donc écrits directement dans le code source d’un composant `Matomo.astro`, plutôt que poussés en variables d’environnement - ce sont les mêmes valeurs déjà visibles dans le code source de n’importe quel site suivi par Matomo, configuration sans cookie comprise. Toute modification future de ces valeurs demande une reconstruction et un redéploiement (`/deploy`), pas juste une mise à jour de secret.

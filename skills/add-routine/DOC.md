@@ -43,3 +43,7 @@ Once the routine is in place: *"pause my routine"*, *"change the schedule"*, *"s
 {{callout:warning|Never for your app}}
 Everything your **app** needs to function (cleanups, customer emails, syncs) belongs on the app's infrastructure: `/add-cron`, `/add-workflow`, or `/add-automation`. A routine that stops must never break anything beyond your own comfort.
 {{/callout}}
+
+## Landing sites (site vitrine)
+
+Not available on a landing site: this command is reserved for full applications. If your project is a landing site (built with Astro, no database, no user accounts), Baudrier refuses the command and tells you so - your site stays exactly as it is, and remains deployable with `/deploy`.

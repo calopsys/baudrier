@@ -57,3 +57,7 @@ Vulnerabilities evolve quickly (new flaws in npm packages every week). Running `
 {{callout:info|Not alarmist}}
 Baudrier is designed to **explain**, not to scare you. You see each problem with its concrete consequence, but also the real severity (a showcase site with no form does not have the same risks as a site with auth + payments). You prioritize what really matters.
 {{/callout}}
+
+## Landing sites (site vitrine)
+
+Not available on a landing site: this command is reserved for full applications. If your project is a landing site (built with Astro, no database, no user accounts), Baudrier refuses the command and tells you so - your site stays exactly as it is, and remains deployable with `/deploy`.

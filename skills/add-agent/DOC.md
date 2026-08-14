@@ -83,3 +83,7 @@ Each run of the agent is traced in the database: initial prompt, each reasoning 
 {{callout:info|Finite runs, not an always-on server}}
 A Scaleway Serverless Job runs in bursts, not forever. Depending on how you trigger it, a manual "Run now" click or even a scheduled run can take a few minutes to be picked up rather than a few seconds - the trade-off for near scale-to-zero billing between runs. Baudrier tells you the exact trade-off for your chosen trigger at setup time.
 {{/callout}}
+
+## Landing sites (site vitrine)
+
+Not available on a landing site: this command is reserved for full applications. If your project is a landing site (built with Astro, no database, no user accounts), Baudrier refuses the command and tells you so - your site stays exactly as it is, and remains deployable with `/deploy`.

@@ -2605,6 +2605,24 @@ define("48", "Health check: exact-path only, consumers ping /api/healthz", () =>
     fails.push({ file: healthzRouteFile, detail: "missing" });
   }
 
+  // A vitrine has no Next.js route to render /api/healthz - Caddy answers it
+  // directly (templates/landing/Caddyfile). This is the landing counterpart of
+  // the proxyFile check above: deploy.mjs's smoke test (STACK-agnostic) expects
+  // the same exact path and body from either stack.
+  const landingCaddyfile = "templates/landing/Caddyfile";
+  if (exists(landingCaddyfile)) {
+    const csrc = read(landingCaddyfile);
+    if (!/handle \/api\/healthz\s*\{/.test(csrc)) {
+      fails.push({
+        file: landingCaddyfile,
+        detail: "no exact `handle /api/healthz {` block - deploy.mjs's smoke test needs the same exact path proxy.ts exempts",
+      });
+    }
+    if (!/"ok":true/.test(csrc)) {
+      fails.push({ file: landingCaddyfile, detail: 'the /api/healthz handler does not respond {"ok":true} - smokeTest() asserts this exact body' });
+    }
+  }
+
   const bootstrapFile = "scripts/bootstrap-init.mjs";
   if (!exists(bootstrapFile)) {
     fails.push({ file: bootstrapFile, detail: "missing" });
@@ -4425,6 +4443,570 @@ define("80", "Every /add-* setup script reports tscOk", () => {
       fails.push({ file: skill, detail: "missing" });
     } else if (!read(skill).includes("tscOk")) {
       fails.push({ file: skill, detail: 'never mentions "tscOk" - the skill does not tell Claude to check the setup script\'s typecheck result' });
+    }
+  }
+
+  return fails;
+});
+
+define("81", "Gate parity: the Caddyfile/entrypoint match proxy.ts's invariants", () => {
+  const fails = [];
+  const proxyFile = "templates/deploy/proxy.ts";
+  const caddyFile = "templates/landing/Caddyfile";
+  const entrypointFile = "templates/landing/docker-entrypoint.sh";
+  if (!exists(proxyFile)) return [{ file: proxyFile, detail: "missing" }];
+  const proxySrc = read(proxyFile);
+
+  // Extract the literals from proxy.ts itself - the landing gate must never
+  // hardcode a copy that can silently drift from the canonical values.
+  const healthzMatch = proxySrc.match(/const HEALTHZ_PATH\s*=\s*"([^"]+)"/);
+  const acmeMatch = proxySrc.match(/ALWAYS_ALLOWED_PREFIXES\s*=\s*\["([^"]+)"\]/);
+  const tokenLenMatch = proxySrc.match(/const MIN_BYPASS_TOKEN_LENGTH\s*=\s*(\d+)/);
+  if (!healthzMatch) fails.push({ file: proxyFile, detail: "could not extract HEALTHZ_PATH - gate parity cannot be checked" });
+  if (!acmeMatch) fails.push({ file: proxyFile, detail: "could not extract the ACME prefix literal - gate parity cannot be checked" });
+  if (!tokenLenMatch) fails.push({ file: proxyFile, detail: "could not extract MIN_BYPASS_TOKEN_LENGTH - gate parity cannot be checked" });
+  const healthzPath = healthzMatch?.[1];
+  const acmePrefix = acmeMatch?.[1];
+  const minTokenLen = tokenLenMatch?.[1];
+
+  if (!exists(caddyFile)) {
+    fails.push({ file: caddyFile, detail: "missing" });
+  } else {
+    const caddySrc = read(caddyFile);
+    if (healthzPath && !caddySrc.includes(`handle ${healthzPath} {`)) {
+      fails.push({ file: caddyFile, detail: `no "handle ${healthzPath} {" block - must match proxy.ts's HEALTHZ_PATH literal exactly` });
+    }
+    if (!/"ok":true/.test(caddySrc)) {
+      fails.push({ file: caddyFile, detail: 'the healthz handler does not respond {"ok":true} 200' });
+    }
+    if (acmePrefix && !caddySrc.includes(acmePrefix)) {
+      fails.push({ file: caddyFile, detail: `does not exempt "${acmePrefix}" - must match proxy.ts's ALWAYS_ALLOWED_PREFIXES literal` });
+    }
+    if (!/trusted_proxies/.test(caddySrc)) {
+      fails.push({ file: caddyFile, detail: "missing trusted_proxies - Caddy would not trust X-Forwarded-For at all without it" });
+    }
+    if (!/client_ip_headers\s+X-Forwarded-For/.test(caddySrc)) {
+      fails.push({ file: caddyFile, detail: "missing client_ip_headers X-Forwarded-For - parity with proxy.ts's TRUSTED_HOP resolver" });
+    }
+
+    // M5: the gate import's POSITION matters as much as its presence - below
+    // the catch-all (or outside the route {} block entirely) opens the site
+    // to the internet while every other assertion here still passes.
+    const routeAt = caddySrc.indexOf("route {");
+    const healthzHandleAt = healthzPath ? caddySrc.indexOf(`handle ${healthzPath} {`) : -1;
+    const importAt = caddySrc.indexOf("import /etc/caddy/gate.caddy");
+    // The bare catch-all is "handle {" with nothing between "handle" and the
+    // brace - "handle /api/healthz {" and "handle /.well-known/... {" both
+    // have a path token there, so this substring finds only the catch-all.
+    const catchAllAt = caddySrc.indexOf("handle {");
+    if (importAt < 0) {
+      fails.push({ file: caddyFile, detail: 'no "import /etc/caddy/gate.caddy" found - the gate is not wired into the route at all' });
+    } else {
+      if (routeAt < 0 || importAt < routeAt) {
+        fails.push({ file: caddyFile, detail: "the gate import is not inside the route {} block" });
+      }
+      if (healthzHandleAt >= 0 && importAt < healthzHandleAt) {
+        fails.push({ file: caddyFile, detail: "the gate import sits before the /api/healthz handle - healthz must be exempt from the gate" });
+      }
+      if (catchAllAt >= 0 && importAt > catchAllAt) {
+        fails.push({ file: caddyFile, detail: "the gate import sits after the catch-all handle - the site would be reachable before the gate ever runs" });
+      }
+    }
+  }
+
+  if (!exists(entrypointFile)) {
+    fails.push({ file: entrypointFile, detail: "missing" });
+  } else {
+    const epSrcRaw = read(entrypointFile);
+    // M4: a comment can name every literal these assertions look for (this
+    // file's own header comment quotes {$ACCESS_BYPASS_TOKEN} to explain the
+    // invariant) - strip comment lines first so prose alone can never
+    // satisfy an assertion the real code must carry out.
+    const epSrc = epSrcRaw
+      .split("\n")
+      .filter((l) => !/^\s*#/.test(l))
+      .join("\n");
+    if (!/ACCESS_RESTRICTED:-\}"\s*=\s*"false"/.test(epSrc)) {
+      fails.push({
+        file: entrypointFile,
+        detail: 'the gate does not open on the literal ACCESS_RESTRICTED = "false" test - must match proxy.ts\'s fail-closed condition',
+      });
+    }
+    for (const bad of [/!=\s*"true"/, /!=\s*'true'/, /!=\s*true\b/]) {
+      if (bad.test(epSrc)) {
+        fails.push({
+          file: entrypointFile,
+          detail: `fails OPEN: found a "${bad.source}" construction - an unset/garbage ACCESS_RESTRICTED must stay restricted, never checked against the "open" literal`,
+        });
+      }
+    }
+    if (minTokenLen && !epSrc.includes(`-ge ${minTokenLen}`)) {
+      fails.push({ file: entrypointFile, detail: `token-length guard does not match proxy.ts's MIN_BYPASS_TOKEN_LENGTH (${minTokenLen})` });
+    }
+    if (!epSrc.includes("x-baudrier-access-token")) {
+      fails.push({ file: entrypointFile, detail: "missing the x-baudrier-access-token header name - must match proxy.ts exactly" });
+    }
+    if (!epSrc.includes("{$ACCESS_BYPASS_TOKEN}")) {
+      fails.push({
+        file: entrypointFile,
+        detail: "missing the literal {$ACCESS_BYPASS_TOKEN} placeholder - the token must resolve at Caddy config load, never be interpolated into the written gate file",
+      });
+    }
+    // The placeholder must sit inside SINGLE quotes: sh leaves `$` literal
+    // there, but expands it inside double quotes - a single-to-double-quote
+    // regression on this assignment would write the real token value into
+    // gate.caddy instead of the placeholder Caddy resolves at config load.
+    if (!/bypass_line='[^']*\{\$ACCESS_BYPASS_TOKEN\}[^']*'/.test(epSrc)) {
+      fails.push({
+        file: entrypointFile,
+        detail: "bypass_line is not assigned with {$ACCESS_BYPASS_TOKEN} inside single quotes - double quotes would let sh expand the real token into gate.caddy",
+      });
+    }
+    // The secret must never touch disk as its own value: every line naming the
+    // bypass header must reference the placeholder, not a shell expansion of
+    // the token itself.
+    for (const line of epSrc.split("\n")) {
+      if (line.includes("x-baudrier-access-token") && /\$\{?token\}?/.test(line) && !line.includes("{$ACCESS_BYPASS_TOKEN}")) {
+        fails.push({ file: entrypointFile, detail: `interpolates the token value into the gate file instead of the {$ACCESS_BYPASS_TOKEN} placeholder: "${line.trim()}"` });
+      }
+    }
+    // Neither allow source configured -> unconditional 403, never an open gate.
+    if (!/-z\s+"\$ip_line"\s*\]\s*&&\s*\[\s*-z\s+"\$bypass_line"/.test(epSrc)) {
+      fails.push({ file: entrypointFile, detail: "no combined empty-ip-and-empty-bypass branch found - the fallback when neither allow source exists must be explicit" });
+    } else {
+      const branchAt = epSrc.search(/-z\s+"\$ip_line"\s*\]\s*&&\s*\[\s*-z\s+"\$bypass_line"/);
+      const branchBody = epSrc.slice(branchAt, branchAt + 300);
+      if (!/403/.test(branchBody)) {
+        fails.push({ file: entrypointFile, detail: "the no-allow-source branch does not respond 403 - it must fail closed, never fail open" });
+      }
+    }
+  }
+
+  return fails;
+});
+
+define("82", "Landing image shape: Dockerfile/Caddyfile/.dockerignore invariants", () => {
+  const fails = [];
+  const dockerfile = "templates/landing/Dockerfile";
+  if (!exists(dockerfile)) return [{ file: dockerfile, detail: "missing" }];
+  const src = read(dockerfile);
+
+  if (!/FROM node:24-alpine/.test(src)) fails.push({ file: dockerfile, detail: "does not pin node:24-alpine" });
+  if (!/FROM caddy:2-alpine/.test(src)) fails.push({ file: dockerfile, detail: "does not pin caddy:2-alpine" });
+  if (!/amd64/i.test(src)) fails.push({ file: dockerfile, detail: "missing the amd64 platform comment (parity with templates/deploy/Dockerfile)" });
+  if (!/COPY --chmod=755 docker-entrypoint\.sh/.test(src)) {
+    fails.push({ file: dockerfile, detail: "does not COPY --chmod=755 docker-entrypoint.sh - a fresh checkout does not guarantee the executable bit" });
+  }
+  if (!/CMD\s*\[\s*"\/docker-entrypoint\.sh"\s*\]/.test(src)) {
+    fails.push({ file: dockerfile, detail: 'CMD is not the exact exec-form CMD ["/docker-entrypoint.sh"]' });
+  }
+  if (!/EXPOSE\s+8080/.test(src)) fails.push({ file: dockerfile, detail: "missing EXPOSE 8080" });
+
+  // The CA-trust block belongs in both network-active node stages (deps,
+  // builder) and must be absent from the caddy runner stage, which makes no
+  // outbound HTTPS call of its own (Caddyfile's auto_https is off).
+  const runnerAt = src.search(/FROM caddy:2-alpine/);
+  if (runnerAt < 0) {
+    fails.push({ file: dockerfile, detail: "no caddy:2-alpine runner stage found - cannot check CA-block placement" });
+  } else {
+    const nodeStagesSrc = src.slice(0, runnerAt);
+    const runnerSrc = src.slice(runnerAt);
+    const nodeStageCount = (nodeStagesSrc.match(/FROM node:24-alpine/g) || []).length;
+    const caBlockCountInNodeStages = (nodeStagesSrc.match(/proxy-ca\.crt/g) || []).length;
+    if (nodeStageCount < 2) {
+      fails.push({ file: dockerfile, detail: `expected 2 node:24-alpine stages (deps, builder), found ${nodeStageCount}` });
+    } else if (caBlockCountInNodeStages < 2) {
+      fails.push({ file: dockerfile, detail: "proxy-ca.crt CA-trust block is missing from one or both node stages - apk/corepack/pnpm fail under the web egress proxy without it" });
+    }
+    if (/proxy-ca\.crt/.test(runnerSrc)) {
+      fails.push({ file: dockerfile, detail: "the caddy runner stage carries the proxy-ca.crt CA block - it makes no outbound HTTPS call and must not inherit it" });
+    }
+
+    // The runner must not run as root: docker-entrypoint.sh writes
+    // /etc/caddy/gate.caddy at container start, so USER must switch before
+    // CMD, to a real non-root user.
+    const userMatch = runnerSrc.match(/^USER\s+(\S+)/m);
+    const cmdAt = runnerSrc.search(/CMD\s*\[/);
+    if (!userMatch) {
+      fails.push({ file: dockerfile, detail: "runner stage has no USER directive - the container runs as root" });
+    } else {
+      if (userMatch[1] === "root" || userMatch[1] === "0") {
+        fails.push({ file: dockerfile, detail: `runner stage USER is "${userMatch[1]}" - must switch to a non-root user` });
+      }
+      if (cmdAt >= 0 && runnerSrc.indexOf(userMatch[0]) > cmdAt) {
+        fails.push({ file: dockerfile, detail: "USER directive comes after CMD - must switch user before CMD runs" });
+      }
+    }
+  }
+
+  const caddyFile = "templates/landing/Caddyfile";
+  if (!exists(caddyFile)) {
+    fails.push({ file: caddyFile, detail: "missing" });
+  } else if (!/:8080\s*\{/.test(read(caddyFile))) {
+    fails.push({ file: caddyFile, detail: "does not listen on :8080 - must match the Dockerfile's EXPOSE 8080" });
+  }
+
+  // No migration tooling under a static site's image - a vitrine has no
+  // database and the migrate.mjs runner must never ship here (CONTRACT.md §1).
+  for (const f of FILES.filter((x) => x.startsWith("templates/landing/"))) {
+    let s;
+    try {
+      s = read(f);
+    } catch {
+      continue;
+    }
+    if (/migrate/i.test(s)) {
+      fails.push({ file: f, detail: 'contains the token "migrate" - a vitrine has no database and must ship no migration tooling' });
+    }
+  }
+
+  const dockerignore = "templates/landing/.dockerignore";
+  if (!exists(dockerignore)) {
+    fails.push({ file: dockerignore, detail: "missing" });
+  } else {
+    const diSrc = read(dockerignore);
+    for (const artifact of ["proxy-ca.crt", "Caddyfile", "docker-entrypoint.sh"]) {
+      if (diSrc.split("\n").some((l) => l.trim() === artifact)) {
+        fails.push({ file: dockerignore, detail: `excludes "${artifact}" - this deploy artifact must reach the build context` });
+      }
+    }
+  }
+
+  return fails;
+});
+
+// Hard-coded per CONTRACT.md/the plan's decision (2026-08-13): a future
+// unclassified skill must fail this check loudly rather than silently pass
+// through an unowned skill with no gate and no support.
+const GATE_SUPPORTED_SKILLS = [
+  "deploy", "publish", "unpublish", "add-domain", "costs", "save-project",
+  "delete-project", "add-analytics", "add-dark-mode", "seo", "seo-perf",
+  "geo", "rotate-secret", "scale", "gsc",
+];
+const GATE_REFUSING_SKILLS = [
+  "add-2fa", "add-agent", "add-agent-dashboard", "add-auth", "add-automation",
+  "add-cron", "add-db", "add-email", "add-map", "add-notification-center",
+  "add-push-notification", "add-pwa", "add-role", "add-routine", "add-storage",
+  "add-workflow", "clean", "eco-audit", "rgpd-audit", "security",
+];
+const GATE_NON_PROJECT_SKILLS = ["bootstrap", "prof", "spec"];
+
+define("83", "Gate coverage: every public skill is supported, refusing, or non-project", () => {
+  const fails = [];
+  const supported = new Set(GATE_SUPPORTED_SKILLS);
+  const refusing = new Set(GATE_REFUSING_SKILLS);
+  const nonProject = new Set(GATE_NON_PROJECT_SKILLS);
+
+  const publicSkills = SKILL_DIRS.filter((d) => !d.startsWith("_") && exists(`skills/${d}/DOC.md`));
+
+  for (const dir of publicSkills) {
+    const memberships = [supported.has(dir), refusing.has(dir), nonProject.has(dir)].filter(Boolean).length;
+    if (memberships === 0) {
+      fails.push({ file: `skills/${dir}`, detail: "not classified in any of SUPPORTED/REFUSING/NON_PROJECT - a future skill must be added to one list explicitly" });
+    } else if (memberships > 1) {
+      fails.push({ file: `skills/${dir}`, detail: "classified in more than one of SUPPORTED/REFUSING/NON_PROJECT" });
+    }
+  }
+  const publicSet = new Set(publicSkills);
+  for (const [label, list] of [["SUPPORTED", GATE_SUPPORTED_SKILLS], ["REFUSING", GATE_REFUSING_SKILLS], ["NON_PROJECT", GATE_NON_PROJECT_SKILLS]]) {
+    for (const dir of list) {
+      if (!publicSet.has(dir)) fails.push({ file: `skills/${dir}`, detail: `listed in ${label} but is not a public skill directory (no DOC.md, or directory missing)` });
+    }
+  }
+
+  for (const dir of GATE_REFUSING_SKILLS) {
+    const f = `skills/${dir}/SKILL.md`;
+    if (!exists(f)) continue;
+    if (!read(f).includes("PROJECT_TYPE=landing")) {
+      fails.push({ file: f, detail: 'refusing skill has no "PROJECT_TYPE=landing" marker - the shared refusal gate is not wired in' });
+    }
+  }
+
+  const REFUSAL_SENTENCE = "n’est pas disponible pour un site vitrine";
+  for (const dir of GATE_SUPPORTED_SKILLS) {
+    const f = `skills/${dir}/SKILL.md`;
+    if (exists(f) && read(f).includes(REFUSAL_SENTENCE)) {
+      fails.push({ file: f, detail: "a SUPPORTED skill carries the French refusal sentence - it must actually support a vitrine, not refuse it" });
+    }
+  }
+  for (const dir of GATE_REFUSING_SKILLS) {
+    const f = `skills/${dir}/SKILL.md`;
+    if (exists(f) && !read(f).includes(REFUSAL_SENTENCE)) {
+      fails.push({ file: f, detail: "a REFUSING skill has no French refusal sentence - PROJECT_TYPE=landing is wired but the operator would see no explanation" });
+    }
+  }
+
+  const detectFile = "skills/_detect-project-root/SKILL.md";
+  if (!exists(detectFile)) {
+    fails.push({ file: detectFile, detail: "missing" });
+  } else {
+    const s = read(detectFile);
+    if (!s.includes("PROJECT_TYPE")) fails.push({ file: detectFile, detail: "does not mention PROJECT_TYPE" });
+    if (!s.includes("scripts/_stack.mjs")) fails.push({ file: detectFile, detail: "does not mention scripts/_stack.mjs" });
+  }
+
+  return fails;
+});
+
+define("84", "Landing pipeline invariants: step order, no DB seed, container params", () => {
+  const fails = [];
+
+  const bootstrapFile = "scripts/bootstrap-init.mjs";
+  if (!exists(bootstrapFile)) {
+    fails.push({ file: bootstrapFile, detail: "missing" });
+  } else {
+    const src = read(bootstrapFile);
+    const stepsAt = src.indexOf("const LANDING_STEPS");
+    if (stepsAt < 0) {
+      fails.push({ file: bootstrapFile, detail: "LANDING_STEPS is not defined" });
+    } else {
+      const stepsEnd = src.indexOf("];", stepsAt);
+      const stepsBlock = src.slice(stepsAt, stepsEnd > 0 ? stepsEnd : undefined);
+      if (!/"scaffoldLanding"/.test(stepsBlock)) fails.push({ file: bootstrapFile, detail: "LANDING_STEPS does not include scaffoldLanding" });
+      const buildAt = stepsBlock.indexOf('"dockerBuildPush"');
+      const containerAt = stepsBlock.indexOf('"scwContainer"');
+      if (buildAt < 0) fails.push({ file: bootstrapFile, detail: 'LANDING_STEPS does not include "dockerBuildPush"' });
+      if (containerAt < 0) fails.push({ file: bootstrapFile, detail: 'LANDING_STEPS does not include "scwContainer"' });
+      if (buildAt >= 0 && containerAt >= 0 && buildAt > containerAt) {
+        fails.push({ file: bootstrapFile, detail: 'LANDING_STEPS runs "scwContainer" before "dockerBuildPush" - Scaleway validates the registry image at container-creation time (CONTRACT.md §1)' });
+      }
+    }
+
+    // writeSupplyChainWorkspaceYaml() must run before the FIRST pnpm install
+    // inside the landing scaffold path (check 52's rule, applied to landing).
+    const fnAt = src.indexOf("function scaffoldLanding(");
+    if (fnAt < 0) {
+      fails.push({ file: bootstrapFile, detail: "scaffoldLanding() is not defined" });
+    } else {
+      const nextFnAt = src.indexOf("\nfunction ", fnAt + 1);
+      const body = src.slice(fnAt, nextFnAt > 0 ? nextFnAt : undefined);
+      const yamlAt = body.indexOf("writeSupplyChainWorkspaceYaml()");
+      const installAt = body.search(/runPnpm\(\s*\n?\s*`pnpm install/);
+      if (yamlAt < 0) {
+        fails.push({ file: bootstrapFile, detail: "scaffoldLanding() never calls writeSupplyChainWorkspaceYaml()" });
+      } else if (installAt >= 0 && yamlAt > installAt) {
+        fails.push({ file: bootstrapFile, detail: "scaffoldLanding() calls writeSupplyChainWorkspaceYaml() AFTER the first pnpm install - the age floor must govern it" });
+      }
+
+      // The landing branch must never seed a DATABASE_URL placeholder - scoped
+      // to scwContainer()'s own body, not the whole file, so an unrelated
+      // mention elsewhere (e.g. a comment) cannot trip this.
+    }
+
+    const containerFnAt = src.indexOf("async function scwContainer(");
+    if (containerFnAt < 0) {
+      fails.push({ file: bootstrapFile, detail: "scwContainer() is not defined" });
+    } else {
+      const nextFnAt = src.indexOf("\nasync function", containerFnAt + 1);
+      // Comments are stripped first: this function legitimately explains, in
+      // prose, an earlier putSecret("DATABASE_URL", ...) call - flagging that
+      // mention would be a false positive (same convention as check 6/15/21).
+      const body = stripComments(src.slice(containerFnAt, nextFnAt > 0 ? nextFnAt : undefined));
+      for (const m of body.matchAll(/putSecret\(\s*"DATABASE_URL"/g)) {
+        const before = body.slice(Math.max(0, m.index - 200), m.index);
+        if (!/if\s*\(\s*!isLanding\s*\)/.test(before)) {
+          fails.push({ file: bootstrapFile, detail: "scwContainer() seeds a DATABASE_URL placeholder that is not guarded by `if (!isLanding)` - a vitrine must never get one" });
+        }
+      }
+      if (!/LANDING_CONTAINER\.maxConcurrency/.test(body)) {
+        fails.push({ file: bootstrapFile, detail: "scwContainer() does not reference LANDING_CONTAINER.maxConcurrency" });
+      }
+      if (!/LANDING_CONTAINER\.minScaleProduction/.test(body)) {
+        fails.push({ file: bootstrapFile, detail: "scwContainer() does not reference LANDING_CONTAINER.minScaleProduction" });
+      }
+      // M3: allowMissingDatabaseUrl must be opt-in, gated on isLanding - a
+      // bare syncContainerSecrets() call here would silently re-globalize
+      // the tolerance for every stack, not just landing.
+      if (!/allowMissingDatabaseUrl:\s*isLanding/.test(body)) {
+        fails.push({ file: bootstrapFile, detail: "scwContainer() does not pass allowMissingDatabaseUrl: isLanding to syncContainerSecrets() (M3)" });
+      }
+    }
+  }
+
+  const deployFile = "scripts/deploy.mjs";
+  if (!exists(deployFile)) {
+    fails.push({ file: deployFile, detail: "missing" });
+  } else {
+    const src = read(deployFile);
+    if (!/import\s*\{\s*detectStack\s*\}\s*from\s*"\.\/_stack\.mjs"/.test(src)) {
+      fails.push({ file: deployFile, detail: "does not import detectStack from ./_stack.mjs" });
+    }
+    const stepsAt = src.indexOf("const LANDING_STEPS");
+    if (stepsAt < 0) {
+      fails.push({ file: deployFile, detail: "LANDING_STEPS is not defined" });
+    } else {
+      const stepsEnd = src.indexOf("];", stepsAt);
+      const stepsBlock = src.slice(stepsAt, stepsEnd > 0 ? stepsEnd : undefined);
+      for (const forbidden of ["migrate", "agentJobs"]) {
+        if (new RegExp(`"${forbidden}"`).test(stepsBlock)) {
+          fails.push({ file: deployFile, detail: `LANDING_STEPS includes "${forbidden}" - a vitrine has no database and no agent Jobs` });
+        }
+      }
+    }
+    if (!/LANDING_CONTAINER\.scale/.test(src) || !/LANDING_CONTAINER\.maxConcurrency/.test(src)) {
+      fails.push({ file: deployFile, detail: "landing container creation does not reference LANDING_CONTAINER's scale/maxConcurrency" });
+    }
+    if (!/LANDING_CONTAINER\.minScaleProduction/.test(src) || !/LANDING_CONTAINER\.minScalePreview/.test(src)) {
+      fails.push({ file: deployFile, detail: "landing container creation does not reference LANDING_CONTAINER's minScaleProduction/minScalePreview" });
+    }
+    // The landing createParams object must not re-hardcode the numbers
+    // LANDING_CONTAINER already carries - scoped to the STACK === "landing"
+    // ternary branch specifically, so an unrelated "80"/"1"/"0" elsewhere in
+    // the file (timeouts, exit codes, array indices) cannot trip this.
+    const landingParamsAt = src.indexOf('STACK === "landing"\n        ? {');
+    if (landingParamsAt >= 0) {
+      const landingParamsEnd = src.indexOf("}\n        :", landingParamsAt);
+      const block = src.slice(landingParamsAt, landingParamsEnd > 0 ? landingParamsEnd : landingParamsAt + 500);
+      if (/maxConcurrency:\s*80\b/.test(block)) {
+        fails.push({ file: deployFile, detail: "landing container params re-hardcode maxConcurrency: 80 instead of LANDING_CONTAINER.maxConcurrency" });
+      }
+      if (/minScale:\s*(0|1)\b(?!\w)/.test(block.replace(/LANDING_CONTAINER\.\w+/g, ""))) {
+        fails.push({ file: deployFile, detail: "landing container params re-hardcode a numeric minScale instead of LANDING_CONTAINER.minScaleProduction/minScalePreview" });
+      }
+    } else {
+      fails.push({ file: deployFile, detail: "could not locate the landing createParams branch" });
+    }
+
+    // M3: allowMissingDatabaseUrl must reach the container exactly where a
+    // landing sync happens - a production sync tied to STACK, a preview sync
+    // always true (a vitrine preview never has a databaseUrlFrom secret
+    // either).
+    // Anchored on the sync log line, not a bare `if (TARGET === "production")`
+    // - that condition also guards an unrelated DATABASE_URL existence check
+    // earlier in the file (resolveDatabaseSecret()).
+    const syncLogAt = src.indexOf('log("Syncing container secrets from Secret Manager...")');
+    const prodSyncAt = syncLogAt >= 0 ? src.indexOf('if (TARGET === "production") {', syncLogAt) : -1;
+    if (prodSyncAt < 0) {
+      fails.push({ file: deployFile, detail: 'could not locate the TARGET === "production" secrets sync branch' });
+    } else if (!/allowMissingDatabaseUrl:\s*STACK === "landing"/.test(src.slice(prodSyncAt, prodSyncAt + 700))) {
+      fails.push({
+        file: deployFile,
+        detail: 'the TARGET === "production" secrets sync does not pass allowMissingDatabaseUrl: STACK === "landing" (M3)',
+      });
+    }
+    const landingSyncAt = src.indexOf('} else if (STACK === "landing") {');
+    if (landingSyncAt < 0) {
+      fails.push({ file: deployFile, detail: 'could not locate the STACK === "landing" secrets sync branch' });
+    } else if (!/allowMissingDatabaseUrl:\s*true/.test(src.slice(landingSyncAt, landingSyncAt + 500))) {
+      fails.push({ file: deployFile, detail: 'the STACK === "landing" preview secrets sync does not pass allowMissingDatabaseUrl: true (M3)' });
+    }
+  }
+
+  const containerFile = "scripts/scaleway/container.mjs";
+  if (!exists(containerFile)) {
+    fails.push({ file: containerFile, detail: "missing" });
+  } else {
+    const src = read(containerFile);
+    const m = src.match(/export const LANDING_CONTAINER\s*=\s*Object\.freeze\(\{([^}]*)\}\)/);
+    if (!m) {
+      fails.push({ file: containerFile, detail: "LANDING_CONTAINER is not exported as an Object.freeze({...}) literal" });
+    } else {
+      const body = m[1];
+      for (const [key, re, label] of [
+        ["scale", /scale\s*:\s*"S"/, '"S"'],
+        ["maxConcurrency", /maxConcurrency\s*:\s*80\b/, "80"],
+        ["minScaleProduction", /minScaleProduction\s*:\s*1\b/, "1"],
+        ["minScalePreview", /minScalePreview\s*:\s*0\b/, "0"],
+      ]) {
+        if (!re.test(body)) {
+          fails.push({ file: containerFile, detail: `LANDING_CONTAINER.${key} is not ${label}` });
+        }
+      }
+    }
+
+    // M3: the missing-DATABASE_URL tolerance must be opt-in, not global -
+    // defaulting to false means every caller that forgets the flag gets the
+    // safe (throwing) behavior instead of silently deleting a secret.
+    const buildMapAt = src.indexOf("export async function buildContainerSecretMap(");
+    if (buildMapAt < 0) {
+      fails.push({ file: containerFile, detail: "buildContainerSecretMap is not exported" });
+    } else if (!/allowMissingDatabaseUrl\s*=\s*false/.test(src.slice(buildMapAt, buildMapAt + 400))) {
+      fails.push({
+        file: containerFile,
+        detail: "buildContainerSecretMap does not declare allowMissingDatabaseUrl defaulting to false (M3) - the DATABASE_URL tolerance must be opt-in",
+      });
+    }
+  }
+
+  return fails;
+});
+
+// Pinned inventory of templates/landing/ - a missing (or unexpectedly extra)
+// file here means the scaffolded vitrine no longer matches what
+// scaffoldLanding()/landingDeployArtifacts()/landingClaudeMd() actually write.
+const LANDING_TEMPLATE_MANIFEST = [
+  "templates/landing/astro.config.mjs",
+  "templates/landing/Caddyfile",
+  "templates/landing/claude-md-core.md",
+  "templates/landing/docker-entrypoint.sh",
+  "templates/landing/Dockerfile",
+  "templates/landing/.dockerignore",
+  "templates/landing/.gitignore",
+  "templates/landing/package.json",
+  "templates/landing/public/favicon.svg",
+  "templates/landing/public/robots.txt",
+  "templates/landing/src/components/About.astro",
+  "templates/landing/src/components/Contact.astro",
+  "templates/landing/src/components/Footer.astro",
+  "templates/landing/src/components/Header.astro",
+  "templates/landing/src/components/Hero.astro",
+  "templates/landing/src/components/Services.astro",
+  "templates/landing/src/components/Testimonials.astro",
+  "templates/landing/src/env.d.ts",
+  "templates/landing/src/layouts/BaseLayout.astro",
+  "templates/landing/src/pages/404.astro",
+  "templates/landing/src/pages/index.astro",
+  "templates/landing/src/pages/mentions-legales.astro",
+  "templates/landing/src/pages/politique-de-confidentialite.astro",
+  "templates/landing/src/styles/global.css",
+  "templates/landing/src/styles/presets/audacieux.css",
+  "templates/landing/src/styles/presets/chaleureux.css",
+  "templates/landing/src/styles/presets/epure.css",
+  "templates/landing/tsconfig.json",
+];
+
+define("85", "Template manifest + bootstrap rules: landing inventory, strict tokens", () => {
+  const fails = [];
+
+  const actual = new Set(FILES.filter((f) => f.startsWith("templates/landing/")));
+  const expected = new Set(LANDING_TEMPLATE_MANIFEST);
+  for (const f of LANDING_TEMPLATE_MANIFEST) {
+    if (!exists(f)) fails.push({ file: f, detail: "missing from templates/landing/ - the pinned manifest expects it" });
+  }
+  for (const f of actual) {
+    if (!expected.has(f)) fails.push({ file: f, detail: "unexpected file under templates/landing/ - not in the pinned manifest, update it deliberately if this is intentional" });
+  }
+
+  const bootstrapSkill = "skills/bootstrap/SKILL.md";
+  if (!exists(bootstrapSkill)) {
+    fails.push({ file: bootstrapSkill, detail: "missing" });
+  } else {
+    const s = read(bootstrapSkill);
+    if (!/literal token `landing`/.test(s)) {
+      fails.push({ file: bootstrapSkill, detail: "no literal-token rule for `landing`" });
+    }
+    if (!/literal token `application`/.test(s)) {
+      fails.push({ file: bootstrapSkill, detail: "no literal-token rule for `application`" });
+    }
+    if (!/never infer the stack/i.test(s)) {
+      fails.push({ file: bootstrapSkill, detail: "no never-infer-the-stack sentence" });
+    }
+    for (const preset of ["epure", "chaleureux", "audacieux"]) {
+      if (!new RegExp("`" + preset + "`").test(s)) {
+        fails.push({ file: bootstrapSkill, detail: `preset token \`${preset}\` not named literally` });
+      }
+    }
+  }
+
+  for (const f of FILES.filter((x) => x.startsWith("templates/landing/"))) {
+    let s;
+    try {
+      s = read(f);
+    } catch {
+      continue;
+    }
+    if (/fonts\.googleapis\.com|fonts\.gstatic\.com/.test(s)) {
+      fails.push({ file: f, detail: "references Google Fonts at runtime - RGPD requires the fontsource packages baked at build time instead" });
     }
   }
 

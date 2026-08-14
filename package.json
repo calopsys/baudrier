@@ -1,6 +1,6 @@
 {
   "name": "baudrier",
-  "version": "1.2.4",
+  "version": "1.3.0",
   "private": true,
   "type": "module",
   "description": "Runtime dependencies for Baudrier, the Claude Code plugin by Calopsys. Installed into ${CLAUDE_PLUGIN_DATA} by the SessionStart hook, never into the read-only plugin cache.",

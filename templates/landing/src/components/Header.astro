@@ -1,0 +1,37 @@
+---
+export interface NavLink {
+  label: string;
+  href: string;
+}
+
+export interface Props {
+  siteName?: string;
+  navLinks?: NavLink[];
+}
+
+const {
+  siteName = "Mon entreprise",
+  navLinks = [
+    { label: "Services", href: "#services" },
+    { label: "À propos", href: "#a-propos" },
+    { label: "Contact", href: "#contact" },
+  ],
+} = Astro.props;
+---
+
+<header class="border-b border-muted/20 bg-surface">
+  <div class="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
+    <a href="/" class="font-display text-lg font-semibold text-ink">
+      {siteName}
+    </a>
+    <nav class="hidden gap-6 sm:flex">
+      {
+        navLinks.map((link) => (
+          <a href={link.href} class="text-sm text-ink transition-colors hover:text-accent">
+            {link.label}
+          </a>
+        ))
+      }
+    </nav>
+  </div>
+</header>

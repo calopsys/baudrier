@@ -32,3 +32,7 @@ The access restriction (on or off) is an application-level check, not network-le
 {{callout:info|Why some tools need this}}
 `seo-perf`, `eco-audit`, and `gsc` all work by having an external service (typically Google) fetch your site. If the site only answers VPN traffic, those fetches fail or report wrong results - publishing first avoids that.
 {{/callout}}
+
+## Landing sites (site vitrine)
+
+`/publish` applies identically to a landing site: the redeploy that follows restarts the container and re-reads the access gate, whether it's implemented in Next.js's `proxy.ts` or in a landing site's Caddyfile.

@@ -14,6 +14,14 @@ You help the user add an automation: to their project, or to their own toolkit.
 - When generating user-facing content for the scaffolded project (UI labels, emails, copy), write it in the user's language too.
 - Show progress as a short natural-language checklist (in-progress and done states).
 
+---
+
+## Step 0 - Garde vitrine
+
+**Garde vitrine** : invoke `_detect-project-root` first. If `PROJECT_TYPE=landing`, stop and tell the user, in their language (French shown): « Cette fonctionnalité n’est pas disponible pour un site vitrine : elle est réservée aux applications web. Votre site reste modifiable, et vous pouvez le déployer avec /deploy. »
+
+---
+
 This skill is **pure orchestration** - it scaffolds nothing itself. Your job is:
 1. Understand what the user actually wants
 2. Infer WHO the automation serves: the app, or the operator (see "The app/ops split")

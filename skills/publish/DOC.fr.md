@@ -32,3 +32,7 @@ La restriction d'accès (activée ou non) est une vérification au niveau de l'a
 {{callout:info|Pourquoi certains outils en ont besoin}}
 `seo-perf`, `eco-audit` et `gsc` fonctionnent tous en faisant charger votre site par un service externe (généralement Google). Si le site ne répond qu'au trafic VPN, ces chargements échouent ou donnent des résultats faussés - publier d'abord évite ce problème.
 {{/callout}}
+
+## Sites vitrines
+
+`/publish` s’applique à l’identique sur un site vitrine : la synchronisation des secrets redémarre le conteneur et relit la porte d’accès, qu’elle soit implémentée dans le `proxy.ts` de Next.js ou dans le Caddyfile d’un site vitrine.

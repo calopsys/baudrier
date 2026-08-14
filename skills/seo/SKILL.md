@@ -44,7 +44,22 @@ This rule applies to the report (step 2) and to the optimization proposals. In y
 
 ---
 
+## Step 0 - Detect the stack
+
+Invoke `_detect-project-root` to get `WEB_DIR` and `PROJECT_TYPE`. **If `PROJECT_TYPE=landing`**, most of the technical audit below (Step 1) still applies conceptually (headings, alt text, semantic HTML, accessibility), but the file locations and a few checks differ - see the "Landing branch" callout right after Step 1's heading, and the landing branch in Step 3a. Everything else in this skill (content audit, readability, keywords, `/geo`, `/gsc`) is stack-agnostic and needs no change.
+
 ## Step 1 - Audit
+
+### Landing branch (`PROJECT_TYPE=landing`)
+
+Before running the checks below, note the file-location differences for a site vitrine (Astro, static, no App Router):
+
+- **`<head>` content** (title, description, viewport, favicon, OG tags, `lang`): audit `<WEB_DIR>/src/layouts/BaseLayout.astro` (the shared `<head>`) and each `<WEB_DIR>/src/pages/**/*.astro` that overrides per-page meta props, instead of `layout.tsx`/`generateMetadata`.
+- **Canonical URL + `astro.config` `site`**: a landing's canonical URL comes from the `site:` field in `<WEB_DIR>/astro.config.mjs` (Astro derives per-page canonical tags from it), not a per-page `alternates.canonical`. Flag ❌ if `site:` is still unset (the scaffold ships no `site:` key at all, only a comment explaining why - `/add-domain` and this skill's own fixes are what add it).
+- **Sitemap**: check whether `@astrojs/sitemap` is installed and listed in the `integrations` array of `astro.config.mjs`, rather than looking for `src/app/sitemap.ts`.
+- **robots.txt**: same check as the Next.js branch, but the file is static at `<WEB_DIR>/public/robots.txt` (nothing generates it at build time) - read it directly.
+- **Structured data, fonts, `next/image`, URL/slugs (App Router `[id]`/`[slug]`), i18n**: skip these subsections entirely for a landing - they are Next.js-specific and do not apply to the static page set a site vitrine ships with.
+- **HTML structure, accessibility**: run the same checks, but grep `<WEB_DIR>/src/**/*.astro` instead of `.tsx`.
 
 Analyze the project and check each point below. For each point, indicate ✅ (OK), ⚠️ (needs improvement), or ❌ (missing).
 
@@ -343,7 +358,14 @@ If the user accepts, fix in this order:
 
 ### 3a - Missing basics (metadata, robots.txt, sitemap, JSON-LD WebSite)
 
-If **none** of the three files `src/app/sitemap.ts`, `public/robots.txt`, or an enriched metadata with `metadataBase` exists → run the plugin's init script:
+**If `PROJECT_TYPE=landing`, do NOT run `setup-seo.mjs` - it is Next.js-specific** (it patches `layout.tsx` and generates `src/app/sitemap.ts`, neither of which exists in an Astro project). Fix the landing's basics directly instead:
+
+1. **`site:` in `astro.config.mjs`**: if still unset, set it to the production `APP_URL` (from `.env`/Secret Manager) - the same value `/add-domain` writes once a custom domain is attached.
+2. **`@astrojs/sitemap`**: install if absent (`pnpm add @astrojs/sitemap` in `<WEB_DIR>`) and add it to the `integrations` array in `astro.config.mjs` (`import sitemap from "@astrojs/sitemap";` + `sitemap()`).
+3. **`public/robots.txt`**: if missing or incomplete, write it directly (allow all, reference the sitemap URL derived from `site:`).
+4. **`<head>` basics**: patch `BaseLayout.astro` by hand for whatever Step 1's landing branch flagged (title/description length, OG tags, favicon) - there is no init script for this on the landing stack.
+
+**If `PROJECT_TYPE=application`**, if **none** of the three files `src/app/sitemap.ts`, `public/robots.txt`, or an enriched metadata with `metadataBase` exists → run the plugin's init script:
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/setup-seo.mjs" \

@@ -38,3 +38,7 @@ Measures your site's real speed with PageSpeed Insights, Google's official tool.
 
 - On a brand-new site, the measurements come from Google's "lab". With real traffic (a few weeks), the audit also shows the **field Core Web Vitals**: the speed actually experienced by your real visitors. So running `/seo-perf` again later brings new information.
 - Core Web Vitals are a **confirmed Google ranking factor**: improving these figures helps your search visibility.
+
+## Landing sites (site vitrine)
+
+On a landing site (Astro), Baudrier picks representative pages from your `src/pages` folder instead of Next.js's `app/` router - usually the whole small page set, since a landing site rarely has more than a handful of pages. The measurement itself (PageSpeed Insights, the restricted-site check) works identically on both stacks.

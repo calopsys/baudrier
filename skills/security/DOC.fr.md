@@ -57,3 +57,7 @@ Les vulnérabilités évoluent vite (nouvelles failles dans des packages npm cha
 {{callout:info|Pas alarmiste}}
 Baudrier est conçue pour **expliquer**, pas pour vous faire peur. Vous voyez chaque problème avec sa conséquence concrète, mais aussi la sévérité réelle (un site vitrine sans formulaire n'a pas les mêmes risques qu'un site avec auth + paiements). Vous priorisez ce qui compte vraiment.
 {{/callout}}
+
+## Sites vitrines
+
+Non disponible sur un site vitrine : cette commande est réservée aux applications complètes. Si votre projet est un site vitrine (Astro, sans base de données ni comptes utilisateurs), Baudrier refuse la commande et vous le dit - votre site reste tel quel, et vous pouvez toujours le déployer avec `/deploy`.

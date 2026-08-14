@@ -37,7 +37,7 @@ This choice also decides one more thing: what joins the project's main line.
 ## Tips
 
 {{callout:tip|Per-branch environments}}
-Every branch you preview gets its own address and its own database, fully isolated from production. That isolation has a price: each branch previewed this way keeps its own Serverless SQL database, and the harness never deletes a database. Removing one is a manual job in the Scaleway console. Prefer one review branch over many short-lived ones.
+Every branch you preview gets its own address, fully isolated from production. For an app with a database, that isolation has a price: each branch previewed this way keeps its own Serverless SQL database, and the harness never deletes a database - removing one is a manual job in the Scaleway console. A vitrine has no database at all, so its preview is just one container at rest, close to zero cost. Either way, prefer one review branch over many short-lived ones.
 {{/callout}}
 
 {{callout:info|Why migrations run separately}}

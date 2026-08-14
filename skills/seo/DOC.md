@@ -55,3 +55,7 @@ Run all three in this order for full coverage.
 {{callout:warning|SEO takes time}}
 An SEO optimization doesn't turn into clicks overnight. Google recrawls your site (revisits and reevaluates it) over a few weeks after your changes. Be patient and measure progress in Google Search Console (`/gsc`) several months later, not the next day.
 {{/callout}}
+
+## Landing sites (site vitrine)
+
+On a landing site (Astro), the technical audit looks at `BaseLayout.astro` and your pages' `<head>` instead of Next.js's `layout.tsx`, and the canonical URL comes from the `site:` field in `astro.config.mjs`. The automated basics fix installs/configures `@astrojs/sitemap` and writes `public/robots.txt` directly, rather than running the Next.js-specific init script.

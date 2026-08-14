@@ -58,3 +58,7 @@ The operator's machine has no direct access to your database (only a dedicated S
 {{callout:warning|Dropping a DB table is never automatic - not even a "yes" to the finding}}
 For every other category, approving a finding is enough to have it removed on the cleanup branch. DB tables are different: agreeing that a table looks unused only logs it as a report-only recommendation. Nothing is generated or run against any database - not even a preview one - unless you separately and explicitly ask for that specific table's removal to be prepared and tested. Only then does the assistant create a migration and apply it to an isolated preview database for you to verify; production is never touched until you've tested it there and confirmed the merge yourself.
 {{/callout}}
+
+## Landing sites (site vitrine)
+
+Not available on a landing site: this command is reserved for full applications. If your project is a landing site (built with Astro, no database, no user accounts), Baudrier refuses the command and tells you so - your site stays exactly as it is, and remains deployable with `/deploy`.

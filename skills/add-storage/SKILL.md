@@ -19,6 +19,8 @@ Adds a Scaleway Object Storage bucket (S3-compatible, region `fr-par`) and an S3
 
 ## Step 0 - Preflight: storage already configured?
 
+**Garde vitrine** : invoke `_detect-project-root` first. If `PROJECT_TYPE=landing`, stop and tell the user, in their language (French shown): « Cette fonctionnalité n’est pas disponible pour un site vitrine : elle est réservée aux applications web. Votre site reste modifiable, et vous pouvez le déployer avec /deploy. »
+
 **First of all**, invoke `_check-deps storage` to detect whether Object Storage is already in place:
 
 ```bash

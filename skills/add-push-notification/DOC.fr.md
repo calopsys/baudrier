@@ -44,3 +44,7 @@ Ajoute les notifications push : votre app peut prévenir ses utilisateurs sur le
 - **iPhone/iPad** : le push web ne fonctionne que si l'utilisateur a **installé l'app sur son écran d'accueil** (iOS 16.4 minimum), et l'activation doit venir d'un geste de sa part (le bouton). C'est une règle d'Apple, pas une limite de votre app.
 - Le push se teste **après déploiement** (le service worker est désactivé en développement).
 - Complément naturel : `/add-notification-center` ajoute une cloche **dans l'app** avec l'historique des notifications. Les deux se combinent : un seul appel notifie alors la cloche **et** le téléphone.
+
+## Sites vitrines
+
+Non disponible sur un site vitrine : cette commande est réservée aux applications complètes. Si votre projet est un site vitrine (Astro, sans base de données ni comptes utilisateurs), Baudrier refuse la commande et vous le dit - votre site reste tel quel, et vous pouvez toujours le déployer avec `/deploy`.

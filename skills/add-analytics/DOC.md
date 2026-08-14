@@ -53,3 +53,7 @@ Unlike your database or your storage bucket, Matomo lives outside Scaleway. You 
 {{callout:tip|Your admin visits do not skew your stats}}
 Tracking is disabled on the admin routes (`/admin`): when you manage your site, your own sessions are not counted as visitors. You can extend this exclusion to your authenticated areas (dashboard, members area, account) - Baudrier offers it during the installation.
 {{/callout}}
+
+## Landing sites (site vitrine)
+
+On a landing site (Astro), a static build cannot read an environment variable at runtime, so the Matomo URL and site ID are written directly into a `Matomo.astro` component's source instead of being pushed as env vars - the same values that are already visible in the page source of every Matomo-tracked site, cookieless setup included. Any future change to these values needs a rebuild and a redeploy (`/deploy`), not just a secret update.

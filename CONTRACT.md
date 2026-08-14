@@ -9,16 +9,18 @@ invent a different convention.
 
 ## 1. Architecture
 
-A Claude Code plugin that scaffolds and deploys Next.js webapps entirely on
-Scaleway, for non-technical French users.
+A Claude Code plugin that scaffolds and deploys webapps entirely on Scaleway,
+for non-technical French users. Two project stacks share this harness (see
+"Two stacks" below): a T3 application, or a static vitrine.
 
 | Concern | Implementation |
 |---|---|
 | App stack | Next.js 16 App Router (T3), TypeScript, tRPC v11, Drizzle, Tailwind v4, shadcn/ui |
+| Vitrine stack | Astro 5 (static output), TypeScript, Tailwind v4, three token presets, served by Caddy 2 |
 | Hosting | Scaleway Serverless Containers, region `fr-par` |
 | Image build | Direct `docker build`/`push`, run by the harness itself (no CI) → Scaleway Container Registry |
 | Deploy orchestration | `/deploy` skill (direct build+push, runs migration Job, updates container via SDK) |
-| Database | Scaleway Serverless SQL Database (PostgreSQL 16), `pg` + `drizzle-orm/node-postgres` |
+| Database | Scaleway Serverless SQL Database (PostgreSQL 16), `pg` + `drizzle-orm/node-postgres` (application only, §1 "Two stacks") |
 | Cache/sessions | PostgreSQL (no Redis) |
 | Object storage | Scaleway Object Storage (S3-compatible, `@aws-sdk/client-s3`) |
 | DNS | Scaleway Domains & DNS — **external domains only** |
@@ -31,6 +33,56 @@ Scaleway, for non-technical French users.
 
 The product is **French-only**. There is no i18n. All user-facing strings in
 templates are hardcoded French.
+
+### Two stacks
+
+Two project stacks share this harness, detected from `package.json` only,
+never from a marker file (`scripts/_stack.mjs#detectStack`, called by
+`skills/_detect-project-root/SKILL.md`): `astro` in dependencies means a
+landing site (vitrine); `next` means the T3 application; neither means
+`unknown`, a hard failure. `/bootstrap`'s first argument token picks the
+stack explicitly — the literal `landing` or `application`, or one French
+`AskUserQuestion` when the token is absent or unrecognised
+(`skills/bootstrap/SKILL.md`). The description text is never used to infer
+the stack.
+
+A vitrine has no database, no Serverless Jobs and no Object Storage: it is a
+static Astro 5 build served by Caddy 2, on the same Container Registry +
+Serverless Containers pipeline as an application (`templates/landing/`,
+hand-rolled, no `create-astro` scaffolder). `LANDING_CONTAINER`
+(`scripts/scaleway/container.mjs`, imported by both `bootstrap-init.mjs` and
+`deploy.mjs`) fixes its resources: preset S, `maxConcurrency` 80, `min_scale`
+1 in production (a static Caddy response is cheap enough per request that one
+always-on instance absorbs more load, and there is no backend to warm) and 0
+on preview. The always-on production container costs roughly 6,40 EUR/month;
+`/bootstrap`'s closing summary and `/costs` both state this line.
+
+Because a vitrine never seeds a `DATABASE_URL` secret,
+`buildContainerSecretMap` (`container.mjs`) takes an opt-in
+`allowMissingDatabaseUrl` flag (default `false`): only when a caller passes
+`true` does the function treat a missing `databaseUrlFrom` secret as valid
+state and skip the key instead of throwing. The flag defaults closed because
+`setContainerSecrets` replaces the WHOLE map — silently skipping the key for
+every caller once let `rotate-secret`/`publish` delete a running preview's
+`DATABASE_URL` by targeting a preview secret that did not exist. Only the
+landing call sites pass `true`: `bootstrap-init.mjs`'s `scwContainer()` (gated
+on `isLanding`) and `deploy.mjs`'s container-secret syncs when `STACK ===
+"landing"`. The same function still derives `AUTH_URL` from `APP_URL` for a
+landing container (§2's derivation applies unconditionally); the value is
+simply never read, since a static site runs no Auth.js.
+
+Only 15 skills support a vitrine: `deploy`, `publish`, `unpublish`,
+`add-domain`, `costs`, `save-project`, `delete-project`, `add-analytics`,
+`add-dark-mode`, `seo`, `seo-perf`, `geo`, `rotate-secret`, `scale`,
+`gsc`. Every
+other project-scoped skill refuses through one shared gate
+(`skills/_detect-project-root/SKILL.md`'s `PROJECT_TYPE`, checked by each
+refusing skill's own Step 0, greppable marker `PROJECT_TYPE=landing`) with
+one French refusal sentence; `bootstrap`, `prof` and `spec` are not
+project-scoped and carry no gate either way. `tools/verify.mjs` check 83
+pins the three lists and requires every public skill to sit in exactly one
+of them, so a future skill that forgets to pick a list fails loudly instead
+of silently shipping ungated.
 
 ### Constants
 
@@ -494,6 +546,18 @@ preview deploy (§1: fails closed).
 | `CRON_SECRET` | shared secret protecting `/api/cron/*` |
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | Web Push |
 
+**A vitrine container receives a narrow subset.** Only `APP_URL`,
+`ACCESS_RESTRICTED`, `ACCESS_ALLOWED_IPS` and `ACCESS_BYPASS_TOKEN` apply to a
+landing site — no `DATABASE_URL`, no `AUTH_*`, no storage/email/generative
+keys, since a static Astro build integrates with none of them (§1 "Two
+stacks"). Matomo is the one exception, and its mechanism inverts:
+`/add-analytics`'s landing branch bakes the Matomo URL and site id straight
+into `src/components/Matomo.astro` at build time (a static page cannot read a
+runtime env var, and both values are already public in the page source
+either way), so a vitrine never receives `NEXT_PUBLIC_MATOMO_URL` /
+`NEXT_PUBLIC_MATOMO_SITE_ID` as container secrets at all — changing them
+needs a rebuild, never a redeploy alone.
+
 **Never introduce a variable not listed here without saying so in your report.**
 Banned (removed providers): anything matching `VERCEL_*`, `NEON_*`,
 `CLOUDFLARE_*`, `CF_*`, `R2_*`, `RESEND_*`, `BREVO_*`, `RENDER_*`, `STRIPE_*`,
@@ -809,11 +873,15 @@ export async function setContainerSecrets(containerId, obj);  // low-level PATCH
                                                                 // complete desired map - a key it
                                                                 // omits is DELETED (§1). Do not call
                                                                 // this from outside container.mjs.
-export async function buildContainerSecretMap({overrides, databaseUrlFrom, projectId});
+export async function buildContainerSecretMap({overrides, databaseUrlFrom, projectId, allowMissingDatabaseUrl});
                                                                 // -> complete map, from Secret
                                                                 // Manager, minus CONTAINER_EXCLUDED_SECRETS,
-                                                                // plus overrides (§1, §2)
-export async function syncContainerSecrets(containerId, {overrides, databaseUrlFrom, projectId, timeoutMs});
+                                                                // plus overrides (§1, §2).
+                                                                // allowMissingDatabaseUrl defaults
+                                                                // false (throws on a missing
+                                                                // databaseUrlFrom secret); only the
+                                                                // landing call sites pass true.
+export async function syncContainerSecrets(containerId, {overrides, databaseUrlFrom, projectId, allowMissingDatabaseUrl, timeoutMs});
                                                                 // THE canonical entry point (§1):
                                                                 // wait-ready, write the full map,
                                                                 // wait-ready. Every caller outside
@@ -1128,6 +1196,19 @@ preview container **and its own preview Serverless SQL database**, named
 from a sanitised branch slug. When production is chosen on any other
 branch → merged into `main` first, then the `main` row above applies.
 
+**Landing branch.** `scripts/deploy.mjs` detects the stack with
+`detectStack()` (`scripts/_stack.mjs`) and skips step 4 (the migration Job)
+and the agent-Jobs reconciliation entirely for a vitrine — `LANDING_STEPS`
+excludes `migrate` and `agentJobs` outright, not merely as no-ops, so neither
+ever touches Secret Manager or Serverless Jobs. The smoke test (step 7) is
+unchanged: Caddy answers `/api/healthz` with the same `{"ok":true}` body a
+Next.js app does, so one probe works against either stack. A vitrine preview
+never gets its own database (the whole `resolveDatabaseSecret()` path never
+runs) — the `revue` branch preview is code + secrets only, with the same
+container-creation and `syncContainerSecrets` overrides
+(`ACCESS_RESTRICTED: "true"`, `APP_URL`) as an application preview, minus
+`databaseUrlFrom`.
+
 ---
 
 ## 6. Access control
@@ -1186,6 +1267,24 @@ N=32768; check 71 enforces the lockstep and the budget. Cost params travel
 inside the hash string, so lowering N never breaks a stored hash - and for
 the same reason `verifyPassword`'s `maxmem` stays at 256 MB: hashes minted
 under the old N=131072 still need 128 MiB to verify.
+
+**The Caddyfile gate (vitrine) mirrors these exact invariants.**
+`templates/landing/docker-entrypoint.sh` writes `/etc/caddy/gate.caddy` at
+container start from the same three rules as `proxy.ts`: only the literal
+`"false"` opens `ACCESS_RESTRICTED`; `/.well-known/acme-challenge/*` and the
+exact `/api/healthz` path stay exempt regardless of state
+(`templates/landing/Caddyfile`); and a bypass token shorter than 32
+characters (`MIN_BYPASS_TOKEN_LENGTH`, mirrored as the entrypoint's `-ge 32`)
+mints no bypass line at all - the placeholder `{$ACCESS_BYPASS_TOKEN}` is
+what reaches the gate file, never the token's own value, so the secret never
+touches disk. `tools/verify.mjs` check 81 extracts the literals from
+`proxy.ts` itself and requires the same ones in both landing files, so the
+two gates cannot silently drift apart. Documented deviation: the Caddy
+header compare (`not header x-baudrier-access-token {$ACCESS_BYPASS_TOKEN}`)
+is Caddy's own string match, not the constant-time XOR loop `proxy.ts` uses
+- Caddy exposes no constant-time primitive at the Caddyfile level, and this
+is accepted as a lower-severity timing side-channel on a bearer token, not a
+password.
 
 ---
 
@@ -1337,7 +1436,7 @@ harness. The substitute is deliberate: static pins for every past
 regression class, plus fixture-spawn behavioral checks (67, 76) where a
 script can run against a synthetic directory.
 
-`node tools/verify.mjs` must exit 0. It checks: every `.mjs` parses, every
+`node tools/verify.mjs` must exit 0 (84 checks). It checks: every `.mjs` parses, every
 relative import resolves, every `scripts/...` path named in a `SKILL.md` exists,
 every referenced skill exists and no deleted skill is referenced, template
 manifests are valid, and no removed-provider token or env var survives outside

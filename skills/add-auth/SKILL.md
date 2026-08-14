@@ -19,6 +19,8 @@ Lightweight orchestrator. Detects the current state via the `// baudrier:auth-mo
 
 ## Step 0 - Detect the current state and contextual menu
 
+**Garde vitrine** : invoke `_detect-project-root` first. If `PROJECT_TYPE=landing`, stop and tell the user, in their language (French shown): « Cette fonctionnalité n’est pas disponible pour un site vitrine : elle est réservée aux applications web. Votre site reste modifiable, et vous pouvez le déployer avec /deploy. »
+
 Read the marker in `src/server/auth.ts`:
 
 ```bash

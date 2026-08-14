@@ -19,6 +19,8 @@ You add **push notifications** to the current project's app: the user can enable
 
 ## Step 0: Re-run? (idempotence)
 
+**Garde vitrine** : invoke `_detect-project-root` first. If `PROJECT_TYPE=landing`, stop and tell the user, in their language (French shown): « Cette fonctionnalité n’est pas disponible pour un site vitrine : elle est réservée aux applications web. Votre site reste modifiable, et vous pouvez le déployer avec /deploy. »
+
 Detect whether push is already in place: the `baudrier:push` marker at the top of `<WEB_DIR>/src/server/push.ts`.
 
 ```bash

@@ -23,3 +23,7 @@ La facturation Scaleway ne se découpe que par mois calendaire entier - pas par 
 {{callout:info|Le niveau gratuit affiche bien 0 €}}
 Si un service n'affiche aucun coût, cela signifie généralement que vous êtes encore dans le quota gratuit mensuel de Scaleway pour ce service - pas que quelque chose est cassé.
 {{/callout}}
+
+## Sites vitrines
+
+Le conteneur de production d’un site vitrine tourne **toujours** (il ne se met jamais en veille), pour un coût fixe d’environ 6,40 €/mois. `/costs` le mentionne explicitement ; ajustable avec `/scale`.

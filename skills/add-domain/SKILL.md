@@ -33,7 +33,7 @@ This skill (and the `dns.mjs` / `container.mjs` modules it uses) needs Scaleway 
 
 ## Step 1 - Check prerequisites
 
-Invoke `_detect-project-root` to retrieve `PROJECT_NAME`, `WEB_DIR`, `IS_NEXTJS`. Abort if `IS_NEXTJS=no`.
+Invoke `_detect-project-root` to retrieve `PROJECT_NAME`, `WEB_DIR`, `IS_NEXTJS`, `PROJECT_TYPE`. Abort if `IS_NEXTJS=no` and `PROJECT_TYPE` is not `landing` (a site vitrine has no `next` dependency, but is still a supported stack for this skill).
 
 Check that the project is deployed on a Scaleway Serverless Container. The production container's namespace and name both derive from `PROJECT_NAME` (same resolution `/deploy` and `/scale` use - never invent a different naming scheme):
 
@@ -169,7 +169,9 @@ Also update the local `.env`: replace/add `APP_URL=https://<name>.<domain>`.
 
 ### 2. Eliminate the old `*.functions.fnc.fr-par.scw.cloud` URLs from the code
 
-**This step is critical for SEO.** If the container's default Scaleway URL remains in the code (sitemaps, metadata, JSON-LD, Open Graph), search engines index the wrong URL and ranking is diluted.
+**This step is critical for SEO.** If the container's default Scaleway URL remains in the code (sitemaps, metadata, JSON-LD, Open Graph), search engines index the wrong URL and ranking is diluted. The DNS → propagation → `addCustomDomain` ordering above (Steps 3-6) and the `APP_URL` `putSecret` (point 1 above) are identical for both stacks - only the code edit below branches.
+
+**If `PROJECT_TYPE=application` (Next.js)**:
 
 1. **Search**:
    ```bash
@@ -182,24 +184,50 @@ Also update the local `.env`: replace/add `APP_URL=https://<name>.<domain>`.
    grep -r "functions.fnc" <WEB_DIR>/src/ --include="*.ts" --include="*.tsx"
    ```
 
+**If `PROJECT_TYPE=landing` (Astro)**: a static build has no `sitemap.ts`/`layout.tsx`/`robots.ts` to patch - Astro derives the canonical URL from one config field instead.
+
+1. **Set `site:`** in `<WEB_DIR>/astro.config.mjs` to `https://<name>.<domain>` (this is the field the scaffold's comment says add-domain/`/seo` fills in later - see `templates/landing/astro.config.mjs`).
+2. **Install `@astrojs/sitemap` if absent**:
+   ```bash
+   grep -q "@astrojs/sitemap" <WEB_DIR>/package.json || (cd <WEB_DIR> && pnpm add @astrojs/sitemap)
+   ```
+   Add it to the `integrations` array in `astro.config.mjs` if it is not already there (`import sitemap from "@astrojs/sitemap";` + `sitemap()`).
+3. **Check nothing remains**:
+   ```bash
+   grep -r "functions.fnc" <WEB_DIR>/src/ --include="*.astro"
+   ```
+
 ### 3. Update CLAUDE.md
 
 Invoke `_update-claude-md` with:
 - `custom`:
   - heading: `## Domaine personnalisé`
-  - body:
+  - body, for `PROJECT_TYPE=application`:
     ```
     Le domaine de production est `<name>.<domain>`.
     Architecture : domaine externe (registrar non géré par ce projet) -> Scaleway DNS (zone déléguée) -> Scaleway Serverless Containers (hébergement).
     Certificat HTTPS géré automatiquement par Scaleway (défi HTTP-01, renouvellement automatique).
-    IMPORTANT : le proxy Next.js exempte toujours `/.well-known/acme-challenge/*` du filtrage IP - voir la section "Sécurité" - car c'est ce qui permet l'émission et le renouvellement du certificat TLS. Ne jamais retirer cette exemption.
+    IMPORTANT : le proxy Next.js exempte toujours `/.well-known/acme-challenge/*` du filtrage IP - voir la section "Sécurité" - car c'est ce qui permet l’émission et le renouvellement du certificat TLS. Ne jamais retirer cette exemption.
+    ```
+  - body, for `PROJECT_TYPE=landing`:
+    ```
+    Le domaine de production est `<name>.<domain>`.
+    Architecture : domaine externe (registrar non géré par ce projet) -> Scaleway DNS (zone déléguée) -> Scaleway Serverless Containers (hébergement).
+    Certificat HTTPS géré automatiquement par Scaleway (défi HTTP-01, renouvellement automatique).
+    IMPORTANT : le Caddyfile du site vitrine exempte toujours `/.well-known/acme-challenge/*` du filtrage IP - voir la section "Sécurité" - car c'est ce qui permet l’émission et le renouvellement du certificat TLS. Ne jamais retirer cette exemption.
     ```
 
 ### 4. Important reminder about the IP allowlist
 
-The app is IP-restricted by default (CONTRACT.md §6). Its `proxy.ts` always exempts `/.well-known/acme-challenge/*` from that filter - this is precisely what lets TLS issuance and renewal keep working even while the app is otherwise locked down. Tell the user explicitly:
+The app is IP-restricted by default (CONTRACT.md §6). For `PROJECT_TYPE=application`, its `proxy.ts` always exempts `/.well-known/acme-challenge/*` from that filter; for `PROJECT_TYPE=landing`, the same exemption lives in the vitrine's `Caddyfile` instead. Either way, this is precisely what lets TLS issuance and renewal keep working even while the app is otherwise locked down. Tell the user explicitly.
 
-> ⚠️ Votre app est protégée par une liste d'adresses IP autorisées. Le chemin `/.well-known/acme-challenge/*` reste volontairement ouvert - c'est ce qui permet à Scaleway de renouveler automatiquement le certificat HTTPS de `<name>.<domain>`. Si quelqu'un modifie un jour le fichier `proxy.ts` du projet, il ne faut surtout pas retirer cette exception, sous peine de casser le renouvellement du certificat (le site deviendrait inaccessible en HTTPS après expiration).
+For `PROJECT_TYPE=application`:
+
+> ⚠️ Votre app est protégée par une liste d’adresses IP autorisées. Le chemin `/.well-known/acme-challenge/*` reste volontairement ouvert - c’est ce qui permet à Scaleway de renouveler automatiquement le certificat HTTPS de `<name>.<domain>`. Si quelqu’un modifie un jour le fichier `proxy.ts` du projet, il ne faut surtout pas retirer cette exception, sous peine de casser le renouvellement du certificat (le site deviendrait inaccessible en HTTPS après expiration).
+
+For `PROJECT_TYPE=landing`:
+
+> ⚠️ Votre site est protégé par une liste d’adresses IP autorisées. Le chemin `/.well-known/acme-challenge/*` reste volontairement ouvert - c’est ce qui permet à Scaleway de renouveler automatiquement le certificat HTTPS de `<name>.<domain>`. Si quelqu’un modifie un jour le `Caddyfile` du projet, il ne faut surtout pas retirer cette exception, sous peine de casser le renouvellement du certificat (le site deviendrait inaccessible en HTTPS après expiration).
 
 ---
 

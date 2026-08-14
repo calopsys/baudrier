@@ -50,3 +50,7 @@ If you have many points in a small area (like the shops of a city), ask Claude *
 {{callout:warning|Geocoding at runtime}}
 If your users enter free-text addresses in a form and you want to display them on the map automatically, that requires a paid geocoding service (Mapbox / MapTiler): OpenStreetMap Nominatim limits too strictly for that. Baudrier uses Nominatim **only at install time** for your fixed points, not in production.
 {{/callout}}
+
+## Landing sites (site vitrine)
+
+Not available on a landing site: this command is reserved for full applications. If your project is a landing site (built with Astro, no database, no user accounts), Baudrier refuses the command and tells you so - your site stays exactly as it is, and remains deployable with `/deploy`.

@@ -65,3 +65,7 @@ Every email must have a subject of **at least 10 characters** and **at most 3 re
 {{callout:info|No inbound email}}
 TEM is send-only. It does not provide anything like receiving mail at `contact@mysite.com` and forwarding it to your inbox - see `/add-domain`'s documentation for details on that gap. `/add-email` only sets up **outgoing** mail.
 {{/callout}}
+
+## Landing sites (site vitrine)
+
+Not available on a landing site: this command is reserved for full applications. If your project is a landing site (built with Astro, no database, no user accounts), Baudrier refuses the command and tells you so - your site stays exactly as it is, and remains deployable with `/deploy`.

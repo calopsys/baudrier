@@ -53,3 +53,7 @@ The `llms.txt` file is not (yet) an official standard, but it is **adopted by An
 {{callout:warning|Citability = figures + dates + sources}}
 For an AI to cite you, it must **trust** your content. The key signals: precise figures (not "lots of users" but "12% of users"), explicit dates (not "recently" but "in March 2026"), and links to the external sources you cite. Baudrier can suggest these enrichments page by page.
 {{/callout}}
+
+## Landing sites (site vitrine)
+
+`public/robots.txt` and `public/llms.txt` live at the same paths on a landing site (Astro) as on a Next.js app - the audit and the fixes work identically, just without the Next `app/` conventions to check.

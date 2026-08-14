@@ -53,3 +53,7 @@ Le fichier `llms.txt` n'est pas (encore) un standard officiel, mais il est **ado
 {{callout:warning|Citabilité = chiffres + dates + sources}}
 Pour qu'une IA vous cite, elle doit **avoir confiance** dans votre contenu. Les signaux clés : chiffres précis (pas "beaucoup d'utilisateurs" mais "12 % des utilisateurs"), dates explicites (pas "récemment" mais "en mars 2026"), et liens vers les sources externes que vous citez. Baudrier peut suggérer ces enrichissements page par page.
 {{/callout}}
+
+## Sites vitrines
+
+`public/robots.txt` et `public/llms.txt` vivent aux mêmes emplacements sur un site vitrine (Astro) que sur une application Next.js - l’audit et les corrections fonctionnent à l’identique, simplement sans les conventions `app/` de Next à vérifier.

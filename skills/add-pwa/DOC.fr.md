@@ -41,3 +41,7 @@ Transforme votre site en app installable (PWA) sur téléphone et ordinateur, sa
 
 - Le service worker est **désactivé en développement** (pour ne pas polluer votre cache pendant que vous codez) : l'installation et le mode hors-ligne se testent **après déploiement**, sur le site en ligne.
 - La suite logique : `/add-push-notification` pour envoyer des notifications sur le téléphone de vos utilisateurs.
+
+## Sites vitrines
+
+Non disponible sur un site vitrine : cette commande est réservée aux applications complètes. Si votre projet est un site vitrine (Astro, sans base de données ni comptes utilisateurs), Baudrier refuse la commande et vous le dit - votre site reste tel quel, et vous pouvez toujours le déployer avec `/deploy`.

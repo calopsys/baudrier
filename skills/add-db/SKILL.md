@@ -25,6 +25,8 @@ The deterministic core (provisioning, dedicated IAM access, driver swap) is hand
 
 ## Step 0 - Preflight: DB already configured?
 
+**Garde vitrine** : invoke `_detect-project-root` first. If `PROJECT_TYPE=landing`, stop and tell the user, in their language (French shown): « Cette fonctionnalité n’est pas disponible pour un site vitrine : elle est réservée aux applications web. Votre site reste modifiable, et vous pouvez le déployer avec /deploy. »
+
 **First of all**, invoke `_check-deps db` to detect whether a real cloud DB is already wired up:
 
 ```bash

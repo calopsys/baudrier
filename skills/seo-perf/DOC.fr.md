@@ -38,3 +38,7 @@ Mesure la vitesse réelle de votre site avec PageSpeed Insights, l'outil officie
 
 - Sur un site neuf, les mesures viennent du "labo" de Google. Avec du trafic réel (quelques semaines), l'audit affiche en plus les **Core Web Vitals de terrain** : la vitesse vécue par vos vrais visiteurs. Relancer `/seo-perf` plus tard apporte donc des informations nouvelles.
 - Les Core Web Vitals sont un **facteur de classement Google confirmé** : améliorer ces chiffres aide votre référencement.
+
+## Sites vitrines
+
+Sur un site vitrine (Astro), Baudrier choisit les pages représentatives dans le dossier `src/pages` plutôt que dans le routeur `app/` de Next.js - généralement l’ensemble du petit jeu de pages, un site vitrine en comptant rarement plus qu’une poignée. La mesure elle-même (PageSpeed Insights, la vérification du site restreint) fonctionne à l’identique sur les deux stacks.

@@ -68,3 +68,7 @@ There's no separate "storage product" to enable and no credit card gate to get t
 {{callout:warning|User data security}}
 In private mode, access control is crucial: your code must verify that the user requesting a file is actually entitled to it before generating the signed URL. If Baudrier builds the UI for you, these checks are included (ownership verification, session verification). If you write your own code, do not remove these checks.
 {{/callout}}
+
+## Landing sites (site vitrine)
+
+Not available on a landing site: this command is reserved for full applications. If your project is a landing site (built with Astro, no database, no user accounts), Baudrier refuses the command and tells you so - your site stays exactly as it is, and remains deployable with `/deploy`.

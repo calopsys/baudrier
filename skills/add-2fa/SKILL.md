@@ -21,6 +21,8 @@ Adds **two-factor authentication** (TOTP code from an authenticator app) to the 
 
 ## Step 0 - Detect the project
 
+**Garde vitrine** : invoke `_detect-project-root` first. If `PROJECT_TYPE=landing`, stop and tell the user, in their language (French shown): « Cette fonctionnalité n’est pas disponible pour un site vitrine : elle est réservée aux applications web. Votre site reste modifiable, et vous pouvez le déployer avec /deploy. »
+
 Invoke `_detect-project-root` → `PROJECT_NAME`, `WEB_DIR`, `IS_NEXTJS`. Abort if `IS_NEXTJS=no`.
 
 ---

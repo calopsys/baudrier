@@ -50,3 +50,7 @@ Sur les secrets les plus critiques (`DATABASE_URL`, `AUTH_SECRET`, `STORAGE_ACCE
 {{callout:warning|Conteneurs vs. Jobs - pourquoi « renouvelé » ne veut pas toujours dire « redéployé »}}
 Si votre projet a un agent autonome (`/add-agent`), renouveler ses clés (`SCW_GENERATIVE_API_KEY`, `TEM_API_SECRET_KEY`) ne déclenche **pas** de redéploiement du conteneur pour cette partie - l'agent tourne comme un Serverless Job, qui lit le Secret Manager nativement et utilise simplement la nouvelle valeur à sa prochaine exécution planifiée. Baudrier vous indique lequel des deux s'est produit pour que vous ne soyez jamais dans le doute sur ce qui est réellement actif.
 {{/callout}}
+
+## Sites vitrines
+
+`/rotate-secret` fonctionne à l’identique sur un site vitrine. Sa seule différence selon la stack : les catégories base de données et authentification n’apparaissent tout simplement jamais dans le menu, un site vitrine ne les ayant jamais eues au départ.

@@ -48,16 +48,17 @@ At startup, display a natural-language checklist. During execution, announce wit
 
 ## Step 0 - Preflight: is the basic SEO in place?
 
+Invoke `_detect-project-root` to get `WEB_DIR` and `PROJECT_TYPE` - it only changes which paths this preflight and Step 3a look at (`public/robots.txt` and `public/llms.txt` are the same static-site paths on both stacks; only the Next `app/` conventions below have a landing equivalent).
+
 GEO does not replace SEO. The SEO foundations (metadata, sitemap, robots.txt, JSON-LD WebSite, semantic HTML structure) are **prerequisites** to benefit from GEO - a page that Google cannot index properly will not be viewed favorably by the AIs either.
 
 Quickly detect:
 
-- Does `public/robots.txt` exist?
-- Does `src/app/sitemap.ts` (or `apps/web/src/app/sitemap.ts`) exist?
-- Does `src/app/layout.tsx` export a complete `metadata` (at least `title`, `description`, `metadataBase`, `openGraph`)?
-- Is a JSON-LD WebSite schema present in the layout?
+- Does `<WEB_DIR>/public/robots.txt` exist?
+- **If `PROJECT_TYPE=application`**: does `<WEB_DIR>/src/app/sitemap.ts` exist? Does `<WEB_DIR>/src/app/layout.tsx` export a complete `metadata` (at least `title`, `description`, `metadataBase`, `openGraph`)? Is a JSON-LD WebSite schema present in the layout?
+- **If `PROJECT_TYPE=landing`**: is `@astrojs/sitemap` installed and configured in `<WEB_DIR>/astro.config.mjs` (this skill's static-site simplification - a landing has no per-route `metadata`/JSON-LD layer to check the same way, `/seo`'s landing branch covers `<head>`/canonical in depth)? Is `site:` set in `astro.config.mjs`?
 
-**If at least 2 of the 4 points are missing** → propose to the user:
+**If at least 2 of the 4 points are missing** (2 of the 3 for `PROJECT_TYPE=landing`, which has one fewer check) → propose to the user:
 
 > ## 🔧 Before diving into GEO: shall we do the classic SEO first?
 >

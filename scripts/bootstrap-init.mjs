@@ -84,11 +84,20 @@
 //
 // Usage (run from the repo root - the checkout the app already lives in):
 //   node bootstrap-init.mjs --description "Short SEO description, ~150 chars" \
-//     [--name deploy-name-override] [--locale fr_FR] [--skip-deploy]
+//     [--name deploy-name-override] [--locale fr_FR] [--skip-deploy] \
+//     [--stack application|landing] [--preset epure|chaleureux|audacieux]
 //
 // --name overrides only the Scaleway resource name (Project/registry
 // namespace/container namespace/container); by default that name is the repo
 // name itself (deriveAppName()). Use it when the repo name is not kebab-case.
+//
+// --stack picks CONTRACT.md's two stacks. Default "application" runs the T3
+// pipeline documented below, unchanged. "landing" runs a shorter pipeline
+// (LANDING_STEPS) for a static Astro 5 + Caddy site (vitrine): no database,
+// always-on (min_scale 1), see scaffoldLanding()/landingDeployArtifacts()/
+// landingClaudeMd()/scwContainer() below. --preset is required with
+// --stack landing (epure|chaleureux|audacieux, one Tailwind v4 token file
+// each) and rejected otherwise.
 //
 // Idempotency: NOT idempotent. It's a one-shot from an empty checkout to
 // deployed. If any step fails, the partial state is left on disk (and
@@ -106,7 +115,7 @@ import { ensureDocker } from "./ensure-dockerd.mjs";
 import { buildAndPushImage } from "./_docker-build.mjs";
 import { requireCredentials, projectIdFromEnv, deriveAppName, cacheProjectId, api, sdkCall, slugify, ScwError } from "./scaleway/_scw-auth.mjs";
 import { ensureRegistryNamespace } from "./scaleway/registry.mjs";
-import { SCALE_PRESETS, ensureNamespace, findContainerByName, createContainer, updateContainer, syncContainerSecrets, waitForContainerReady } from "./scaleway/container.mjs";
+import { SCALE_PRESETS, LANDING_CONTAINER, ensureNamespace, findContainerByName, createContainer, updateContainer, syncContainerSecrets, waitForContainerReady } from "./scaleway/container.mjs";
 import { getSecret, putSecret, listSecrets } from "./scaleway/secrets.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -140,6 +149,10 @@ let locale = "fr_FR";
 let skipDeploy = false;
 let scwProjectIdArg = null;
 let registryNamespaceOverride = "";
+// CONTRACT.md's second stack (Astro 5 static + Caddy, "sites vitrines").
+// "application" keeps the pre-existing T3 pipeline byte-identical.
+let stack = "application";
+let preset = null;
 
 for (let i = 0; i < args.length; i++) {
   const a = args[i];
@@ -150,6 +163,8 @@ for (let i = 0; i < args.length; i++) {
   else if (a === "--skip-deploy") skipDeploy = true;
   else if (a === "--scw-project-id" && args[i + 1]) scwProjectIdArg = args[++i];
   else if (a === "--registry-namespace" && args[i + 1]) registryNamespaceOverride = args[++i];
+  else if (a === "--stack" && args[i + 1]) stack = args[++i];
+  else if (a === "--preset" && args[i + 1]) preset = args[++i];
   else usageError(`Unknown arg: ${a}`);
 }
 
@@ -157,7 +172,7 @@ if (!description) {
   usageError(
     'Usage: node bootstrap-init.mjs --description "DESC" ' +
       "[--name deploy-name-override] [--locale fr_FR] [--skip-deploy] [--scw-project-id <uuid>] " +
-      "[--registry-namespace <name>]",
+      "[--registry-namespace <name>] [--stack application|landing] [--preset epure|chaleureux|audacieux]",
   );
 }
 
@@ -167,6 +182,22 @@ if (nameOverride && !KEBAB_RE.test(nameOverride)) {
 }
 if (scwProjectIdArg && !isUuid(scwProjectIdArg)) {
   usageError(`--scw-project-id must be a UUID. Got: ${scwProjectIdArg}`);
+}
+
+const STACKS = ["application", "landing"];
+if (!STACKS.includes(stack)) {
+  usageError(`--stack must be one of ${STACKS.join(", ")}. Got: ${stack}`);
+}
+const PRESETS = ["epure", "chaleureux", "audacieux"];
+if (stack === "landing") {
+  if (!preset) {
+    usageError(`--preset is required with --stack landing. Choices: ${PRESETS.join(", ")}.`);
+  }
+  if (!PRESETS.includes(preset)) {
+    usageError(`--preset must be one of ${PRESETS.join(", ")}. Got: ${preset}`);
+  }
+} else if (preset) {
+  usageError("--preset is only valid with --stack landing.");
 }
 // --registry-namespace picks the EXACT namespace name (ensureRegistryNamespace's
 // exact:true mode) - no random suffix - so an operator recovering from a
@@ -201,7 +232,7 @@ const PROJECT_DIR = CWD;
 // Step tracking - used to print a structured handoff if/when we fail, so a
 // downstream agent (Claude Code) can pick up cleanly without re-reading the
 // whole log. `STEPS` is the full ordered pipeline; `current` is what's running.
-const STEPS = [
+const APPLICATION_STEPS = [
   "preflight",
   "scwProject",
   "scaffoldT3",
@@ -230,6 +261,28 @@ const STEPS = [
   "scwContainer",
   "smokeTest",
 ];
+// CONTRACT.md's second stack: Astro 5 static + Caddy, no database, no
+// GitHub-Actions-free build pipeline changes needed (the same direct
+// docker build/push + SDK container create is reused verbatim below).
+// dockerBuildPush stays before scwContainer - Scaleway validates the
+// registry image at container-creation time (see scwContainer()'s comment).
+const LANDING_STEPS = [
+  "preflight",
+  "scwProject",
+  "scaffoldLanding",
+  "gitattributes",
+  "landingDeployArtifacts",
+  "landingClaudeMd",
+  "cleanupWorkflow",
+  "commit",
+  "pushToOrigin",
+  "scwRegistryNamespace",
+  "scwContainerNamespace",
+  "dockerBuildPush",
+  "scwContainer",
+  "smokeTest",
+];
+const STEPS = stack === "landing" ? LANDING_STEPS : APPLICATION_STEPS;
 const completed = [];
 const warnings = [];
 let current = null;
@@ -689,29 +742,41 @@ function applyNext16VersionOverrides(pkg) {
 // npx has no such constraint. After scaffold, we wipe the npm-generated
 // lockfile + node_modules and re-install with pnpm so the rest of the
 // pipeline (shadcn, drizzle, etc.) runs on a clean pnpm install.
+// Appends whatever line `incomingContent` adds that `destPath` doesn't
+// already have - shared by moveScaffoldIntoPlace()'s T3 path and
+// scaffoldLanding(), so both scaffolds coexist with a repo's own .gitignore
+// (e.g. from the GitHub template) instead of overwriting it.
+function mergeGitignoreLines(destPath, incomingContent) {
+  const existingLines = new Set(
+    readFileSync(destPath, "utf8").split(/\r?\n/).map((l) => l.trim()).filter(Boolean),
+  );
+  const incoming = incomingContent.split(/\r?\n/);
+  const toAppend = incoming.filter((l) => l.trim() && !existingLines.has(l.trim()));
+  if (toAppend.length) {
+    const existing = readFileSync(destPath, "utf8");
+    const sep = existing.length === 0 || existing.endsWith("\n") ? "" : "\n";
+    writeFileSync(destPath, existing + sep + toAppend.join("\n") + "\n");
+  }
+}
+
 // Moves every entry (including dotfiles) from `scratchDir` up into
-// `targetDir`. `.gitignore` is MERGED (append whatever line the scaffold adds
-// that the repo doesn't already have) rather than overwritten - the repo may
-// already carry its own (from the GitHub template). The repo's own
-// `README.md` is KEPT and the scaffold's is dropped, for the same reason.
-// Any other name collision is a fail(): silently overwriting a file the repo
-// already had would be worse than stopping to ask.
+// `targetDir`. `.gitignore` is MERGED (mergeGitignoreLines() above) rather
+// than overwritten - the repo may already carry its own (from the GitHub
+// template). The repo's own `README.md` is KEPT and the scaffold's is
+// dropped, for the same reason. Any other name collision is a fail():
+// silently overwriting a file the repo already had would be worse than
+// stopping to ask.
 function moveScaffoldIntoPlace(scratchDir, targetDir) {
   for (const entry of readdirSync(scratchDir, { withFileTypes: true })) {
     const src = join(scratchDir, entry.name);
     const dest = join(targetDir, entry.name);
 
-    if (entry.name === ".gitignore" && existsSync(dest)) {
-      const existingLines = new Set(
-        readFileSync(dest, "utf8").split(/\r?\n/).map((l) => l.trim()).filter(Boolean),
-      );
-      const incoming = readFileSync(src, "utf8").split(/\r?\n/);
-      const toAppend = incoming.filter((l) => l.trim() && !existingLines.has(l.trim()));
-      if (toAppend.length) {
-        const existing = readFileSync(dest, "utf8");
-        const sep = existing.length === 0 || existing.endsWith("\n") ? "" : "\n";
-        writeFileSync(dest, existing + sep + toAppend.join("\n") + "\n");
+    if (entry.name === ".gitignore") {
+      if (existsSync(dest)) {
+        mergeGitignoreLines(dest, readFileSync(src, "utf8"));
+        continue;
       }
+      renameSync(src, dest);
       continue;
     }
     if (entry.name === "README.md" && existsSync(dest)) {
@@ -917,6 +982,117 @@ function scaffoldT3() {
   }
 
   ok(`T3 scaffold written to ${PROJECT_DIR} (pnpm-managed, native builds approved)`);
+}
+
+// ─── Step (landing): scaffold the Astro app ────────────────────────────
+// Landing counterpart of scaffoldT3(). Every file under templates/landing/
+// is hand-rolled (no create-astro scaffolder to wrangle), so this writes
+// each app file directly at its final relative path via render() - no
+// scratch directory, no move step. package.json's {{PROJECT_NAME}} is
+// slugify(name), matching how scaffoldT3() names the T3 package.json.
+const LANDING_APP_FILES = [
+  "package.json",
+  "astro.config.mjs",
+  "tsconfig.json",
+  "src/env.d.ts",
+  "src/styles/global.css",
+  "src/layouts/BaseLayout.astro",
+  "src/components/Header.astro",
+  "src/components/Hero.astro",
+  "src/components/Services.astro",
+  "src/components/About.astro",
+  "src/components/Testimonials.astro",
+  "src/components/Contact.astro",
+  "src/components/Footer.astro",
+  "src/pages/index.astro",
+  "src/pages/mentions-legales.astro",
+  "src/pages/politique-de-confidentialite.astro",
+  "src/pages/404.astro",
+  "public/robots.txt",
+  "public/favicon.svg",
+];
+
+function writeLandingFile(relPath, vars = {}) {
+  const dest = join(PROJECT_DIR, relPath);
+  mkdirSync(dirname(dest), { recursive: true });
+  writeFileSync(dest, render(`landing/${relPath}`, vars));
+}
+
+// Written BEFORE the first pnpm install (B1): pnpm install populates
+// node_modules/, and gitattributes()'s `git add -A` runs right after this
+// step in LANDING_STEPS - without a .gitignore in place first, that commits
+// node_modules/ wholesale. Same merge rule as moveScaffoldIntoPlace()'s T3
+// .gitignore handling: a pre-existing .gitignore (e.g. from the GitHub
+// template) is merged, never overwritten.
+function writeLandingGitignore() {
+  const dest = join(PROJECT_DIR, ".gitignore");
+  const content = render("landing/.gitignore", {});
+  if (existsSync(dest)) {
+    mergeGitignoreLines(dest, content);
+  } else {
+    writeFileSync(dest, content);
+  }
+}
+
+function scaffoldLanding() {
+  log("Scaffolding the Astro landing app from templates/landing/");
+
+  // Same rule as scaffoldT3() (check 52): the supply-chain age floor must
+  // govern the FIRST pnpm install, not only a later one.
+  writeSupplyChainWorkspaceYaml();
+
+  for (const relPath of LANDING_APP_FILES) {
+    writeLandingFile(relPath, relPath === "package.json" ? { PROJECT_NAME: slugify(name) } : {});
+  }
+
+  log(`Applying the "${preset}" token preset`);
+  writeFileSync(join(PROJECT_DIR, "src/styles/theme.css"), render(`landing/src/styles/presets/${preset}.css`, {}));
+
+  writeLandingGitignore();
+
+  const installLabel = PNPM_BUILD_FLAGS ? `with flags: ${PNPM_BUILD_FLAGS}` : "no extra flags (pnpm ≤10, onlyBuiltDependencies in package.json)";
+  log(`Installing with pnpm (${installLabel})`);
+  runPnpm(
+    `pnpm install${PNPM_BUILD_FLAGS ? ` ${PNPM_BUILD_FLAGS}` : ""}`,
+    "If the error above is ERR_PNPM_NO_MATURE_MATCHING_VERSION on a fresh resolve, a required " +
+      "package has no version older than 3 days (minimumReleaseAge in pnpm-workspace.yaml) - " +
+      "wait, or consciously lower the floor.",
+  );
+
+  ok(`Astro landing app scaffolded (preset: ${preset}), dependencies installed`);
+}
+
+// ─── Step (landing): deploy artifacts (Dockerfile, Caddy gate) ─────────
+// Landing counterpart of dockerfile()/copyAssets()/accessProxy(): a
+// three-stage Dockerfile (node:24-alpine builder, caddy:2-alpine runner)
+// and a Caddyfile gate replace the Next.js proxy.ts entirely - the Caddy
+// gate keeps the same invariants (CONTRACT.md's second-stack decision,
+// verify check 81 pins parity). No local astro build here: dockerBuildPush
+// is the real gate, same as scaffoldLanding() runs no local build either.
+function landingDeployArtifacts() {
+  log("Writing landing deploy artifacts (Dockerfile, Caddyfile, entrypoint)");
+  writeFileSync(join(PROJECT_DIR, "Dockerfile"), render("landing/Dockerfile", {}));
+  writeFileSync(join(PROJECT_DIR, ".dockerignore"), render("landing/.dockerignore", {}));
+  writeFileSync(join(PROJECT_DIR, "Caddyfile"), render("landing/Caddyfile", {}));
+  // The Dockerfile sets the executable bit with COPY --chmod=755 (CONTRACT.md
+  // §7 code hygiene) - no chmod needed on the file written to disk here.
+  writeFileSync(join(PROJECT_DIR, "docker-entrypoint.sh"), render("landing/docker-entrypoint.sh", {}));
+  ok("Dockerfile + .dockerignore + Caddyfile + docker-entrypoint.sh written");
+}
+
+// ─── Step (landing): CLAUDE.md core ─────────────────────────────────────
+// Landing counterpart of claudeMdCore(): same render() mechanism, the
+// Astro/Caddy-specific variant of the generated project CLAUDE.md.
+function landingClaudeMd() {
+  log("Writing CLAUDE.md (landing project core)");
+  writeFileSync(
+    join(PROJECT_DIR, "CLAUDE.md"),
+    render("landing/claude-md-core.md", {
+      PROJECT_NAME: name,
+      DESCRIPTION: description,
+    }),
+  );
+  ok("CLAUDE.md core written (landing)");
 }
 
 // ─── Step 4: .gitattributes + stage ─────────────────────────────────
@@ -1966,10 +2142,20 @@ async function scwContainer() {
     log("--skip-deploy was passed; skipping scwContainer.");
     return;
   }
-  const preset = SCALE_PRESETS.S;
+  const isLanding = stack === "landing";
+  // Named scalePreset, not preset: the module-scope `preset` already names
+  // the CLI --preset token-preset flag (epure|chaleureux|audacieux).
+  const scalePreset = SCALE_PRESETS.S;
+  // Landing keeps preset S's CPU/memory but overrides maxConcurrency and
+  // min_scale to CONTRACT.md's second-stack decision (LANDING_CONTAINER,
+  // scripts/scaleway/container.mjs): always-on (min_scale 1), higher
+  // concurrency (80) - a static Astro/Caddy response is far cheaper per
+  // request than a Next.js one, so one always-on instance can take more load.
+  const maxConcurrency = isLanding ? LANDING_CONTAINER.maxConcurrency : scalePreset.maxConcurrency;
+  const minScale = isLanding ? LANDING_CONTAINER.minScaleProduction : 0;
   log(
-    `Creating Scaleway Serverless Container (scale S: ${preset.cpuLimit}mvCPU / ${preset.memoryLimit}MB / ` +
-      `maxConcurrency ${preset.maxConcurrency}, min_scale 0, max_scale 5, port 8080)`,
+    `Creating Scaleway Serverless Container (scale S: ${scalePreset.cpuLimit}mvCPU / ${scalePreset.memoryLimit}MB / ` +
+      `maxConcurrency ${maxConcurrency}, min_scale ${minScale}, max_scale 5, port 8080)`,
   );
 
   const slug = slugify(name);
@@ -1978,7 +2164,8 @@ async function scwContainer() {
   // (z.string().url()) passes at container startup without ever opening a
   // real connection. /add-db replaces it with the real Serverless SQL
   // connection string (CONTRACT.md §4) and additionally registers it in
-  // Secret Manager per the rotation model in CONTRACT.md §1.
+  // Secret Manager per the rotation model in CONTRACT.md §1. A landing
+  // (vitrine) container never gets this: it has no database at all.
   const dbPlaceholder = "postgresql://placeholder:placeholder@localhost:5432/placeholder";
 
   let created = await findContainerByName(containerNamespaceId, name);
@@ -1991,6 +2178,7 @@ async function scwContainer() {
       name,
       registryImage: image,
       scale: "S",
+      ...(isLanding ? { maxConcurrency, minScale } : {}),
     });
     // Only on first creation: DATABASE_URL does not exist in Secret Manager
     // yet. A reused container implies an earlier run got this far, and a
@@ -1998,7 +2186,9 @@ async function scwContainer() {
     // it with the placeholder again. putSecret() is create-or-new-version,
     // so /add-db's later putSecret("DATABASE_URL", ...) still overwrites
     // this placeholder cleanly regardless.
-    await putSecret("DATABASE_URL", dbPlaceholder, { projectId: scwProjectId });
+    if (!isLanding) {
+      await putSecret("DATABASE_URL", dbPlaceholder, { projectId: scwProjectId });
+    }
   }
   containerId = created.id;
   containerDomain = created.domain_name;
@@ -2074,7 +2264,7 @@ async function scwContainer() {
   // syncContainerSecrets() does its own wait-write-wait around the secrets
   // write (CONTRACT.md §1) and returns the container once ready again.
   log("Syncing container secrets from Secret Manager...");
-  created = await syncContainerSecrets(containerId, { projectId: scwProjectId });
+  created = await syncContainerSecrets(containerId, { projectId: scwProjectId, allowMissingDatabaseUrl: isLanding });
   containerDomain = created.domain_name || containerDomain;
 
   // No linkage file is written (CONTRACT.md §2, §7: app repos carry no
@@ -2204,33 +2394,50 @@ async function smokeTest() {
 }
 
 // ─── MAIN ─────────────────────────────────────────────────────────────
-await step("preflight", preflight);
-await step("scwProject", scwProject);
-await step("scaffoldT3", scaffoldT3);
-await step("gitattributes", gitattributes);
-await step("bumpDrizzle", bumpDrizzle);
-await step("cleanupDemo", cleanupDemo);
-await step("eslintCli", eslintCli);
-await step("healthcheck", healthcheck);
-await step("shadcn", shadcn);
-await step("security", security);
-await step("seo", seo);
-await step("imagePlaceholders", imagePlaceholders);
-await step("notFoundPage", notFoundPage);
-await step("dockerfile", dockerfile);
-await step("nextConfigStandalone", nextConfigStandalone);
-await step("copyAssets", copyAssets);
-await step("accessProxy", accessProxy);
-await step("claudeMdCore", claudeMdCore);
-await step("privacyPolicy", privacyPolicy);
-await step("cleanupWorkflow", cleanupWorkflow);
-await step("commit", commit);
-await step("pushToOrigin", pushToOrigin);
-await step("scwRegistryNamespace", scwRegistryNamespace);
-await step("scwContainerNamespace", scwContainerNamespace);
-await step("dockerBuildPush", dockerBuildPush);
-await step("scwContainer", scwContainer);
-await step("smokeTest", smokeTest);
+if (stack === "landing") {
+  await step("preflight", preflight);
+  await step("scwProject", scwProject);
+  await step("scaffoldLanding", scaffoldLanding);
+  await step("gitattributes", gitattributes);
+  await step("landingDeployArtifacts", landingDeployArtifacts);
+  await step("landingClaudeMd", landingClaudeMd);
+  await step("cleanupWorkflow", cleanupWorkflow);
+  await step("commit", commit);
+  await step("pushToOrigin", pushToOrigin);
+  await step("scwRegistryNamespace", scwRegistryNamespace);
+  await step("scwContainerNamespace", scwContainerNamespace);
+  await step("dockerBuildPush", dockerBuildPush);
+  await step("scwContainer", scwContainer);
+  await step("smokeTest", smokeTest);
+} else {
+  await step("preflight", preflight);
+  await step("scwProject", scwProject);
+  await step("scaffoldT3", scaffoldT3);
+  await step("gitattributes", gitattributes);
+  await step("bumpDrizzle", bumpDrizzle);
+  await step("cleanupDemo", cleanupDemo);
+  await step("eslintCli", eslintCli);
+  await step("healthcheck", healthcheck);
+  await step("shadcn", shadcn);
+  await step("security", security);
+  await step("seo", seo);
+  await step("imagePlaceholders", imagePlaceholders);
+  await step("notFoundPage", notFoundPage);
+  await step("dockerfile", dockerfile);
+  await step("nextConfigStandalone", nextConfigStandalone);
+  await step("copyAssets", copyAssets);
+  await step("accessProxy", accessProxy);
+  await step("claudeMdCore", claudeMdCore);
+  await step("privacyPolicy", privacyPolicy);
+  await step("cleanupWorkflow", cleanupWorkflow);
+  await step("commit", commit);
+  await step("pushToOrigin", pushToOrigin);
+  await step("scwRegistryNamespace", scwRegistryNamespace);
+  await step("scwContainerNamespace", scwContainerNamespace);
+  await step("dockerBuildPush", dockerBuildPush);
+  await step("scwContainer", scwContainer);
+  await step("smokeTest", smokeTest);
+}
 
 // Built from the origin remote, never an API call - gh is no longer part of
 // the toolchain (CONTRACT.md §7).

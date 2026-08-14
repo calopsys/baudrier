@@ -29,6 +29,10 @@ Indépendamment de la taille, vous choisissez :
 
 Avant de changer quoi que ce soit, l'assistant affiche votre taille actuelle et une estimation de coût en langage simple pour chaque option, calculée à partir des tarifs publiés par Scaleway - pour que vous fassiez un choix informé, pas au hasard.
 
+## Sites vitrines (Astro)
+
+Un site vitrine n’a pas de base de données : la section base de données de cette commande ne s’applique pas à lui. Sa concurrence reste aussi fixée à 80 requêtes par instance quelle que soit la taille - un site statique n’a pas de traitement lourd susceptible de saturer une instance - donc seul le choix CPU/mémoire compte. Son environnement de production démarre aussi toujours allumé (pas de démarrage à froid sur un site public sans back-end) ; l’assistant vous avertit avant de désactiver ça.
+
 ## Astuces
 
 {{callout:warning|Les health checks ne réveillent pas une application en veille}}

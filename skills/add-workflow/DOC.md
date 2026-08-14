@@ -51,3 +51,7 @@ External services sometimes deliver the same event twice (that is normal on thei
 {{callout:warning|Bad candidates}}
 A **continuous** process (watching a mailbox 24/7), **state to keep in memory** between runs, or **minutes of heavy compute**: that is `/add-automation` territory (dedicated worker). AI **serving your users directly** in an autonomous loop: `/add-agent`. A recurring mission **for yourself**: `/add-routine`.
 {{/callout}}
+
+## Landing sites (site vitrine)
+
+Not available on a landing site: this command is reserved for full applications. If your project is a landing site (built with Astro, no database, no user accounts), Baudrier refuses the command and tells you so - your site stays exactly as it is, and remains deployable with `/deploy`.

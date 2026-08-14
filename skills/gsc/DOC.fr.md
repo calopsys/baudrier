@@ -63,3 +63,7 @@ GSC a besoin de **temps** pour accumuler des données. Une nouvelle propriété 
 {{callout:warning|Les "opportunités faciles" valent leur pesant d'or}}
 La métrique la plus actionnable : les requêtes où vous êtes en **position 11 à 20**. Vous êtes proche du top 10 (la première page), un petit effort de contenu / meta peut vous y faire passer, et le trafic grimpe fortement une fois que vous entrez dans le top 10. Baudrier les met en avant dans son rapport.
 {{/callout}}
+
+## Sites vitrines
+
+Entièrement disponible sur un site vitrine. Le déroulé est identique ; seuls deux détails changent en coulisses : le sitemap soumis est `sitemap-index.xml` (généré par Astro) au lieu de `sitemap.xml`, et une éventuelle redirection 301 pour une page renommée passe par la configuration Caddy du site au lieu de la configuration Next.js.

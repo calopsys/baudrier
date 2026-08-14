@@ -24,6 +24,8 @@ Can be called by `/bootstrap` or standalone. The deterministic scaffolding is de
 
 ## Step 0 - Preflight: is the map already installed?
 
+**Garde vitrine** : invoke `_detect-project-root` first. If `PROJECT_TYPE=landing`, stop and tell the user, in their language (French shown): « Cette fonctionnalité n’est pas disponible pour un site vitrine : elle est réservée aux applications web. Votre site reste modifiable, et vous pouvez le déployer avec /deploy. »
+
 Check whether `src/components/site/map.tsx` already exists. If it does: you do NOT need to re-scaffold. Ask the user what they want to do:
 
 > You already have a map installed (`src/components/site/map.tsx`). What do you want to do?

@@ -48,3 +48,7 @@ The two complement each other and can be installed **in any order**: as soon as 
 
 - To create a notification from your server code: `await notifyUser(db, userId, { title: "Order shipped", body: "Your parcel arrives Thursday.", url: "/orders" })`.
 - If you add `/add-push-notification` later, the wiring happens automatically: `notifyUser` will start sending the system notification too, without changing anything in your code.
+
+## Landing sites (site vitrine)
+
+Not available on a landing site: this command is reserved for full applications. If your project is a landing site (built with Astro, no database, no user accounts), Baudrier refuses the command and tells you so - your site stays exactly as it is, and remains deployable with `/deploy`.

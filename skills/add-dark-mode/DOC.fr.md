@@ -56,3 +56,7 @@ Baudrier peut le faire pour vous : *"adapte mon site au mode sombre"*. Elle reli
 {{callout:tip|Pas de flash blanc au premier chargement}}
 Le mode sombre est appliqué dès le tout premier rendu de la page, sans flash blanc transitoire. Tout le câblage technique pour ça est posé par Baudrier, vous n'avez rien à configurer.
 {{/callout}}
+
+## Sites vitrines
+
+Sur un site vitrine (Astro), pas de `next-themes` ni de React : le mode sombre est fait de quelques lignes de JavaScript classique - un script exécuté avant l’hydratation qui lit la préférence enregistrée du visiteur (ou celle de son système) et bascule une classe `dark` sur `<html>`, plus un bouton `ThemeToggle.astro` simple. Le résultat se comporte et s’affiche de la même façon (clair/sombre, sans flash au chargement).

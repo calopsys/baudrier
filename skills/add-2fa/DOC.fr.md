@@ -21,3 +21,7 @@ Ajoute la **double authentification** au login de votre app : un code à 6 chiff
 4. **Codes de secours** : un jeu de codes de secours à usage unique est généré au cas où vous perdriez votre téléphone. Ils sont rangés en sécurité (Secret Manager ou compte), jamais affichés en clair dans le chat.
 
 > **Prérequis** : votre projet doit déjà avoir un login. S'il n'en a pas, Baudrier propose d'en installer un d'abord, puis ajoute la 2FA juste après.
+
+## Sites vitrines
+
+Non disponible sur un site vitrine : cette commande est réservée aux applications complètes. Si votre projet est un site vitrine (Astro, sans base de données ni comptes utilisateurs), Baudrier refuse la commande et vous le dit - votre site reste tel quel, et vous pouvez toujours le déployer avec `/deploy`.

@@ -94,3 +94,5 @@ On success:
 > Le site n'est plus visible publiquement. Vous pouvez le republier à tout moment avec `/publish`.
 
 Remind the user that `seo-perf`, `eco-audit`, and `gsc` won't work correctly until the app is published again - they should expect those tools to report the restricted state rather than a spurious failure (per the app's own `proxy.ts`, which is IP-restriction aware).
+
+Note for Claude: this command works identically for a vitrine. The container restart triggered by the secret sync makes it re-read `ACCESS_RESTRICTED`, whether the gate is implemented in Next.js (`proxy.ts`) or in the vitrine's Caddyfile.

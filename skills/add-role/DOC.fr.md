@@ -60,3 +60,7 @@ Vous pouvez relancer `/add-role` à tout moment pour ajouter un nouveau rôle, e
 {{callout:info|Pour protéger une page ou une action par rôle}}
 Vous n'avez pas à manipuler les helpers vous-même. Dites simplement à Baudrier : *"protège la page X pour les modérateurs uniquement"*, ou *"seuls les utilisateurs `pro` peuvent appeler cette fonction"*. Le pattern à suivre est documenté dans le `CLAUDE.md` du projet, donc Claude l'applique tout seul à chaque nouvelle page que vous lui demandez.
 {{/callout}}
+
+## Sites vitrines
+
+Non disponible sur un site vitrine : cette commande est réservée aux applications complètes. Si votre projet est un site vitrine (Astro, sans base de données ni comptes utilisateurs), Baudrier refuse la commande et vous le dit - votre site reste tel quel, et vous pouvez toujours le déployer avec `/deploy`.

@@ -151,9 +151,13 @@ try {
 
 ## Step 1: Choose the representative pages
 
-**Golden rule: do NOT audit every page.** On a Next.js site, the pages of the same "type" (template) share the same shell and the same bundle, so their performance is nearly identical. Auditing 30 pages means getting the same result 30 times, and 10 minutes of tunnel for nothing. Moreover, the quota and patience have limits (each page takes 15 to 30 s).
+**Golden rule: do NOT audit every page.** Pages of the same "type" (template) share the same shell and the same bundle, so their performance is nearly identical. Auditing 30 pages means getting the same result 30 times, and 10 minutes of tunnel for nothing. Moreover, the quota and patience have limits (each page takes 15 to 30 s).
 
-**Choose 3 to 5 URLs, one per distinct template.** Identify the page types by inspecting `src/app` (or `apps/web/src/app`):
+**Choose 3 to 5 URLs, one per distinct template.** Invoke `_detect-project-root` to get `WEB_DIR` and `PROJECT_TYPE` - it only changes where the page inventory comes from; the rest of this skill (the restricted-state stop in Step 0b, the PSI engine in Step 3) is identical for both stacks.
+
+**If `PROJECT_TYPE=landing`**: enumerate `<WEB_DIR>/src/pages/**/*.astro` (a site vitrine is a small, fixed set of static pages - typically home, the section pages, and the two legal pages). Since there is no dynamic `[slug]` route to worry about, usually just audit **every page** if there are 5 or fewer; otherwise pick the home plus the 2-4 heaviest (most images/sections).
+
+**If `PROJECT_TYPE=application`**, identify the page types by inspecting `<WEB_DIR>/src/app` (or `apps/web/src/app`):
 
 | Page type | How to spot it | Why audit it |
 |---|---|---|

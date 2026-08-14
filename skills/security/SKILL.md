@@ -43,12 +43,17 @@ This rule applies to the report (step 2) and to the fix proposals (step 3). In y
 
 ---
 
+## Step 0 - Garde vitrine
+
+**Garde vitrine** : invoke `_detect-project-root` first. If `PROJECT_TYPE=landing`, stop and tell the user, in their language (French shown): « Cette fonctionnalité n’est pas disponible pour un site vitrine : elle est réservée aux applications web. Votre site reste modifiable, et vous pouvez le déployer avec /deploy. »
+
+---
+
 ## Progress communication
 
 At startup, display a checklist in natural language. During execution, announce with `↳ …` then mark `✅`. **Never** "Step N" internally in your user-facing messages. **Never** the internal skill names prefixed with `_`, describe them in plain language.
 
 ---
-
 
 ## Step 1 - Audit
 

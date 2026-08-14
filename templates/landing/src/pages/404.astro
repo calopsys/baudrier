@@ -1,0 +1,16 @@
+---
+import BaseLayout from "../layouts/BaseLayout.astro";
+---
+
+<BaseLayout title="Page introuvable" description="Cette page n’existe pas.">
+  <main class="flex min-h-screen flex-col items-center justify-center bg-surface px-6 text-center">
+    <p class="font-display text-7xl font-bold text-ink">404</p>
+    <p class="mt-4 text-lg text-muted">Cette page n’existe pas.</p>
+    <a
+      href="/"
+      class="mt-8 inline-block rounded-lg bg-accent px-6 py-3 font-semibold text-surface transition-opacity hover:opacity-90"
+    >
+      Retour à l’accueil
+    </a>
+  </main>
+</BaseLayout>

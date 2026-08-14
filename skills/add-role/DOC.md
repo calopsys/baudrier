@@ -60,3 +60,7 @@ You can re-run `/add-role` at any time to add a new role, remove one, rename, or
 {{callout:info|To protect a page or an action by role}}
 You don't have to handle the helpers yourself. Just tell Baudrier : *"protect page X for moderators only"*, or *"only `pro` users can call this function"*. The pattern to follow is documented in the project's `CLAUDE.md`, so Claude applies it on its own for every new page you ask it for.
 {{/callout}}
+
+## Landing sites (site vitrine)
+
+Not available on a landing site: this command is reserved for full applications. If your project is a landing site (built with Astro, no database, no user accounts), Baudrier refuses the command and tells you so - your site stays exactly as it is, and remains deployable with `/deploy`.

@@ -15,6 +15,12 @@ compatibility: "Claude Code (CLI or desktop app). Cloud routines need Claude Cod
 
 A thin, user-invocable front for the routine engine (**`_create-routine`**), so that the four automation shapes each have a clean direct entry: `/add-cron` (scheduled app task), `/add-workflow` (event-triggered in-app pipeline), `/add-agent` (autonomous product agent), `/add-routine` (personal recurring AI mission). `/add-automation` remains the orchestrator that picks among them for you.
 
+## Step 0 - Garde vitrine
+
+**Garde vitrine** : invoke `_detect-project-root` first. If `PROJECT_TYPE=landing`, stop and tell the user, in their language (French shown): « Cette fonctionnalité n’est pas disponible pour un site vitrine : elle est réservée aux applications web. Votre site reste modifiable, et vous pouvez le déployer avec /deploy. »
+
+Note for Claude: routines are excluded from vitrines in this version. This is a scope decision, not a technical limitation - read the refusal wording above as policy.
+
 ## Step 1 - Gather the mission (light discovery)
 
 If the user's request already contains the mission and the cadence ("brief me on my competitors every morning at 8"), do NOT re-ask - go straight to Step 2.

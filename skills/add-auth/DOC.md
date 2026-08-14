@@ -50,3 +50,7 @@ If you have already chosen a mode and want to add the other one later, re-run `/
 {{callout:warning|The admin password is shown only once}}
 In admin mode, the plaintext password is shown to you **only once** at the end of the setup. Save it in your password manager immediately, it is not stored anywhere in plaintext on disk (only the hash exists).
 {{/callout}}
+
+## Landing sites (site vitrine)
+
+Not available on a landing site: this command is reserved for full applications. If your project is a landing site (built with Astro, no database, no user accounts), Baudrier refuses the command and tells you so - your site stays exactly as it is, and remains deployable with `/deploy`.

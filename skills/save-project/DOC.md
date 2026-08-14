@@ -68,3 +68,7 @@ The skill does not offer a `/restore-project`. This is intentional: restoring a 
 {{callout:tip|The safety net before /delete-project}}
 The reflex: before permanently deleting a project with `/delete-project`, run `/save-project` first (the skill offers to do this for you automatically at that point too).
 {{/callout}}
+
+## Landing sites (site vitrine)
+
+On a landing site, the summary says plainly: **code + secrets, no database or storage** - nothing is missing, a landing site simply doesn't have either.

@@ -1,0 +1,47 @@
+---
+export interface Testimonial {
+  quote: string;
+  author: string;
+  role?: string;
+}
+
+export interface Props {
+  heading?: string;
+  testimonials?: Testimonial[];
+}
+
+const {
+  heading = "Ils nous font confiance",
+  testimonials = [
+    {
+      quote: "Un accompagnement sérieux et des résultats concrets.",
+      author: "Prénom Nom",
+      role: "Cliente",
+    },
+    {
+      quote: "Une équipe réactive et à l’écoute de nos besoins.",
+      author: "Prénom Nom",
+      role: "Client",
+    },
+  ],
+} = Astro.props;
+---
+
+<section class="bg-surface px-6 py-20">
+  <div class="mx-auto max-w-5xl">
+    <h2 class="text-center font-display text-3xl font-bold text-ink">{heading}</h2>
+    <div class="mt-12 grid gap-8 sm:grid-cols-2">
+      {
+        testimonials.map((t) => (
+          <figure class="rounded-lg border border-muted/20 p-6">
+            <blockquote class="text-ink">« {t.quote} »</blockquote>
+            <figcaption class="mt-4 text-sm text-muted">
+              {t.author}
+              {t.role && <span>, {t.role}</span>}
+            </figcaption>
+          </figure>
+        ))
+      }
+    </div>
+  </div>
+</section>

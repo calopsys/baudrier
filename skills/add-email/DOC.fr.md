@@ -65,3 +65,7 @@ Chaque email doit avoir un sujet d'**au moins 10 caractères** et **3 destinatai
 {{callout:info|Pas de réception d'emails}}
 TEM ne fait qu'envoyer. Il n'existe rien d'équivalent à la réception d'emails sur `contact@monsite.fr` redirigée vers votre boîte - voir la documentation de `/add-domain` pour le détail de cette limite. `/add-email` ne configure que l'envoi **sortant**.
 {{/callout}}
+
+## Sites vitrines
+
+Non disponible sur un site vitrine : cette commande est réservée aux applications complètes. Si votre projet est un site vitrine (Astro, sans base de données ni comptes utilisateurs), Baudrier refuse la commande et vous le dit - votre site reste tel quel, et vous pouvez toujours le déployer avec `/deploy`.

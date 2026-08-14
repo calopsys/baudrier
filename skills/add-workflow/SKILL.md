@@ -30,6 +30,8 @@ If during discovery the need clearly falls in the right column, say so in one ho
 
 ## Step 0 - Preflight
 
+**Garde vitrine** : invoke `_detect-project-root` first. If `PROJECT_TYPE=landing`, stop and tell the user, in their language (French shown): « Cette fonctionnalité n’est pas disponible pour un site vitrine : elle est réservée aux applications web. Votre site reste modifiable, et vous pouvez le déployer avec /deploy. »
+
 1. Invoke **`_detect-project-root`** → `PROJECT_NAME`, `IS_MONOREPO`, `WEB_DIR`, `IS_NEXTJS`. If not a Next.js project, stop: workflows live inside the app.
 2. Invoke **`_check-deps`** for the database. A real DB (Scaleway Serverless SQL Database wired by `/add-db`) enables run logging in a table; without it the runner degrades to console logging (say so, and continue - do not force `/add-db`).
 3. **Scaleway Generative APIs key, ONLY if the pipeline will have intelligent steps** (checked again after discovery): check whether `SCW_GENERATIVE_API_KEY` already exists in Secret Manager (`node scripts/scaleway/secrets.mjs exists SCW_GENERATIVE_API_KEY`) - if `/add-agent` has already run in this project, it's already there and gets reused, nothing to do. Otherwise mint a narrowly-scoped one yourself the same way `setup-agent.mjs` does: `ensureApplication` + `ensurePolicy({ permissionSetNames: ["GenerativeApisModelAccess"] })` + `createApiKey` from `scripts/scaleway/iam.mjs`, then `putSecret("SCW_GENERATIVE_API_KEY", ...)`. No key to paste, nothing to ask the user for.

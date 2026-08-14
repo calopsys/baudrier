@@ -58,3 +58,7 @@ La machine de l'opérateur n'a pas d'accès direct à ta base de données (seule
 {{callout:warning|Supprimer une table DB n'est jamais automatique - même après validation de la trouvaille}}
 Pour toutes les autres catégories, valider une trouvaille suffit pour qu'elle soit retirée sur la branche de nettoyage. Les tables DB, c'est différent : reconnaître qu'une table semble inutilisée ne fait que la noter comme recommandation, à titre indicatif. Rien n'est généré ni exécuté contre une base de données - même une base de preview - tant que tu ne demandes pas explicitement, et séparément, que cette table précise soit préparée et testée. C'est seulement à ce moment-là que l'assistant crée une migration et l'applique sur une base de preview isolée pour que tu la vérifies ; la production n'est jamais touchée avant que tu l'aies testée là-bas et confirmé le merge toi-même.
 {{/callout}}
+
+## Sites vitrines
+
+Non disponible sur un site vitrine : cette commande est réservée aux applications complètes. Si votre projet est un site vitrine (Astro, sans base de données ni comptes utilisateurs), Baudrier refuse la commande et vous le dit - votre site reste tel quel, et vous pouvez toujours le déployer avec `/deploy`.

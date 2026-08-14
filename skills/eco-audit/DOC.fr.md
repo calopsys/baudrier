@@ -36,3 +36,7 @@ Mesure l'empreinte écologique de votre site et propose des corrections concrèt
 
 - Les chiffres CO2e/eau sont des **estimations méthodologiques** (formules EcoIndex) : parfaites pour comparer avant/après et situer votre site, pas pour un bilan carbone officiel.
 - Le poste n°1 est presque toujours **les images** : c'est aussi le plus facile à corriger, et ça accélère le site au passage. Écologie et performance vont dans le même sens.
+
+## Sites vitrines
+
+Non disponible sur un site vitrine : cette commande est réservée aux applications complètes. Si votre projet est un site vitrine (Astro, sans base de données ni comptes utilisateurs), Baudrier refuse la commande et vous le dit - votre site reste tel quel, et vous pouvez toujours le déployer avec `/deploy`.

@@ -1,0 +1,61 @@
+{
+	admin off
+	auto_https off
+	servers {
+		trusted_proxies static 0.0.0.0/0 ::/0
+		client_ip_headers X-Forwarded-For
+	}
+}
+
+:8080 {
+	# One route {} block for deterministic order - bare `handle` blocks at
+	# top level get reordered by Caddy's own path-specificity heuristic,
+	# which would risk the catch-all running before the gate import.
+	route {
+		handle /api/healthz {
+			header Content-Type application/json
+			respond `{"ok":true}` 200
+		}
+
+		handle /.well-known/acme-challenge/* {
+			root * /srv
+			file_server
+		}
+
+		import /etc/caddy/gate.caddy
+
+		handle {
+			root * /srv
+			encode zstd gzip
+			# Site-level (immutable Cache-Control decorated a 403 from the
+			# gate above otherwise, letting a browser cache a denial for a
+			# year) - scoped to this handle so only a real 200 file response
+			# carries it.
+			header /_astro/* Cache-Control "public, max-age=31536000, immutable"
+			file_server
+		}
+	}
+
+	# The 404 page substitutes CONTENT but must keep the REAL status code -
+	# file_server's `status` filter (caddy:2-alpine floats caddy >=2.10)
+	# overrides the 200 a plain rewrite+file_server would otherwise send.
+	# Any other error status gets a plain response carrying its own real
+	# code, never a silent 200.
+	handle_errors 404 {
+		rewrite * /404.html
+		root * /srv
+		file_server {
+			status 404
+		}
+	}
+	handle_errors {
+		respond "{http.error.status_code} {http.error.status_text}" {http.error.status_code}
+	}
+
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		X-Frame-Options DENY
+		-Server
+	}
+}

@@ -6,9 +6,15 @@ Crée un projet web complet à partir de votre description en quelques phrases. 
 
 Pour démarrer un nouveau projet. C'est la commande la plus puissante du plugin : vous lui décrivez ce que vous voulez en quelques phrases, et elle construit toute l'app.
 
+## Deux types de projets
+
+La première chose que Baudrier demande (si vous ne l’avez pas déjà précisé) est ce que vous voulez construire :
+- **Un site vitrine** : quelques pages de présentation, sans comptes ni base de données. Vous choisissez aussi un style visuel (Épuré, Chaleureux, ou Audacieux). Il reste en ligne en permanence (jamais mis en veille) pour environ 6,40 €/mois.
+- **Une application web** : comptes, formulaires, données. C’est le parcours T3 décrit ci-dessous.
+
 ## Comment ça se passe
 
-Le bootstrap se déroule en **8 étapes**, avec deux phases d'autonomie totale et une phase de discussion au milieu :
+Le bootstrap se déroule en **8 étapes**, avec deux phases d’autonomie totale et une phase de discussion au milieu. Les étapes ci-dessous décrivent le parcours application web ; un site vitrine suit la même structure en 8 étapes avec une Phase 3 plus courte (pas de base de données, d’authentification, d’emails, de stockage ni de carte - seuls analytics, mode sombre et domaine personnalisé sont proposés) et sans build local (l’image déployée est la vraie vérification) :
 
 **Phase 1 : Construction automatique** (~5-10 minutes, sans intervention)
 1. Vous donnez le **nom du projet** et une **description courte**.

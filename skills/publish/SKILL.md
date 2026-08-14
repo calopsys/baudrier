@@ -114,6 +114,8 @@ Mention that `seo-perf`, `eco-audit`, and `gsc` can now be run since the site is
 
 Never describe the IP gate (before or after this change) as a firewall - it is an application-level check, not network-level filtering.
 
+Note for Claude: this command works identically for a vitrine. The container restart triggered by the secret sync makes it re-read `ACCESS_RESTRICTED`, whether the gate is implemented in Next.js (`proxy.ts`) or in the vitrine's Caddyfile.
+
 ---
 
 ## Troubleshooting - 403 on an app that is not published yet

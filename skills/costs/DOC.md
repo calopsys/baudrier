@@ -23,3 +23,7 @@ Scaleway's billing only breaks down by whole calendar month - not by day or by a
 {{callout:info|Free tier still shows €0}}
 If a service shows no cost, it usually means you're still within Scaleway's free monthly allowance for it - not that something's broken.
 {{/callout}}
+
+## Landing sites (site vitrine)
+
+A landing site's production container runs **always-on** (it never scales to zero), for a fixed cost of about €6.40/month. `/costs` mentions this explicitly; adjust it with `/scale`.

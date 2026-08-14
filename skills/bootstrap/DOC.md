@@ -6,9 +6,15 @@ Creates a complete web project from your description in a few sentences. Code, h
 
 To start a new project. It is the most powerful command in the plugin: you describe what you want in a few sentences, and it builds the whole app.
 
+## Two kinds of projects
+
+The first thing Baudrier asks (if you did not already say so) is what you want to build:
+- **A landing site (site vitrine)**: a few presentation pages, no accounts, no database. You also pick a visual style (Épuré, Chaleureux, or Audacieux). It stays online permanently (no sleep) for about 6.40 EUR/month.
+- **A web application**: accounts, forms, data. This is the T3 stack flow described below.
+
 ## How it works
 
-The bootstrap unfolds in **8 steps**, with two fully autonomous phases and a discussion phase in the middle:
+The bootstrap unfolds in **8 steps**, with two fully autonomous phases and a discussion phase in the middle. The steps below describe the web-application flow; a landing site follows the same 8-step shape with a shorter Phase 3 (no database/auth/email/storage/map addons - only analytics, dark mode, and a custom domain are offered) and no local build step (the deployed image is the real check):
 
 **Phase 1: Automatic construction** (~5-10 minutes, no intervention)
 1. You give the **project name** and a **short description**.

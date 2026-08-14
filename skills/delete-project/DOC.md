@@ -54,3 +54,7 @@ At the scope step, you don't have to delete everything at once - for instance yo
 {{callout:info|The local folder remains your responsibility}}
 For safety, the assistant never deletes the project's code folder on your computer. At the end, you get the exact path to open in your file explorer.
 {{/callout}}
+
+## Landing sites (site vitrine)
+
+A landing site has no database and no storage bucket to begin with, so there is simply nothing to preserve or hand you a console link for on that front - the report says so plainly, as the normal state for this type of site, not a gap.

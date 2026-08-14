@@ -63,3 +63,7 @@ If you have added or removed several services in a short time (for example: adde
 {{callout:warning|RGPD = legal obligation in France}}
 For any site that collects or processes personal data of French / European users (contact form, user accounts, notifications, analytics, etc.), an up-to-date privacy policy is **mandatory**. CNIL fines can climb. Running `/rgpd-audit` regularly (every 2-3 months or after each overhaul) is good hygiene.
 {{/callout}}
+
+## Landing sites (site vitrine)
+
+Not available on a landing site: this command is reserved for full applications. If your project is a landing site (built with Astro, no database, no user accounts), Baudrier refuses the command and tells you so - your site stays exactly as it is, and remains deployable with `/deploy`.

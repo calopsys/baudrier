@@ -21,6 +21,8 @@ Announce each major block clearly.
 
 ## Step 0 - Preflight
 
+**Garde vitrine** : invoke `_detect-project-root` first. If `PROJECT_TYPE=landing`, stop and tell the user, in their language (French shown): « Cette fonctionnalité n’est pas disponible pour un site vitrine : elle est réservée aux applications web. Votre site reste modifiable, et vous pouvez le déployer avec /deploy. »
+
 Verify that you are at the root of a Next.js project:
 
 ```bash
