@@ -60,18 +60,18 @@ Scaleway credentials are **environment variables only, never collected in chat**
 **Presence check:**
 
 ```bash
-node -e 'for (const k of ["SCW_ACCESS_KEY","SCW_SECRET_KEY","SCW_DEFAULT_ORGANIZATION_ID","SCW_DEFAULT_REGION","SCW_DEFAULT_PROJECT_ID"]) console.log(k + "=" + (process.env[k] ? "set" : "MISSING"))'
+node -e 'for (const k of ["SCW_ACCESS_KEY","SCW_SECRET_KEY","SCW_DEFAULT_ORGANIZATION_ID","SCW_DEFAULT_REGION","SCW_DEFAULT_PROJECT_ID","SCW_DEFAULT_APPLICATION_ID"]) console.log(k + "=" + (process.env[k] ? "set" : "MISSING"))'
 ```
 
 If `SCW_ACCESS_KEY`, `SCW_SECRET_KEY`, `SCW_DEFAULT_ORGANIZATION_ID`, or `SCW_DEFAULT_REGION` says `MISSING`, **stop here** - do not ask the user to paste anything into the chat. Say, in French:
 
 > ⚠️ Il manque au moins une variable Scaleway dans cet environnement. Ouvrez le tableau de bord Claude Code, modifiez l’environnement cloud « Baudrier », et complétez les variables `SCW_ACCESS_KEY`, `SCW_SECRET_KEY`, `SCW_DEFAULT_ORGANIZATION_ID`, `SCW_DEFAULT_REGION` (le détail exact est dans le chapitre Installation du README). Une fois enregistré, **démarrez une NOUVELLE conversation** : celle-ci ne peut pas relire les variables d’un environnement modifié pendant qu’elle tournait déjà.
 
-`SCW_DEFAULT_PROJECT_ID` reporting `MISSING` here is not fatal by itself: it is mandatory
-only in Cas B, and the Rights check below already catches a Cas B member who forgot it,
-with its own message. `SCW_DEFAULT_APPLICATION_ID` is optional too, and not part of this
-list: when present, the database path skips its one IAM read entirely; when absent,
-`/add-db` can still ask for it later if it turns out to be needed.
+`SCW_DEFAULT_PROJECT_ID` and `SCW_DEFAULT_APPLICATION_ID` reporting `MISSING` here are not
+fatal by themselves. The credential shape is not known yet at this point, and each variable
+is mandatory only in one shape. The Rights check below resolves the shape and, in Cas B,
+treats both variables as mandatory. Remember whether `SCW_DEFAULT_PROJECT_ID` and
+`SCW_DEFAULT_APPLICATION_ID` reported `MISSING` here - the Rights check needs both facts.
 
 If the four mandatory variables are present, validate them live with one real API call:
 
@@ -88,28 +88,75 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/check-deps.mjs" scaleway
 node "${CLAUDE_SKILL_DIR}/../../scripts/check-scw-permissions.mjs"
 ```
 
-One JSON line, e.g. `{"ok":true,"probes":{"projects":{"status":403,...},"iam":{...}},"likelyMissing":["ProjectManager"],"certainty":"denial-only","blocking":false}`. This is a **read-only** probe: a clean result does not *guarantee* create rights, but a denial is a certain "missing" signal.
+One JSON line, e.g. `{"ok":true,"probes":{"projects":{"status":403,...},"iam":{...}},"likelyMissing":["ProjectManager"],"certainty":"denial-only","blocking":false,"orgReach":false,"canMint":false,"conclusive":true,"shape":"project"}`. This is a **read-only** probe: a clean result does not *guarantee* create rights, but a denial is a certain "missing" signal. `shape` is `"project"` for Cas B, `"org"` for Cas A, and `"unknown"` when `conclusive` is `false` - an inconclusive probe must never be read as Cas B (`operatorKeyAsAppCredential()` fails closed the same way).
 
-- **`likelyMissing` empty** → say nothing about it, continue silently.
-- **`likelyMissing` non-empty** → show a **non-blocking** warning with two paths:
+Key this decision on `shape` alone, so the three branches below are disjoint and exhaustive. Read `likelyMissing` only inside the `"org"` branch.
 
-  > ⚠️ Votre clé Scaleway fonctionne, mais elle n’a pas le droit de lister/créer des Projets au niveau de l’organisation (permission « ProjectManager »). Deux façons de continuer :
-  >
-  > **Cas A** - Vous êtes administrateur de l’organisation : recréez une clé avec cette permission au niveau de l’organisation (chapitre Installation du README), puis remplacez `SCW_SECRET_KEY` dans l’environnement cloud. **Démarrez ensuite une NOUVELLE conversation.**
-  > **Cas B** - Vous êtes membre de l’organisation : demandez à votre administrateur un Projet Scaleway dédié à cette application, puis indiquez son identifiant dans la variable `SCW_DEFAULT_PROJECT_ID` de l’environnement cloud. Baudrier cible ce Projet directement, sans jamais tenter d’en lister ou d’en créer un autre.
-  >
-  > Dans les deux cas, une **nouvelle conversation** est nécessaire après la modification.
+- **`shape` is `"unknown"`** → show a **non-blocking** warning, in French, and continue. Do not read `likelyMissing` in this branch:
 
-  Explain Cas B further, non-blocking, in French:
+  > ⚠️ Impossible de vérifier avec certitude la portée de votre clé Scaleway pour le moment. Cela ne signifie pas que vous êtes en Cas B : la vérification a simplement échoué autrement que par un refus net. Baudrier continue ; réessayez la vérification plus tard si des opérations liées à la base de données échouent.
 
-  > En Cas B, votre clé Scaleway reste limitée à ce seul Projet. Elle sert directement toutes les opérations de Baudrier sur cette application, du développement jusqu’à la publication (`/publish`), sans étape intermédiaire ni clé technique séparée à fournir plus tard.
-  >
-  > Un environnement cloud sert alors une seule application. Pour une deuxième application, préparez un second environnement cloud, avec sa propre clé Scaleway et son propre `SCW_DEFAULT_PROJECT_ID`.
+- **`shape` is `"project"` (Cas B)** → both `SCW_DEFAULT_PROJECT_ID` and `SCW_DEFAULT_APPLICATION_ID` are mandatory.
 
-  If the user wants to prepare their administrator right away, give them this short forwardable message (French, no adoption step, no organization-wide key):
+  - **`SCW_DEFAULT_PROJECT_ID` or `SCW_DEFAULT_APPLICATION_ID` reported `MISSING` in the presence check** → **stop here** - do not hand control back to `/bootstrap`. Write one French message that names the missing variable or variables, built from the wording below.
 
-  > Pour que je puisse travailler avec Baudrier, pouvez-vous créer un Projet Scaleway dédié à cette application et m’accorder, sur ce Projet, les permissions de service listées dans CONTRACT.md §1 (`SecretManagerFullAccess`, `ContainersFullAccess`, `ContainerRegistryFullAccess`, `ServerlessSQLDatabaseFullAccess`, `ServerlessJobsFullAccess`, `ObjectStorageFullAccess`, `DomainsDNSFullAccess`, `TransactionalEmailFullAccess`, `GenerativeApisFullAccess`, `ObservabilityFullAccess`) - **sans** « ProjectManager » ni « IAMManager » ? Le guide détaillé est ici : `docs/ADMIN-SCALEWAY.md`. Donnez-moi ensuite l’identifiant de ce Projet, pour la variable `SCW_DEFAULT_PROJECT_ID`.
+    When `SCW_DEFAULT_APPLICATION_ID` is missing, include this wording:
 
-⚠️ **Never block Step 3 on this.** Whichever path the user takes, or skips, Step 3 already concluded above once the live validation succeeded - this subsection only adds a warning and, optionally, a message to forward.
+    > ⚠️ Votre clé Scaleway est limitée à un seul Projet. C’est le fonctionnement normal du Cas B, pas une erreur.
+    >
+    > Pour créer l’accès à la base de données, Baudrier a besoin de l’identifiant de l’application IAM qui porte cette clé. Cet identifiant n’est pas un secret.
+    >
+    > Dans la console Scaleway : IAM → Clés API → repérez la ligne de votre `SCW_ACCESS_KEY` → ouvrez l’application qui porte cette clé → copiez son identifiant. Si vous n’avez pas accès à la console, votre administrateur peut aussi vous communiquer cet identifiant.
+
+    When `SCW_DEFAULT_PROJECT_ID` is missing, include this wording:
+
+    > Une clé limitée à un seul Projet ne peut pas lister les Projets de l’organisation. Demandez à votre administrateur l’identifiant du Projet réservé à cette application, puis renseignez-le.
+
+    When both variables are missing, include both pieces of wording, one after the other.
+
+    Close the message with, in French:
+
+    > Ajoutez la ou les variables manquantes dans l’environnement cloud « Baudrier », puis **démarrez une NOUVELLE conversation** : celle-ci ne peut pas relire les variables d’un environnement modifié pendant qu’elle tournait déjà.
+
+  - **Both present** → show only the existing non-blocking Cas B explanation, in French:
+
+    > En Cas B, votre clé Scaleway reste limitée à ce seul Projet. Elle sert directement toutes les opérations de Baudrier sur cette application, du développement jusqu’à la publication (`/publish`), sans étape intermédiaire ni clé technique séparée à fournir plus tard.
+    >
+    > Un environnement cloud sert alors une seule application. Pour une deuxième application, préparez un second environnement cloud, avec sa propre clé Scaleway et son propre `SCW_DEFAULT_PROJECT_ID`.
+
+- **`shape` is `"org"` (Cas A)** → never stops here. Read `canMint` first, then `likelyMissing`:
+
+  - **`canMint` is `false`** (the deadlock shape) → show a **non-blocking** warning, in French:
+
+    > ⚠️ Votre clé Scaleway porte un droit sur toute l’organisation, mais elle ne peut pas créer de clés IAM déléguées : il lui manque la permission « IAMManager ». Elle ne correspond alors ni au Cas A ni au Cas B, et Baudrier refuse de deviner.
+    >
+    > Deux solutions : ajoutez la permission `IAMManager` à cette clé, ou demandez à votre administrateur une clé limitée à un seul Projet, sans aucun droit d’organisation (`docs/ADMIN-SCALEWAY.md`).
+
+  - **`canMint` is `true` and `likelyMissing` empty** → say nothing about it, continue silently.
+
+  - **`canMint` is `true` and `likelyMissing` contains `ProjectManager`** → show a **non-blocking** warning with two paths:
+
+    > ⚠️ Votre clé Scaleway fonctionne, mais elle n’a pas le droit de lister/créer des Projets au niveau de l’organisation (permission « ProjectManager »). Deux façons de continuer :
+    >
+    > **Cas A** - Vous êtes administrateur de l’organisation : recréez une clé avec cette permission au niveau de l’organisation (chapitre Installation du README), puis remplacez `SCW_SECRET_KEY` dans l’environnement cloud. **Démarrez ensuite une NOUVELLE conversation.**
+    > **Cas B** - Vous êtes membre de l’organisation : demandez à votre administrateur un Projet Scaleway dédié à cette application, puis indiquez son identifiant dans la variable `SCW_DEFAULT_PROJECT_ID` de l’environnement cloud. Baudrier cible ce Projet directement, sans jamais tenter d’en lister ou d’en créer un autre.
+    >
+    > Dans les deux cas, une **nouvelle conversation** est nécessaire après la modification.
+
+    Explain Cas B further, non-blocking, in French:
+
+    > En Cas B, votre clé Scaleway reste limitée à ce seul Projet. Elle sert directement toutes les opérations de Baudrier sur cette application, du développement jusqu’à la publication (`/publish`), sans étape intermédiaire ni clé technique séparée à fournir plus tard.
+    >
+    > Un environnement cloud sert alors une seule application. Pour une deuxième application, préparez un second environnement cloud, avec sa propre clé Scaleway et son propre `SCW_DEFAULT_PROJECT_ID`.
+
+    If the user wants to prepare their administrator right away, give them this short forwardable message (French, no adoption step, no organization-wide key):
+
+    > Pour que je puisse travailler avec Baudrier, pouvez-vous créer un Projet Scaleway dédié à cette application et m’accorder, sur ce Projet, les permissions de service listées dans CONTRACT.md §1 (`SecretManagerFullAccess`, `ContainersFullAccess`, `ContainerRegistryFullAccess`, `ServerlessSQLDatabaseFullAccess`, `ServerlessJobsFullAccess`, `ObjectStorageFullAccess`, `DomainsDNSFullAccess`, `TransactionalEmailFullAccess`, `GenerativeApisFullAccess`, `ObservabilityFullAccess`) - **sans** « ProjectManager » ni « IAMManager » ? Le guide détaillé est ici : `docs/ADMIN-SCALEWAY.md`. Donnez-moi ensuite l’identifiant de ce Projet, pour la variable `SCW_DEFAULT_PROJECT_ID`, et l’identifiant de l’application IAM qui porte la clé, pour la variable `SCW_DEFAULT_APPLICATION_ID`.
+
+  - **`canMint` is `true` and `likelyMissing` holds only `BillingReadOnly`** → show one **non-blocking** line, in French. Do not tell the user to recreate the key:
+
+    > ⚠️ Votre clé Scaleway fonctionne normalement. Seule exception : la commande `/costs` ne peut pas afficher le montant dépensé. Ce montant reste visible dans la console Scaleway.
+
+⚠️ **The Rights check stops for one reason only:** `shape` is `"project"` (Cas B) and a mandatory variable, `SCW_DEFAULT_PROJECT_ID` or `SCW_DEFAULT_APPLICATION_ID`, is absent. No permission warning stops the Rights check.
 
 This is the last preflight check. Hand control back to `/bootstrap`, which continues with its own next step.

@@ -70,7 +70,7 @@ Rendez-vous sur https://console.scaleway.com/iam/api-keys et créez une nouvelle
 
 Une clé qui porte `ProjectManager` sans `IAMManager` est refusée : elle ne peut ni fabriquer les clés techniques, ni servir d’identifiant à l’application. Une clé limitée à un seul Projet relève du Cas B ci-dessous.
 
-**Cas B - Vous êtes membre de l’organisation, pas administrateur.** Demandez à votre administrateur de suivre [docs/ADMIN-SCALEWAY.md](docs/ADMIN-SCALEWAY.md). Il prépare un Projet Scaleway et une application IAM dédiés à cette application précise, puis vous transmet une clé d’accès, une clé secrète et l’identifiant du Projet. Cette clé fait tourner votre application autant qu’elle la construit, avant `/publish` comme après : gardez-la, avec l’identifiant de Projet, dans un environnement cloud dédié à cette seule application. **Un environnement cloud « Cas B » sert exactement une application** ; pour une deuxième application, recommencez cette étape avec votre administrateur et créez un second environnement cloud.
+**Cas B - Vous êtes membre de l’organisation, pas administrateur.** Demandez à votre administrateur de suivre [docs/ADMIN-SCALEWAY.md](docs/ADMIN-SCALEWAY.md). Il prépare un Projet Scaleway et une application IAM dédiés à cette application précise, puis vous transmet une clé d’accès, une clé secrète, l’identifiant du Projet et l’identifiant de l’application IAM. Cette clé fait tourner votre application autant qu’elle la construit, avant `/publish` comme après : gardez ces quatre valeurs - la clé d’accès, la clé secrète, l’identifiant du Projet et l’identifiant de l’application IAM - dans un environnement cloud dédié à cette seule application. **Un environnement cloud « Cas B » sert exactement une application** ; pour une deuxième application, recommencez cette étape avec votre administrateur et créez un second environnement cloud.
 
 Notez la **clé d’accès** et la **clé secrète**. La clé secrète ne s’affiche qu’une fois, à la création.
 
@@ -91,9 +91,7 @@ SCW_DEFAULT_ORGANIZATION_ID=<l’identifiant de votre organisation Scaleway>
 SCW_DEFAULT_REGION=fr-par
 ```
 
-Si vous suivez le **Cas B**, ajoutez aussi `SCW_DEFAULT_PROJECT_ID=<l’identifiant de projet transmis par votre administrateur>`. Cette variable est obligatoire dans ce cas : votre clé est limitée à un seul Projet et ne peut pas lister ceux de l’organisation.
-
-Ajoutez aussi `SCW_DEFAULT_APPLICATION_ID=<l’identifiant de l’application IAM transmis par votre administrateur>`. Cette variable n’est pas secrète : c’est l’identifiant de l’application IAM qui porte votre clé. En Cas B, elle évite à Baudrier la seule lecture IAM dont la base de données a besoin. En Cas A, elle est ignorée.
+Si vous suivez le **Cas B**, ajoutez aussi `SCW_DEFAULT_PROJECT_ID=<l’identifiant de projet transmis par votre administrateur>`. Cette variable est obligatoire dans ce cas : votre clé est limitée à un seul Projet et ne peut pas lister ceux de l’organisation. Ajoutez aussi `SCW_DEFAULT_APPLICATION_ID=<l’identifiant de l’application IAM transmis par votre administrateur>`. Cette variable est elle aussi obligatoire en Cas B : sans elle, Baudrier s’arrête dès le départ, car la base de données a besoin de cet identifiant. Elle n’est pas secrète : c’est l’identifiant de l’application IAM qui porte votre clé. En Cas A, elle est ignorée.
 
 Ces valeurs sont visibles par toute personne qui utilise cet environnement cloud. Sur un environnement personnel, cela veut dire vous seul(e). Claude Code ne propose aucun autre coffre-fort de secrets pour cet usage : c’est le mécanisme prévu.
 
@@ -123,6 +121,7 @@ Le dépôt GitHub doit rester vide avant cette étape, car Baudrier construit l�
 | `/bootstrap` signale une erreur 403 sur la liste des projets | En Cas A, la clé n’a pas la permission `ProjectManager` à l’échelle de l’organisation. En Cas B, la variable `SCW_DEFAULT_PROJECT_ID` manque : une clé limitée à un seul Projet ne peut pas lister ceux de l’organisation | En Cas A, recréez la clé avec `ProjectManager` et `IAMManager` (étape 3 ci-dessus), puis mettez à jour `SCW_ACCESS_KEY` et `SCW_SECRET_KEY`. En Cas B, ajoutez `SCW_DEFAULT_PROJECT_ID` à l’environnement |
 | Baudrier annonce qu’il manque la permission `IAMManager` à votre clé | La clé porte un droit sur toute l’organisation (par exemple `ProjectManager` ou `BillingReadOnly`) mais pas `IAMManager`. Elle ne correspond alors ni au Cas A ni au Cas B, et Baudrier refuse de deviner | Choisissez une forme. Cas A : ajoutez `IAMManager` à la clé. Cas B : demandez à votre administrateur une clé limitée au seul Projet, sans aucun droit d’organisation ([docs/ADMIN-SCALEWAY.md](docs/ADMIN-SCALEWAY.md)) |
 | Le réseau bloque un domaine dont vous ne comprenez pas le rôle | L’environnement est en accès réseau **Custom** et un domaine manque à la liste | Passez l’accès réseau en **Complet** (le réglage recommandé, étape 4), puis ouvrez une nouvelle conversation |
+| Baudrier s’arrête dès le départ et demande `SCW_DEFAULT_APPLICATION_ID` | La clé est limitée à un seul Projet (Cas B), et la base de données a besoin de l’identifiant de l’application IAM qui porte cette clé | Ajoutez la variable à l’environnement cloud, à partir de la valeur donnée par la console Scaleway (IAM, Clés API, la ligne de votre `SCW_ACCESS_KEY`, puis l’application qui porte la clé) ou par votre administrateur, puis ouvrez une nouvelle conversation |
 
 **Après tout changement de l’environnement cloud, démarrez une NOUVELLE conversation.** Une conversation en cours ne voit pas le changement.
 

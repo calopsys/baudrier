@@ -1,5 +1,36 @@
 # Changelog
 
+## v1.5.1 (2026-08-19)
+
+One fix on the setup flow: a Cas B operator now gives
+`SCW_DEFAULT_APPLICATION_ID` before `/bootstrap` starts, not after it fails.
+
+### Changed
+
+- **The preflight stops a Cas B setup that misses a mandatory variable.** A
+  Cas B key is scoped to one Project and cannot read its own IAM record, and
+  Serverless SQL uses the IAM application id as the database username. The
+  preflight asked for neither `SCW_DEFAULT_APPLICATION_ID` nor, in the Cas B
+  shape, `SCW_DEFAULT_PROJECT_ID`. The operator therefore lost a whole
+  `/bootstrap` run at `/add-db`, on a `needs_application_id` error that only a
+  new conversation can fix. The Rights check now keys on the credential shape
+  and stops before `/bootstrap` when either variable is absent.
+- **`check-scw-permissions.mjs` reports the credential shape.** Its `main()`
+  reuses its own `probeOrgReach()` export instead of repeating the three-probe
+  fan-out, and its JSON line carries `shape`, `orgReach`, `canMint` and
+  `conclusive`. `shape` is `"project"` for Cas B, `"org"` for Cas A, and
+  `"unknown"` when the probe does not conclude. It never throws on the
+  deadlock shape, where `credentialShape()` does: this probe stays advisory.
+- **The organization arm gives the right message for each sub-shape.** It
+  branches on `canMint`, so a deadlock key no longer reads that it misses
+  `ProjectManager`, and a key that misses `BillingReadOnly` alone reads that
+  only the cost report is affected.
+- **`SCW_DEFAULT_APPLICATION_ID` is mandatory in Cas B.** The README, the
+  administrator guide and CONTRACT.md §2 say so. `/add-db` keeps its
+  `needs_application_id` recovery as the residual net for an inconclusive
+  probe. Check 90 pins the flow, and the gate count becomes 89 in CLAUDE.md
+  and CONTRACT.md.
+
 ## v1.5.0 (2026-08-18)
 
 Dependency upgrade across the harness and the templates: Scaleway SDK v4,

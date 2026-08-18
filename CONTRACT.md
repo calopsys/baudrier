@@ -523,7 +523,7 @@ any platform.
 | `SCW_DEFAULT_ORGANIZATION_ID` | Scaleway Organization |
 | `SCW_DEFAULT_REGION` | always `fr-par`; this is the default applied when unset |
 | `SCW_DEFAULT_PROJECT_ID` | Cas A: optional override, skips the by-name Project lookup and targets this Project id directly. Cas B: mandatory - a Project-scoped key cannot list Projects, so this is the only way it declares which Project it owns (§1) |
-| `SCW_DEFAULT_APPLICATION_ID` | Cas B: the id of the IAM application that bears the key (not a secret). Optional but recommended: it removes the only IAM read the database path needs - a Cas B key cannot read its own IAM record (§1: the shape probe defines Cas B by that 403), and Serverless SQL uses the principal id as the database username (§4). Absent, `/add-db` raises `needs_application_id` with self-service console steps. Cas A: ignored (check 78) |
+| `SCW_DEFAULT_APPLICATION_ID` | Cas B: the id of the IAM application that bears the key (not a secret). Mandatory: when the shape probe concludes Cas B, preflight refuses to start `/bootstrap` without it. It removes the only IAM read the database path needs - a Cas B key cannot read its own IAM record (§1: the shape probe defines Cas B by that 403), and Serverless SQL uses the principal id as the database username (§4). `/add-db`'s `needs_application_id` error is the residual net for an inconclusive shape probe: it only fires when preflight could not conclude and so let `/bootstrap` proceed without the variable. Cas A: ignored (check 78) |
 
 **Per-app scope resolves by Scaleway Project id or name, never by a stored
 file.** App repos carry **no Scaleway metadata at all** -
@@ -838,7 +838,7 @@ Anything else must go through the SDK.
 ```js
 export const REGION;                       // "fr-par"
 export class ScwError extends Error {}     // .status .type .details
-export function loadCredentials();          // {accessKey,secretKey,projectId,organizationId,region}
+export function loadCredentials();          // {accessKey,secretKey,projectId,organizationId,applicationId,region}
 export function requireCredentials();       // same, throws a friendly error if absent
 export async function scwFetch(apiPath, {method, body, query, headers, raw});
 export async function scwPaginate(apiPath, {query, key});  // yields all pages of key
@@ -1090,7 +1090,7 @@ the tiers they wrote (§7): there is nothing left for `_preflight` to persist.
 
 | Script | Role |
 |---|---|
-| `scripts/check-scw-permissions.mjs` | read-only probe for the three organization-scoped permission sets: `ProjectManager`, `IAMManager`, `BillingReadOnly`. Exports `probeOrgReach({organizationId?})` -> `{orgReach, canMint, conclusive, probes}` - `orgReach` is true when any of the three succeeds, `canMint` mirrors `IAMManager` alone, `conclusive` is false on anything other than a clean success or a clean 403/401. This is what `operatorKeyAsAppCredential()` (`app-credentials.mjs`, §1) calls to decide the shape. Run directly it is advisory only - it recommends setting `SCW_DEFAULT_PROJECT_ID` (§1, §2), it does not set it itself. |
+| `scripts/check-scw-permissions.mjs` | read-only probe for the three organization-scoped permission sets: `ProjectManager`, `IAMManager`, `BillingReadOnly`. Exports `probeOrgReach({organizationId?})` -> `{orgReach, canMint, conclusive, probes}` - `orgReach` is true when any of the three succeeds, `canMint` mirrors `IAMManager` alone, `conclusive` is false on anything other than a clean success or a clean 403/401. This is what `operatorKeyAsAppCredential()` (`app-credentials.mjs`, §1) calls to decide the shape. Run directly it is advisory only - it recommends setting `SCW_DEFAULT_PROJECT_ID` (§1, §2), it does not set it itself. Its JSON line also carries `orgReach`, `canMint`, and `conclusive`, straight from `probeOrgReach()`, plus `shape`: `"unknown"` when `conclusive` is false, `"org"` when `orgReach` is true, `"project"` otherwise - `shape: "project"` means Cas B. For the deadlock input (org reach without `IAMManager`), this script reports `shape: "org"` with `canMint: false`, where `credentialShape()` (`app-credentials.mjs`, §1) throws `shape_deadlock` instead - the advisory probe must never throw. |
 
 Credential adoption exists in exactly one place: `operatorKeyAsAppCredential()`
 (§1, `app-credentials.mjs` above). It runs automatically, on every script that
@@ -1468,8 +1468,9 @@ Preserve upstream's structure — it works and users rely on it.
 ### Credential resolution (env-only)
 
 `_scw-auth.mjs#loadCredentials()` reads `SCW_ACCESS_KEY`, `SCW_SECRET_KEY`,
-`SCW_DEFAULT_ORGANIZATION_ID`, `SCW_DEFAULT_REGION` (default `fr-par`), and
-`SCW_DEFAULT_PROJECT_ID` straight from `process.env` (§2).
+`SCW_DEFAULT_ORGANIZATION_ID`, `SCW_DEFAULT_REGION` (default `fr-par`),
+`SCW_DEFAULT_PROJECT_ID`, and `SCW_DEFAULT_APPLICATION_ID` straight from
+`process.env` (§2).
 `resolveProjectId()` reads that same `SCW_DEFAULT_PROJECT_ID`, also straight
 from `process.env` - a Cas B key has no other source, since it cannot list
 Projects (§1). **There is no other tier.** The old three-tier system - a repo-local
@@ -1522,7 +1523,7 @@ harness. The substitute is deliberate: static pins for every past
 regression class, plus fixture-spawn behavioral checks (67, 76) where a
 script can run against a synthetic directory.
 
-`node tools/verify.mjs` must exit 0 (88 checks). It checks: every `.mjs` parses, every
+`node tools/verify.mjs` must exit 0 (89 checks). It checks: every `.mjs` parses, every
 relative import resolves, every `scripts/...` path named in a `SKILL.md` exists,
 every referenced skill exists and no deleted skill is referenced, template
 manifests are valid, and no removed-provider token or env var survives outside

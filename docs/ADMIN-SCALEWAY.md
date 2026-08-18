@@ -59,7 +59,9 @@ Votre collaborateur vous transmet le nom qu’il a choisi pour son application, 
    (`SCW_ACCESS_KEY`, `SCW_SECRET_KEY`, `SCW_DEFAULT_PROJECT_ID`,
    `SCW_DEFAULT_ORGANIZATION_ID`, `SCW_DEFAULT_APPLICATION_ID`), puis démarre une nouvelle
    conversation. La base de données Serverless SQL utilise cet identifiant d’application
-   comme nom d’utilisateur ; la clé ne peut pas le lire elle-même.
+   comme nom d’utilisateur ; la clé ne peut pas le lire elle-même. Sans
+   `SCW_DEFAULT_APPLICATION_ID`, Baudrier s’arrête dès le départ chez votre collaborateur,
+   avant toute construction.
 
 Baudrier ne vous sollicite plus après cette étape, sauf le cas rare décrit ci-dessous. Il
 n’y a plus de seconde demande au moment de `/publish` : cette commande ne fait plus que

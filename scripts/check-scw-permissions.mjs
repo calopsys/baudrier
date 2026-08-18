@@ -14,7 +14,9 @@
 //
 // Output: exactly one JSON line on stdout. Exit 1 only when credentials are
 // entirely missing; a detected permission gap is non-blocking (blocking:false)
-// so the preflight can surface it as a warning and keep going.
+// so the preflight can surface it as a warning and keep going. The line also
+// carries the credential-shape verdict from probeOrgReach(): orgReach,
+// canMint, conclusive, and the derived shape ("unknown"/"org"/"project").
 //
 //   node check-scw-permissions.mjs [--organization-id <ID>] [--json]
 
@@ -108,6 +110,13 @@ export async function probeOrgReach({ organizationId } = {}) {
   };
 }
 
+// Reports "org" for the deadlock input, where credentialShape() throws
+// shape_deadlock: this probe is advisory and must never throw.
+function credentialShapeFromReach({ orgReach, conclusive }) {
+  if (!conclusive) return "unknown";
+  return orgReach ? "org" : "project";
+}
+
 async function main() {
   let creds;
   try {
@@ -124,11 +133,8 @@ async function main() {
 
   const organizationId = arg("--organization-id") || creds.organizationId;
 
-  const [projects, iam, billing] = await Promise.all([
-    probeProjects(organizationId),
-    probeIam(organizationId),
-    probeBilling(organizationId),
-  ]);
+  const { orgReach, canMint, conclusive, probes } = await probeOrgReach({ organizationId });
+  const { projects, iam, billing } = probes;
 
   const likelyMissing = [];
   if (projects.status === 403) likelyMissing.push("ProjectManager");
@@ -137,10 +143,14 @@ async function main() {
 
   out({
     ok: true,
-    probes: { projects, iam, billing },
+    probes,
     likelyMissing,
     certainty: "denial-only",
     blocking: false,
+    orgReach,
+    canMint,
+    conclusive,
+    shape: credentialShapeFromReach({ orgReach, conclusive }),
   });
 }
 

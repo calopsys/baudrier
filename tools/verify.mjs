@@ -5262,6 +5262,184 @@ define("89", "Bootstrap: the description question ends the turn before the style
   return fails;
 });
 
+define("90", "Cas B setup: the preflight asks for SCW_DEFAULT_APPLICATION_ID before /bootstrap", () => {
+  const fails = [];
+
+  // (a) main() must delegate the three-probe fan-out to the exported
+  // probeOrgReach() and emit the shape verdict - export-anchored slicing,
+  // the same convention check 78(b) uses on devDbCredentials().
+  const perms = "scripts/check-scw-permissions.mjs";
+  if (!exists(perms)) {
+    fails.push({ file: perms, detail: "missing" });
+  } else {
+    const code = stripComments(read(perms));
+    const fnMatch = code.match(/async\s+function\s+main\s*\(/);
+    if (!fnMatch) {
+      fails.push({ file: perms, detail: "main() not found" });
+    } else {
+      const fnAt = fnMatch.index;
+      const nextTopAt = code.indexOf("\nif (import.meta.url", fnAt + 1);
+      const body = code.slice(fnAt, nextTopAt > 0 ? nextTopAt : undefined);
+      if (!body.includes("probeOrgReach")) {
+        fails.push({
+          file: perms,
+          detail: "main() never calls probeOrgReach() - the CLI and operatorKeyAsAppCredential() can run different probe logic and disagree on the shape",
+        });
+      }
+      if (!/\bshape\s*:\s*credentialShapeFromReach\s*\(/.test(body)) {
+        fails.push({
+          file: perms,
+          detail: "main() does not emit shape through credentialShapeFromReach() - either the preflight has no JSON signal to branch on for Cas B, or an inlined ternary drops the inconclusive guard below",
+        });
+      }
+      if (body.includes("probeProjects(")) {
+        fails.push({
+          file: perms,
+          detail: "main() still repeats the probe fan-out instead of reusing probeOrgReach() - the duplicated fan-out is what let the CLI answer and the chokepoint disagree",
+        });
+      }
+    }
+
+    // (a2) credentialShapeFromReach() must return "unknown" on an inconclusive
+    // probe - drop this guard and a transient network failure reports shape
+    // "project", hard-stopping a Cas A operator with a Cas B message.
+    const shapeFnMatch = code.match(/function\s+credentialShapeFromReach\s*\(/);
+    if (!shapeFnMatch) {
+      fails.push({ file: perms, detail: "credentialShapeFromReach() not found" });
+    } else {
+      const shapeFnAt = shapeFnMatch.index;
+      const nextFnAt = code.indexOf("\nasync function main", shapeFnAt + 1);
+      const shapeBody = code.slice(shapeFnAt, nextFnAt > 0 ? nextFnAt : undefined);
+      if (!(/\bconclusive\b/.test(shapeBody) && /return\s+"unknown"/.test(shapeBody))) {
+        fails.push({
+          file: perms,
+          detail: 'credentialShapeFromReach() never tests `conclusive` and returns "unknown" - an inconclusive probe would report shape "project" and hard-stop a Cas A operator asking for an application id they do not have',
+        });
+      }
+    }
+  }
+
+  // (b)/(c)/(d) the preflight is the only place that can stop Step 3 before
+  // /bootstrap starts; each piece of that stop must survive on its own.
+  const preflight = "skills/_preflight/SKILL.md";
+  if (!exists(preflight)) {
+    fails.push({ file: preflight, detail: "missing" });
+  } else {
+    const src = read(preflight);
+
+    // (b) the Step 3 env-presence list must include the new variable, or a
+    // Cas B member missing it gets no warning at all. Scoped to the actual
+    // `for (const k of [...])` list, the same convention check 78(f) uses,
+    // because the file also names the variable in prose further down.
+    const listMatch = src.match(/for \(const k of \[([^\]]*)\]\)/);
+    if (!listMatch) {
+      fails.push({ file: preflight, detail: "no `for (const k of [...])` env-presence list found - cannot confirm which vars Step 3 checks" });
+    } else if (!listMatch[1].includes("SCW_DEFAULT_APPLICATION_ID")) {
+      fails.push({
+        file: preflight,
+        detail: "the Step 3 env-presence list omits SCW_DEFAULT_APPLICATION_ID - a Cas B member missing it gets no warning before /bootstrap runs",
+      });
+    }
+
+    // (c) the Rights-check bullet that covers the Cas B shape must still stop
+    // Step 3, not merely warn, and its trigger must still name both mandatory
+    // variables - found by content, not by its current label, so relabelling
+    // the bullet cannot mask the stop being dropped. The slice ends at the
+    // closing summary line, which restates the same trigger wording: inside
+    // the slice, two matching bullets mean a real ambiguity in the skill text.
+    const rightsAt = src.indexOf("**Rights check.**");
+    const rightsCloseAt = src.indexOf("\n⚠️ **The Rights check stops for one reason only:**", rightsAt);
+    const rightsSection = rightsAt >= 0 ? src.slice(rightsAt, rightsCloseAt > 0 ? rightsCloseAt : undefined) : "";
+    const casBBullets = rightsSection.split("\n- **").filter((b) => b.includes('"project"') && b.includes("SCW_DEFAULT_APPLICATION_ID"));
+    if (casBBullets.length !== 1) {
+      fails.push({
+        file: preflight,
+        detail: `${casBBullets.length} Rights-check bullets name both "project" and SCW_DEFAULT_APPLICATION_ID - exactly one must, or /bootstrap cannot tell which branch stops Step 3 for Cas B`,
+      });
+    } else {
+      const casBBullet = casBBullets[0];
+      const stopAt = casBBullet.indexOf("**stop here**");
+      if (stopAt < 0) {
+        fails.push({
+          file: preflight,
+          detail: "the Cas B branch never says **stop here** - a Cas B operator missing SCW_DEFAULT_APPLICATION_ID gets a warning instead of a hard stop before /bootstrap",
+        });
+      } else {
+        // Read only the trigger clause of the nested stop bullet, the text
+        // before its first arrow, so a reworded message body below cannot
+        // hide a variable dropped from the condition that fires the stop.
+        const stopBulletAt = casBBullet.lastIndexOf("\n  - **", stopAt);
+        const stopBullet = stopBulletAt >= 0 ? casBBullet.slice(stopBulletAt) : casBBullet;
+        const arrowAt = stopBullet.indexOf("→");
+        const trigger = arrowAt > 0 ? stopBullet.slice(0, arrowAt) : stopBullet;
+        if (!(trigger.includes("SCW_DEFAULT_PROJECT_ID") && trigger.includes("SCW_DEFAULT_APPLICATION_ID"))) {
+          fails.push({
+            file: preflight,
+            detail: "the Cas B stop trigger does not name both SCW_DEFAULT_PROJECT_ID and SCW_DEFAULT_APPLICATION_ID - a Cas B operator missing only one of them would not trigger the stop",
+          });
+        }
+      }
+    }
+
+    // (d) the forwardable administrator message is the operator's only way
+    // to ask their administrator for the id up front, before hitting the
+    // stop. Anchored on the message itself, not the whole file.
+    const fwdAt = src.indexOf("forwardable message");
+    if (fwdAt < 0) {
+      fails.push({ file: preflight, detail: "no forwardable administrator message found - a Cas B operator has nothing to send their administrator" });
+    } else {
+      // Bound on the next bullet at either nesting level, or on the closing
+      // summary line. An unbounded slice reaches that line, which names the
+      // variable itself, and then the assertion holds whatever the message says.
+      const nextTopBulletAt = src.indexOf("\n- **", fwdAt);
+      const nextSubBulletAt = src.indexOf("\n  - **", fwdAt);
+      const closeAt = src.indexOf("\n⚠️ **The Rights check stops for one reason only:**", fwdAt);
+      const boundCandidates = [nextTopBulletAt, nextSubBulletAt, closeAt].filter((i) => i > 0);
+      const msgEndAt = boundCandidates.length ? Math.min(...boundCandidates) : -1;
+      const msg = src.slice(fwdAt, msgEndAt > 0 ? msgEndAt : undefined);
+      if (!msg.includes("SCW_DEFAULT_APPLICATION_ID")) {
+        fails.push({
+          file: preflight,
+          detail: "the forwardable administrator message never names SCW_DEFAULT_APPLICATION_ID - the administrator has no reason to hand it over before the operator hits the Cas B stop",
+        });
+      }
+    }
+  }
+
+  // (e) the Cas B chapter of the README must name the variable, or an
+  // operator setting up the cloud environment never learns it exists.
+  // Anchored on the whole chapter, not one paragraph, so reflowing the prose
+  // cannot move the variable out of a narrower slice.
+  const readme = "README.md";
+  if (!exists(readme)) {
+    fails.push({ file: readme, detail: "missing" });
+  } else {
+    const rsrc = read(readme);
+    const anchor = "**Cas B -";
+    const anchorAt = rsrc.indexOf(anchor);
+    if (anchorAt < 0) {
+      fails.push({ file: readme, detail: "no `**Cas B -` chapter heading found - cannot confirm the chapter still names SCW_DEFAULT_APPLICATION_ID" });
+    } else {
+      // Bound on the next `##` or `###` heading, whichever comes first. A
+      // `##`-only bound reaches the troubleshooting table, whose own row names
+      // the variable and hides a setup chapter that no longer does.
+      const nextH2At = rsrc.indexOf("\n## ", anchorAt);
+      const nextH3At = rsrc.indexOf("\n### ", anchorAt);
+      const headingCandidates = [nextH2At, nextH3At].filter((i) => i > 0);
+      const chapterEndAt = headingCandidates.length ? Math.min(...headingCandidates) : -1;
+      const chapter = rsrc.slice(anchorAt, chapterEndAt > 0 ? chapterEndAt : undefined);
+      if (!chapter.includes("SCW_DEFAULT_APPLICATION_ID")) {
+        fails.push({
+          file: readme,
+          detail: "the environment-variable chapter never names SCW_DEFAULT_APPLICATION_ID - an operator following the setup instructions never learns to set it before /bootstrap refuses to start",
+        });
+      }
+    }
+  }
+
+  return fails;
+});
+
 /* ------------------------------------------------------------------- runner */
 
 const results = [];
