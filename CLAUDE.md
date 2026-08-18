@@ -17,7 +17,7 @@ check it before re-deriving a Scaleway behaviour from scratch.
 ## The gate
 
 ```bash
-node tools/verify.mjs          # 88 checks, all must pass
+node tools/verify.mjs          # 89 checks, all must pass
 node tools/verify.mjs --only 15,16
 ```
 

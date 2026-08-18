@@ -232,6 +232,11 @@ const _apis = new Map();
 /**
  * Get a memoised SDK API instance.
  *
+ * SDK v4 exports flat per-product-version namespaces (e.g. `Containerv1`),
+ * not the nested `Container.v1` shape v3 used. `api()` joins `product` and
+ * `version` to find the namespace; the call convention `api("Container", "v1")`
+ * is unchanged.
+ *
  * @param {string} product  SDK namespace, e.g. "Container", "Jobs", "Secret"
  * @param {string} version  e.g. "v1", "v1alpha2", "v1beta1"
  * @param {string} [cls]    API class name. Defaults to "API"; a few products use
@@ -250,18 +255,18 @@ export async function api(product, version, cls = "API") {
   const client = await getClient();
   const sdk = await loadScalewaySdk();
 
-  const ns = sdk[product];
-  if (!ns) throw new ScwError(`Produit SDK inconnu : "${product}"`, { type: "sdk_shape" });
-  const versioned = ns[version];
+  const versioned = sdk[product + version];
   if (!versioned) {
-    throw new ScwError(`Version SDK inconnue : ${product}.${version} (disponibles : ${Object.keys(ns).join(", ")})`, {
-      type: "sdk_shape",
-    });
+    const available = Object.keys(sdk).filter((k) => k.startsWith(product));
+    const hint = available.length
+      ? `versions disponibles pour "${product}" : ${available.join(", ")}`
+      : `aucun espace de noms SDK ne commence par "${product}" - produit inconnu`;
+    throw new ScwError(`Produit ou version SDK inconnu : "${product}${version}" (${hint})`, { type: "sdk_shape" });
   }
   const Ctor = versioned[cls];
   if (typeof Ctor !== "function") {
     const ctors = Object.keys(versioned).filter((k) => /API$/.test(k));
-    throw new ScwError(`Classe SDK introuvable : ${product}.${version}.${cls} (disponibles : ${ctors.join(", ")})`, {
+    throw new ScwError(`Classe SDK introuvable : ${product}${version}.${cls} (disponibles : ${ctors.join(", ")})`, {
       type: "sdk_shape",
     });
   }

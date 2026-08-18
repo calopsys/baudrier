@@ -3,7 +3,7 @@
 {{DESCRIPTION}}
 
 ## Stack
-- **Framework** : Astro 5, sortie statique (`output: "static"`)
+- **Framework** : Astro 7, sortie statique (`output: "static"`)
 - **Styling** : Tailwind CSS v4 - jetons sémantiques dans `src/styles/theme.css`
 - **Hébergement** : Scaleway Serverless Containers, région `fr-par` (Paris) - image Caddy servant les fichiers statiques
 - **Build de l’image** : directement par la machine qui lance `/bootstrap` ou `/deploy` (`docker build` + `docker push`), jamais par GitHub Actions

@@ -93,7 +93,7 @@
 //
 // --stack picks CONTRACT.md's two stacks. Default "application" runs the T3
 // pipeline documented below, unchanged. "landing" runs a shorter pipeline
-// (LANDING_STEPS) for a static Astro 5 + Caddy site (vitrine): no database,
+// (LANDING_STEPS) for a static Astro 7 + Caddy site (vitrine): no database,
 // always-on (min_scale 1), see scaffoldLanding()/landingDeployArtifacts()/
 // landingClaudeMd()/scwContainer() below. --preset is required with
 // --stack landing (epure|chaleureux|audacieux, one Tailwind v4 token file
@@ -149,7 +149,7 @@ let locale = "fr_FR";
 let skipDeploy = false;
 let scwProjectIdArg = null;
 let registryNamespaceOverride = "";
-// CONTRACT.md's second stack (Astro 5 static + Caddy, "sites vitrines").
+// CONTRACT.md's second stack (Astro 7 static + Caddy, "sites vitrines").
 // "application" keeps the pre-existing T3 pipeline byte-identical.
 let stack = "application";
 let preset = null;
@@ -273,7 +273,7 @@ const APPLICATION_STEPS = [
   "scwContainer",
   "smokeTest",
 ];
-// CONTRACT.md's second stack: Astro 5 static + Caddy, no database, no
+// CONTRACT.md's second stack: Astro 7 static + Caddy, no database, no
 // GitHub-Actions-free build pipeline changes needed (the same direct
 // docker build/push + SDK container create is reused verbatim below).
 // dockerBuildPush stays before scwContainer - Scaleway validates the

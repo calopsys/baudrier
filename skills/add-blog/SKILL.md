@@ -1,6 +1,6 @@
 ---
 name: add-blog
-description: Install a blog once on an existing vitrine (Astro 5 content collections) - RSS, sitemap, JSON-LD BlogPosting, tags, canonical URLs, prev/next links, IndexNow. Landing sites only. Use when the user wants a blog or news section on their site vitrine.
+description: Install a blog once on an existing vitrine (Astro content collections) - RSS, sitemap, JSON-LD BlogPosting, tags, canonical URLs, prev/next links, IndexNow. Landing sites only. Use when the user wants a blog or news section on their site vitrine.
 compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; most workflows also use pnpm, git, and project CLIs (scw, gh)."
 ---
 
@@ -12,7 +12,7 @@ compatibility: "Agent Skills standard (Claude Code or Codex). Requires Node.js; 
 - When generating user-facing content for the scaffolded project (UI labels, emails, copy), write it in the user's language too.
 - Show progress as a short natural-language checklist (in-progress and done states).
 
-You install a blog on the current site vitrine, once: an Astro 5 content collection under `src/content/blog/`, a listing page, an article page, RSS, sitemap, and everything helping SEO/GEO (JSON-LD `BlogPosting`, `og:type article`, canonical URLs, tags, prev/next). After this skill, `/blogpost` writes and publishes articles. This skill only installs the machinery - it never writes an article itself.
+You install a blog on the current site vitrine, once: an Astro content collection under `src/content/blog/`, a listing page, an article page, RSS, sitemap, and everything helping SEO/GEO (JSON-LD `BlogPosting`, `og:type article`, canonical URLs, tags, prev/next). After this skill, `/blogpost` writes and publishes articles. This skill only installs the machinery - it never writes an article itself.
 
 ---
 

@@ -3,8 +3,9 @@
  * check-deps-health.mjs - verify the installed npm dependencies are actually usable.
  *
  * This exists because of a specific, real failure mode: Scaleway's npm release
- * pipeline has been publishing @scaleway/* packages with no dist/ directory
- * while still declaring `exports` that point into it. Installing such a version
+ * pipeline used to publish @scaleway/* packages with no dist/ directory
+ * while still declaring `exports` that point into it (fixed as of sdk 4.0.3 /
+ * sdk-client 2.6.0). Installing such a version
  * "succeeds", then every import fails at runtime with ERR_MODULE_NOT_FOUND
  * naming a file inside node_modules - which is baffling for a non-technical user
  * and looks like a bug in this harness rather than in a dependency.
@@ -52,7 +53,7 @@ const NM = path.join(BASE, "node_modules");
 
 /** Packages we import at runtime, with the entry point that must resolve. */
 const REQUIRED = [
-  { name: "@scaleway/sdk", probe: "Container" },
+  { name: "@scaleway/sdk", probe: "Containerv1" },
   { name: "@scaleway/sdk-client", probe: "createClient" },
   { name: "@aws-sdk/client-s3", probe: "S3Client" },
 ];
@@ -102,7 +103,7 @@ if (!fs.existsSync(NM)) {
       problems.push({
         package: `${name}@${pkg.version}`,
         problem: `cannot be resolved - its declared entry point is not present in the published package (the tarball shipped without its compiled output): ${e.message.split("\n")[0]}`,
-        fix: "this published version is broken upstream. Pin a known-good version in package.json (currently @scaleway/sdk 3.11.1 and @scaleway/sdk-client 2.4.2), delete node_modules, and reinstall.",
+        fix: "this published version is broken upstream. Pin a known-good version in package.json (currently @scaleway/sdk 4.0.3 and @scaleway/sdk-client 2.6.0), delete node_modules, and reinstall.",
       });
       checked.push({ package: name, version: pkg.version, resolved: null });
       continue;
@@ -118,7 +119,7 @@ if (!fs.existsSync(NM)) {
         problems.push({
           package: `${name}@${pkg.version}`,
           problem: `loads, but does not export "${probe}" - the package shape is not what this harness expects`,
-          fix: "check whether a major version changed the export shape (@scaleway/sdk 4.x renamed the per-product namespaces)",
+          fix: "the installed version does not match the shape this harness expects (flat @scaleway/sdk v4 namespaces, e.g. Containerv1); reinstall the pinned versions from package.json",
         });
       }
     } catch (e) {

@@ -3,12 +3,12 @@
 // for EXTERNAL domains (bought elsewhere, delegated to Scaleway) - see
 // CONTRACT.md. It never registers/transfers a domain through Scaleway.
 //
-// Thin adapter over @scaleway/sdk's Domain v2beta1 `API` class (NOT
+// Thin adapter over @scaleway/sdk's Domainv2beta1 `API` class (NOT
 // `RegistrarAPI`/`UnauthenticatedRegistrarAPI` - the DNS-zone/record methods
 // live on plain `API`, and are named with a capital "DNS": listDNSZones,
 // createDNSZone, listDNSZoneRecords, updateDNSZoneRecords,
 // clearDNSZoneRecords, listDNSZoneNameservers). Not region-scoped - domains
-// are global, and the SDK's `Domain.v2beta1.API` declares no `LOCALITY`.
+// are global, and the SDK's `Domainv2beta1.API` declares no `LOCALITY`.
 // Docs: https://www.scaleway.com/en/developers/api/domains-and-dns
 //       https://www.scaleway.com/en/docs/domains-and-dns/how-to/add-external-domain/
 //       https://www.scaleway.com/en/docs/domains-and-dns/how-to/manage-dns-records/

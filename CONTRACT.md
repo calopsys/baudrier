@@ -16,7 +16,7 @@ for non-technical French users. Two project stacks share this harness (see
 | Concern | Implementation |
 |---|---|
 | App stack | Next.js 16 App Router (T3), TypeScript, tRPC v11, Drizzle, Tailwind v4, shadcn/ui |
-| Vitrine stack | Astro 5 (static output), TypeScript, Tailwind v4, three token presets, served by Caddy 2 |
+| Vitrine stack | Astro 7 (static output), TypeScript, Tailwind v4, three token presets, served by Caddy 2 |
 | Hosting | Scaleway Serverless Containers, region `fr-par` |
 | Image build | Direct `docker build`/`push`, run by the harness itself (no CI) → Scaleway Container Registry |
 | Deploy orchestration | `/deploy` skill (direct build+push, runs migration Job, updates container via SDK) |
@@ -47,7 +47,7 @@ stack explicitly — the literal `landing` or `application`, or one French
 the stack.
 
 A vitrine has no database, no Serverless Jobs and no Object Storage: it is a
-static Astro 5 build served by Caddy 2, on the same Container Registry +
+static Astro 7 build served by Caddy 2, on the same Container Registry +
 Serverless Containers pipeline as an application (`templates/landing/`,
 hand-rolled, no `create-astro` scaffolder). `LANDING_CONTAINER`
 (`scripts/scaleway/container.mjs`, imported by both `bootstrap-init.mjs` and
@@ -98,7 +98,7 @@ silently shipping ungated):
 
 ### Vitrine blog
 
-`/add-blog` installs an Astro 5 content collection once on an existing
+`/add-blog` installs an Astro 7 content collection once on an existing
 vitrine; `/blogpost` writes and publishes one article at a time from a chat
 description. Both are landing-only (class 4 above) and never touch an
 application. `templates/blog/` (6 files, `tools/verify.mjs` check 86 pins the
@@ -748,14 +748,19 @@ bare specifier, which would fail at runtime.
 
 ### Pinned versions, and why exactly
 
-`package.json` pins `@scaleway/sdk@3.11.1` and `@scaleway/sdk-client@2.4.2`
-**exactly, not as ranges**. Scaleway's npm release pipeline is currently
-publishing packages with no `dist/` directory while still declaring `exports`
-that point into it — verified against `registry.npmjs.org` (`fileCount: 3`).
-3.11.2, 4.0.0 and `sdk-client` 2.5.0 are all broken this way. A caret range
-resolves to a broken release and fails with a confusing `ERR_MODULE_NOT_FOUND`
-inside `node_modules`. `tools/check-deps-health.mjs` detects exactly this and
-must pass before relaxing a pin.
+`package.json` pins `@scaleway/sdk@4.0.3` and `@scaleway/sdk-client@2.6.0`
+**exactly, not as ranges**. Scaleway's npm release pipeline shipped packages
+with no `dist/` directory for a while, while still declaring `exports` that
+pointed into it — verified against `registry.npmjs.org`. `sdk` 3.11.2 and
+4.0.0 through 4.0.2, and `sdk-client` 2.5.0, were all broken this way. 4.0.3
+and 2.6.0 were verified healthy on 2026-08-18: all 53 per-product `@scaleway`
+sub-packages ship `dist/`. A caret range resolves to a broken release and
+fails with a confusing `ERR_MODULE_NOT_FOUND` inside `node_modules`.
+`tools/check-deps-health.mjs` detects exactly this and must pass before
+relaxing a pin. SDK v4 no longer depends on `sdk-client` directly; each of
+the 53 per-product sub-packages declares a `peerDependency` on
+`@scaleway/sdk-client@^2.6.0` instead, so the explicit `sdk-client` pin in
+`package.json` is load-bearing, not redundant.
 
 ### Supply chain: the two install paths
 
@@ -802,6 +807,8 @@ const result = await sdkCall(() => containers.listNamespaces({ projectId }));
 `api(product, version, cls = "API")` returns a memoised SDK API. `sdkCall()`
 wraps a call to translate the SDK's typed errors into `ScwError` and to apply
 backoff on `TooManyRequestsError`/5xx — the SDK does **not** retry on its own.
+SDK v4 exports flat namespaces, so `api()` maps `("Container", "v1")` to
+`Containerv1` internally, not to a nested `Container.v1`.
 
 Version choices that matter: **Container `v1`** (v1beta1 was deprecated
 2026-07-09; the SDK exposes both, so there is no reason to stay on it),

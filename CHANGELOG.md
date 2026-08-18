@@ -1,5 +1,28 @@
 # Changelog
 
+## v1.5.0 (2026-08-18)
+
+Dependency upgrade across the harness and the templates: Scaleway SDK v4,
+Astro 7 for new vitrines, and a regenerated lockfile.
+
+### Changed
+
+- **Scaleway SDK 3.11.1 → 4.0.3, sdk-client 2.4.2 → 2.6.0.** Scaleway fixed
+  its publish pipeline: both tarballs verified healthy on registry.npmjs.org
+  on 2026-08-18 (all 53 per-product sub-packages ship `dist/`). SDK v4
+  exports flat
+  namespaces (`Containerv1`, not `Container.v1`), so `api()` in
+  `_scw-auth.mjs` now joins `product + version`; every call site keeps the
+  `api("Container", "v1")` convention. The pins stay exact by policy, and
+  `check-deps-health.mjs` now probes `Containerv1`.
+- **Landing template on Astro 7.** `templates/landing/package.json` moves to
+  `astro ^7.0.0`, `tailwindcss`/`@tailwindcss/vite` `^4.3.0` and
+  `typescript ^5.9.0`. Validated by scratch builds: plain landing, blog
+  overlay on Astro 7, and a blog-overlay regression run on Astro 5 (existing
+  vitrines stay on 5; `/add-blog` serves both).
+- **Regenerated `package-lock.json`.** The AWS SDK and all transitive
+  dependencies move to current releases inside their existing ranges.
+
 ## v1.4.2 (2026-08-18)
 
 One fix on bootstrap Step 1: the description question and the style

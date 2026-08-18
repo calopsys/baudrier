@@ -123,7 +123,7 @@ export async function loadDep(spec) {
   return mod;
 }
 
-/** The Scaleway SDK namespace (Container, Jobs, Secret, Iam, ...). */
+/** The Scaleway SDK namespace (Containerv1, Jobsv1alpha2, Secretv1beta1, ...). */
 export const loadScalewaySdk = () => loadDep("@scaleway/sdk");
 
 /** The Scaleway SDK client factory and typed error classes. */
