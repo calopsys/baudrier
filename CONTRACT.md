@@ -1515,7 +1515,7 @@ harness. The substitute is deliberate: static pins for every past
 regression class, plus fixture-spawn behavioral checks (67, 76) where a
 script can run against a synthetic directory.
 
-`node tools/verify.mjs` must exit 0 (87 checks). It checks: every `.mjs` parses, every
+`node tools/verify.mjs` must exit 0 (88 checks). It checks: every `.mjs` parses, every
 relative import resolves, every `scripts/...` path named in a `SKILL.md` exists,
 every referenced skill exists and no deleted skill is referenced, template
 manifests are valid, and no removed-provider token or env var survives outside

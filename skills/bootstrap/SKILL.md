@@ -96,18 +96,7 @@ Before anything else, look at the first token of `$ARGUMENTS` (the raw text the 
 
 **Never infer the stack from the description text.** A description that happens to mention "compte" or "formulaire" is not a substitute for this question - only the strict first-token match above, or this explicit question, decide the stack.
 
-**If the vitrine path is chosen** (by token or by answer), ask a second `AskUserQuestion`, in French, for the visual token preset:
-
-> Quel style visuel voulez-vous ?
-
-with exactly these three options:
-- « Épuré : sobre, aéré, typographie fine »
-- « Chaleureux : couleurs chaudes, formes arrondies »
-- « Audacieux : contrastes forts, typographie très large, sections sombres »
-
-Remember the chosen preset (`epure`, `chaleureux`, or `audacieux`) - Step 2 passes it to the script as `--preset`.
-
-Every step from Step 2 onward carries a **"Landing (vitrine)" branch** wherever the vitrine path differs from the application path described in that step. When a step has no such branch, its instructions are unchanged for both stacks - this is true of Step 3 in particular. The rest of Step 1 below (name + description) is unchanged for both stacks.
+Every step from Step 2 onward carries a **"Landing (vitrine)" branch** wherever the vitrine path differs from the application path described in that step. When a step has no such branch, its instructions are unchanged for both stacks - this is true of Step 3 in particular. The rest of Step 1 below (name + description) is the same for both stacks, and the vitrine path adds one final style question.
 
 ### Name and description
 
@@ -124,15 +113,30 @@ Take the repo name from that URL (or `basename "$(git rev-parse --show-toplevel)
 
   > Le nom de votre dépôt (`<repo-name>`) n’est pas dans le format attendu par Baudrier pour les ressources Scaleway (minuscules, chiffres et tirets uniquement). Quel nom voulez-vous utiliser pour vos ressources Scaleway (Projet, conteneur...) ? Le dépôt GitHub, lui, garde son nom actuel.
 
-In the same message (or the same turn, if a deploy name had to be asked first), ask for the description:
+In the same message (or the same turn, if a deploy name had to be asked first), ask for the description. On the vitrine path:
 
-> Décrivez en 1-2 phrases ce que fait votre application.
+> Décrivez en 1-2 phrases ce que fait votre site (cette description servira de résumé sur Google).
 
-Wait for the user's response and extract `<description>` (~150-160 characters for SEO; you may rephrase / complete it from the user's sentence if needed to reach that length - this is what will be used in the page's `<meta name="description">` metadata).
+On the application path, say « votre application » instead of « votre site ». Ask nothing else in that message: end the turn on the description question and wait for the answer. Do not open the style question in the same turn.
+
+From the user's response, extract `<description>` (~150-160 characters for SEO; you may rephrase / complete it from the user's sentence if needed to reach that length - this is what will be used in the page's `<meta name="description">` metadata).
+
+### Visual style (vitrine only)
+
+**If the vitrine path was chosen** (by token or by answer), once the description is captured (from the answer, or from `$ARGUMENTS`), ask an `AskUserQuestion`, in French, for the visual token preset:
+
+> Quel style visuel voulez-vous ?
+
+with exactly these three options:
+- « Épuré : sobre, aéré, typographie fine »
+- « Chaleureux : couleurs chaudes, formes arrondies »
+- « Audacieux : contrastes forts, typographie très large, sections sombres »
+
+Remember the chosen preset (`epure`, `chaleureux`, or `audacieux`) - Step 2 passes it to the script as `--preset`. On the application path, skip this subsection.
 
 ⚠️ **The name becomes final as soon as Step 2 begins** - the script creates a dedicated Scaleway Project under it. Step 2 first runs a **name collision guard** (sub-step 1a) that may still adjust the Scaleway-resource name if it clashes with an existing project, so the truly final name is the one that clears that guard.
 
-Once the name and description are captured, **immediately display the 8-step checklist + the warning message from the "Progress communication" section**, then move on to Step 2.
+Once the name, the description, and (on the vitrine path) the preset are captured, **immediately display the 8-step checklist + the warning message from the "Progress communication" section**, then move on to Step 2.
 
 ---
 

@@ -9,7 +9,7 @@
       "name": "baudrier",
       "source": "./",
       "description": "Bootstrap a full-stack T3 project (Next.js + tRPC + Drizzle + Tailwind + shadcn/ui) with modular addons for database, auth, storage, email, analytics, domain, and SEO. Deploys entirely on Scaleway (Serverless Containers, Serverless SQL Database, Object Storage, Serverless Jobs) for French data sovereignty.",
-      "version": "1.4.1",
+      "version": "1.4.2",
       "author": {
         "name": "Calopsys"
       },

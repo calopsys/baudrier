@@ -5237,6 +5237,31 @@ define("88", "Bootstrap: the ip.me question ends the turn", () => {
   return fails;
 });
 
+define("89", "Bootstrap: the description question ends the turn before the style question", () => {
+  const fails = [];
+  const f = "skills/bootstrap/SKILL.md";
+  if (!exists(f)) return [{ file: f, detail: "missing" }];
+  const s = read(f);
+
+  const descAt = s.indexOf("1-2 phrases");
+  const stopAt = s.indexOf("end the turn on the description question");
+  const styleAt = s.indexOf("Quel style visuel");
+  const step2At = s.indexOf("## Step 2");
+
+  if (descAt < 0) {
+    fails.push({ file: f, detail: "the description question is gone - the user must be asked for a 1-2 sentence description" });
+  }
+  if (styleAt < 0) {
+    fails.push({ file: f, detail: "the style question is gone - the vitrine path must offer the three presets" });
+  }
+  if (stopAt < 0) {
+    fails.push({ file: f, detail: 'missing the "end the turn on the description question" instruction - the style dialog buries the description ask when both share a turn' });
+  } else if (descAt >= 0 && styleAt >= 0 && step2At >= 0 && !(descAt < stopAt && stopAt < styleAt && styleAt < step2At)) {
+    fails.push({ file: f, detail: "wrong order - Step 1 must ask the description, end the turn, then ask the style, all before Step 2" });
+  }
+  return fails;
+});
+
 /* ------------------------------------------------------------------- runner */
 
 const results = [];

@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.4.2 (2026-08-18)
+
+One fix on bootstrap Step 1: the description question and the style
+question no longer share a turn.
+
+### Changed
+
+- **Bootstrap Step 1 asks one question at a time.** The description ask is
+  now a standalone message that ends the turn; the style `AskUserQuestion`
+  (Épuré, Chaleureux, Audacieux) moved after the description answer, into a
+  vitrine-only subsection. The description question adapts to the stack
+  (« votre site » / « votre application ») and tells the user the text
+  becomes the Google summary (check 89 pins the order and the turn break).
+
 ## v1.4.1 (2026-08-14)
 
 Three fixes on the vitrine path: the bootstrap IP question now stops the
